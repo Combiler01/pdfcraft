@@ -1563,7 +1563,7 @@ fn image_page_with(content: &str) -> Document {
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> /ExtGState << /GS0 << /Type /ExtGState /ca 0.5 /CA 0.5 >> /GSalpha << /Type /ExtGState /ca 0.6 >> /GSblend << /Type /ExtGState /BM /Multiply >> /GS_translucent << /Type /ExtGState /ca 0.5 >> >> >> >>".into(),
         format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
         "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
         "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
@@ -2015,6 +2015,60 @@ fn destination_opacity_pollution_is_prevented() {
     assert!(err_msg.contains("unsupported graphics state"), "error describes unsupported graphics state: {err_msg}");
 
     // Preservation: the document contents are completely unmodified
+    let doc = reopen(&doc);
+    let after_bytes = page_content_bytes(&doc, 0);
+    assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
+}
+
+#[test]
+fn sequential_gs_operators_merging_properties_are_preserved() {
+    // Sequential gs calls: /GSalpha sets ca=0.6, /GSblend sets BM=/Multiply (without touching ca).
+    let content = "q /GSalpha gs /GSblend gs q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: /Im0 Do now follows External Text in the AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let after_text = str_content.find("External Text").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_do, "Position: /Im0 Do moved past External Text");
+
+    // 2. Appearance: Both merged state operators (/GSalpha and /GSblend) are preserved and precede /Im0 Do
+    let after_alpha = str_content.rfind("/GSalpha gs").unwrap();
+    let after_blend = str_content.rfind("/GSblend gs").unwrap();
+    assert!(after_text < after_alpha, "Appearance: /GSalpha gs injected into moved unit");
+    assert!(after_text < after_blend, "Appearance: /GSblend gs injected into moved unit");
+    assert!(after_alpha < after_do, "Appearance: /GSalpha gs precedes /Im0 Do");
+    assert!(after_blend < after_do, "Appearance: /GSblend gs precedes /Im0 Do");
+
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: rect preserved");
+
+    // 3. Preservation: External Text is intact
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (External Text) Tj ET"), "Preservation: external text preserved");
+}
+
+#[test]
+fn destination_differing_blend_mode_pollution_is_prevented() {
+    // /Im0 Do has default Normal blend mode; destination has active top-level /GSblend gs (BM = /Multiply)
+    let content = "100 0 0 100 50 50 cm /Im0 Do /GSblend gs BT /F1 12 Tf 72 700 Td (Blended Section) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial_bytes = page_content_bytes(&doc, 0);
+
+    // Attempting to move Normal-blend image to front into active Multiply-blend scope must safely bail out with Err
+    let res = images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res.is_err(), "must return an explicit Err rather than silently altering blend mode");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("unsupported graphics state"), "error describes unsupported graphics state: {err_msg}");
+
+    // Preservation: document contents are completely unmodified
     let doc = reopen(&doc);
     let after_bytes = page_content_bytes(&doc, 0);
     assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");

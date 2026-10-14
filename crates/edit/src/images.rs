@@ -543,28 +543,99 @@ struct ExtractedScopeState {
     state_ops: Vec<Op>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+struct EffectiveGState {
+    ca: Option<f64>,
+    ca_stroke: Option<f64>,
+    bm: Option<Vec<u8>>,
+    smask: Option<Vec<u8>>,
+}
+
+impl EffectiveGState {
+    fn effective_ca(&self) -> f64 {
+        self.ca.unwrap_or(1.0)
+    }
+
+    fn effective_ca_stroke(&self) -> f64 {
+        self.ca_stroke.unwrap_or(1.0)
+    }
+
+    fn effective_bm(&self) -> &[u8] {
+        self.bm.as_deref().unwrap_or(b"Normal")
+    }
+
+    fn effective_smask(&self) -> Option<&[u8]> {
+        match self.smask.as_deref() {
+            Some(b"None") | None => None,
+            Some(other) => Some(other),
+        }
+    }
+
+    fn visually_differs(&self, other: &EffectiveGState) -> bool {
+        (self.effective_ca() - other.effective_ca()).abs() > 1e-4
+            || (self.effective_ca_stroke() - other.effective_ca_stroke()).abs() > 1e-4
+            || self.effective_bm() != other.effective_bm()
+            || self.effective_smask() != other.effective_smask()
+    }
+
+    fn merge_dict(&mut self, dict: &Dict, doc: &Document) {
+        if let Some(val) = dict.get(b"ca").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()) {
+            self.ca = Some(val);
+        }
+        if let Some(val) = dict.get(b"CA").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()) {
+            self.ca_stroke = Some(val);
+        }
+        if let Some(bm_obj) = dict.get(b"BM").map(|v| doc.resolve(v)) {
+            if let Some(name) = bm_obj.as_name() {
+                self.bm = Some(name.to_vec());
+            } else if let Some(arr) = bm_obj.as_array()
+                && let Some(first_name) = arr.first().map(|v| doc.resolve(v)).and_then(|v| v.as_name().map(|n| n.to_vec()))
+            {
+                self.bm = Some(first_name);
+            }
+        }
+        if let Some(smask_obj) = dict.get(b"SMask").map(|v| doc.resolve(v)) {
+            if let Some(name) = smask_obj.as_name() {
+                self.smask = Some(name.to_vec());
+            } else if smask_obj.as_dict().is_some() {
+                self.smask = Some(b"CustomSMask".to_vec());
+            }
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 struct ExtendedGStateTracker {
-    stack: Vec<Option<Op>>,
-    current_gs: Option<Op>,
+    stack: Vec<(EffectiveGState, Vec<Op>)>,
+    current_state: EffectiveGState,
+    active_gs_ops: Vec<Op>,
 }
 
 impl ExtendedGStateTracker {
-    fn step(&mut self, op: &Op) -> Result<(), EditError> {
+    fn step(&mut self, op: &Op, ext_gstates: &Dict, doc: &Document) -> Result<(), EditError> {
         match op.op.as_slice() {
             b"q" => {
                 if self.stack.len() >= 256 {
                     return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
                 }
-                self.stack.push(self.current_gs.clone());
+                self.stack.push((self.current_state.clone(), self.active_gs_ops.clone()));
             }
             b"Q" => {
-                if let Some(prev) = self.stack.pop() {
-                    self.current_gs = prev;
+                if let Some((prev_state, prev_ops)) = self.stack.pop() {
+                    self.current_state = prev_state;
+                    self.active_gs_ops = prev_ops;
                 }
             }
             b"gs" => {
-                self.current_gs = Some(op.clone());
+                if let Some(name) = op.name(0) {
+                    if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
+                        self.current_state.merge_dict(&dict, doc);
+                    } else if self.current_state.ca.is_none() {
+                        self.current_state.ca = Some(0.5);
+                    }
+                    self.active_gs_ops.retain(|o| o.name(0) != Some(name));
+                    self.active_gs_ops.push(op.clone());
+                }
             }
             _ => {}
         }
@@ -759,29 +830,34 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         (op.span.start, dest_unit.start)
     };
 
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let ext_gstates = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
+
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let mut tracker = ExtendedGStateTracker::default();
-    let mut source_effective_gs = None;
-    let mut dest_effective_gs = None;
+    let mut source_effective_state = EffectiveGState::default();
+    let mut source_gs_ops = Vec::new();
+    let mut dest_effective_state = EffectiveGState::default();
     let mut dest_ctm = Matrix::IDENTITY;
 
     let max_scan = scan_target.max(target.saturating_add(1));
     for (i, op) in ops.iter().enumerate() {
         if i == target {
-            source_effective_gs = tracker.current_gs.clone();
+            source_effective_state = tracker.current_state.clone();
+            source_gs_ops = tracker.active_gs_ops.clone();
         }
         if i == scan_target {
-            dest_effective_gs = tracker.current_gs.clone();
+            dest_effective_state = tracker.current_state.clone();
             dest_ctm = state.placement.matrix;
         }
         if i >= max_scan {
             break;
         }
         state.apply(op)?;
-        tracker.step(op)?;
+        tracker.step(op, &ext_gstates, doc)?;
     }
-    if scan_target >= ops.len() && dest_effective_gs.is_none() {
-        dest_effective_gs = tracker.current_gs.clone();
+    if scan_target >= ops.len() {
+        dest_effective_state = tracker.current_state.clone();
         dest_ctm = state.placement.matrix;
     }
     let Some(dest_inv) = dest_ctm.invert() else { return Ok(()); };
@@ -813,15 +889,31 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         return Err(EditError::Invalid("unsupported graphics state: inherited clipping path cannot be cleanly preserved".into()));
     }
 
-    if source_effective_gs.is_none() && dest_effective_gs.is_some() {
-        return Err(EditError::Invalid("unsupported graphics state: moving an opaque image into an active transparency scope is not supported".into()));
+    for src_gs in &source_gs_ops {
+        let name = src_gs.name(0);
+        let already_present = extracted.state_ops.iter().any(|o| o.name(0) == name);
+        if !already_present {
+            extracted.state_ops.push(src_gs.clone());
+        }
     }
 
-    if let Some(src_gs) = source_effective_gs {
-        let already_has_gs = extracted.state_ops.iter().any(|o| o.is("gs"));
-        if !already_has_gs {
-            extracted.state_ops.push(src_gs);
+    let mut reconstructed_state = dest_effective_state.clone();
+    for op in &extracted.state_ops {
+        if op.is("gs")
+            && let Some(name) = op.name(0)
+        {
+            if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
+                reconstructed_state.merge_dict(&dict, doc);
+            } else if reconstructed_state.ca.is_none() {
+                reconstructed_state.ca = Some(0.5);
+            }
         }
+    }
+
+    if reconstructed_state.visually_differs(&source_effective_state) {
+        return Err(EditError::Invalid(
+            "unsupported graphics state: moving the image would alter effective opacity, blend mode, or soft mask".into(),
+        ));
     }
 
     let mut unit_ops = Vec::new();
