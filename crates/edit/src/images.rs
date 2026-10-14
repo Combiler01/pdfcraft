@@ -245,7 +245,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     for (si, (_, data)) in streams(doc, &p.dict).into_iter().enumerate() {
         for (i, op) in parse(&data).ops.iter().enumerate() {
             state.apply(op)?;
-            tracker.step(op, &ext_gstates, doc)?;
+            tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
             let ctm = state.placement.matrix;
             if op.is("Do") {
                 let Some(name) = op.name(0) else { continue };
@@ -649,13 +649,13 @@ impl EffectiveGState {
 
 #[derive(Clone, Default)]
 struct ExtendedGStateTracker {
-    stack: Vec<(EffectiveGState, Vec<Op>)>,
+    stack: Vec<(EffectiveGState, Vec<(Op, Matrix)>)>,
     current_state: EffectiveGState,
-    active_gs_ops: Vec<Op>,
+    active_gs_ops: Vec<(Op, Matrix)>,
 }
 
 impl ExtendedGStateTracker {
-    fn step(&mut self, op: &Op, ext_gstates: &Dict, doc: &Document) -> Result<(), EditError> {
+    fn step(&mut self, op: &Op, ext_gstates: &Dict, doc: &Document, ctm: Matrix) -> Result<(), EditError> {
         match op.op.as_slice() {
             b"q" => {
                 if self.stack.len() >= 4096 {
@@ -676,8 +676,8 @@ impl ExtendedGStateTracker {
                     } else if self.current_state.ca.is_none() {
                         self.current_state.ca = Some(0.5);
                     }
-                    self.active_gs_ops.retain(|o| o.name(0) != Some(name));
-                    self.active_gs_ops.push(op.clone());
+                    self.active_gs_ops.retain(|(o, _)| o.name(0) != Some(name));
+                    self.active_gs_ops.push((op.clone(), ctm));
                 }
             }
             _ => {}
@@ -897,13 +897,15 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             break;
         }
         state.apply(op)?;
-        tracker.step(op, &ext_gstates, doc)?;
+        tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
     }
     if scan_target >= ops.len() {
         dest_effective_state = tracker.current_state.clone();
         dest_ctm = state.placement.matrix;
     }
-    let Some(dest_inv) = dest_ctm.invert() else { return Ok(()); };
+    if dest_ctm.invert().is_none() {
+        return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+    }
 
     let (target_span, scope_start) = if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
         && sub_start >= target_unit.start
@@ -924,7 +926,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     let is_clipped = (img.visible_rect.is_some() && img.visible_rect != Some(img.rect)) || !img.clips.is_empty();
 
     let extracted = extract_scope_state(&ops, scope_start, target)?;
-    let Some(mut extracted) = extracted else {
+    let Some(extracted) = extracted else {
         return Err(EditError::Invalid("unsupported graphics state: unable to cleanly extract image scope state".into()));
     };
 
@@ -932,23 +934,11 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         return Err(EditError::Invalid("unsupported graphics state: inherited clipping path cannot be cleanly preserved".into()));
     }
 
-    let mut outer_gs_ops = Vec::new();
-    for src_gs in &source_gs_ops {
-        let name = src_gs.name(0);
-        let already_present = extracted.state_ops.iter().any(|o| o.name(0) == name);
-        if !already_present {
-            outer_gs_ops.push(src_gs.clone());
-        }
-    }
-    let mut combined_state_ops = outer_gs_ops;
-    combined_state_ops.extend(extracted.state_ops);
-    extracted.state_ops = combined_state_ops;
+    let non_gs_ops: Vec<Op> = extracted.state_ops.into_iter().filter(|o| !o.is("gs")).collect();
 
     let mut reconstructed_state = dest_effective_state.clone();
-    for op in &extracted.state_ops {
-        if op.is("gs")
-            && let Some(name) = op.name(0)
-        {
+    for (op, _) in &source_gs_ops {
+        if let Some(name) = op.name(0) {
             if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
                 reconstructed_state.merge_dict(&dict, doc, Some(name));
             } else if reconstructed_state.ca.is_none() {
@@ -965,19 +955,50 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
 
     let mut unit_ops = Vec::new();
     unit_ops.push(Op::new("q", vec![]));
-    unit_ops.extend(extracted.state_ops);
+    let mut current_ctm = dest_ctm;
+
+    for (gs_op, target_ctm) in &source_gs_ops {
+        if *target_ctm != current_ctm {
+            let Some(current_inv) = current_ctm.invert() else {
+                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+            };
+            let delta = target_ctm.then(&current_inv);
+            if !delta.0.iter().all(|v| v.is_finite()) {
+                return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
+            }
+            if delta != Matrix::IDENTITY {
+                unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
+                current_ctm = *target_ctm;
+            }
+        }
+        unit_ops.push(gs_op.clone());
+    }
+
+    unit_ops.extend(non_gs_ops);
+
     if !extracted.clip_ops.is_empty() {
-        if dest_ctm != Matrix::IDENTITY {
-            unit_ops.push(Op::new("cm", dest_inv.0.map(pdfcraft_content::num).to_vec()));
+        if current_ctm != Matrix::IDENTITY {
+            let Some(current_inv) = current_ctm.invert() else {
+                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+            };
+            unit_ops.push(Op::new("cm", current_inv.0.map(pdfcraft_content::num).to_vec()));
         }
         unit_ops.extend(extracted.clip_ops);
         if Matrix(img.draw_matrix) != Matrix::IDENTITY {
             unit_ops.push(Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()));
         }
     } else {
-        let local = Matrix(img.draw_matrix).then(&dest_inv);
-        if local != Matrix::IDENTITY {
-            unit_ops.push(Op::new("cm", local.0.map(pdfcraft_content::num).to_vec()));
+        if Matrix(img.draw_matrix) != current_ctm {
+            let Some(current_inv) = current_ctm.invert() else {
+                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
+            };
+            let delta = Matrix(img.draw_matrix).then(&current_inv);
+            if !delta.0.iter().all(|v| v.is_finite()) {
+                return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
+            }
+            if delta != Matrix::IDENTITY {
+                unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
+            }
         }
     }
     unit_ops.push(ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])));

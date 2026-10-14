@@ -2169,6 +2169,113 @@ fn destination_differing_mask_pollution_is_prevented() {
     assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
 }
 
+fn soft_mask_with_alpha_page(content: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R /GroupA 9 0 R >> /ExtGState << /GSA 7 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /ExtGState /ca 0.25 /SMask << /Type /Mask /S /Alpha /G 9 0 R >> >>".into(),
+        "<< /Type /ExtGState /SMask /None >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /I true >> /Length 20 >>\nstream\n0 g 0 0 100 50 re f\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn non_identity_cm_before_gs_preserves_mask_coordinates_and_rendering() {
+    let content = "q 2 0 0 2 10 10 cm /GSA gs 50 0 0 50 0 0 cm /Im0 Do Q BT /F1 12 Tf 10 180 Td (External Text) Tj ET";
+    let mut doc = soft_mask_with_alpha_page(content);
+
+    // Initial state: image bounds are [10, 10, 110, 110]
+    let initial_images = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial_images.len(), 1);
+    assert!(close(initial_images[0].rect, [10.0, 10.0, 110.0, 110.0]));
+
+    // Render baseline before reordering
+    let pdf_bytes_before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer_before = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes_before), pdfcraft_render::RenderConfig::default());
+    let page_before = renderer_before.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let px_before = |x: u32, y: u32| {
+        let idx = ((y * page_before.width + x) * 4) as usize;
+        page_before.rgba[idx..idx + 4].to_vec()
+    };
+
+    // Arrange image: BringToFront
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+
+    let content_bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&content_bytes);
+
+    // 1. Assert AST reordering succeeds and interleaves cm before gs
+    let text_pos = str_content.find("External Text").unwrap();
+    let cm_mask_pos = str_content.rfind("2 0 0 2 10 10 cm").unwrap();
+    let gs_pos = str_content.rfind("/GSA gs").unwrap();
+    let cm_img_pos = str_content.rfind("50 0 0 50 0 0 cm").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+
+    assert!(text_pos < cm_mask_pos, "Image relocated after external text");
+    assert!(cm_mask_pos < gs_pos, "CTM for soft mask established before /GSA gs");
+    assert!(gs_pos < cm_img_pos, "/GSA gs executed before image cm");
+    assert!(cm_img_pos < do_pos, "image cm executed before /Im0 Do");
+
+    // 2. Assert image bounds remain unchanged after saving and reopening
+    let reopened_doc = reopen(&doc);
+    let reopened_images = images::page_images(&reopened_doc, 0).unwrap();
+    assert_eq!(reopened_images.len(), 1);
+    assert!(
+        close(reopened_images[0].rect, [10.0, 10.0, 110.0, 110.0]),
+        "Image bounds preserved: {:?}",
+        reopened_images[0].rect
+    );
+
+    // 3. Render reopened document and assert non-overlapping pixels remain unchanged
+    let pdf_bytes_after = write_incremental(&reopened_doc, &SaveOptions::default()).unwrap();
+    let mut renderer_after = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes_after), pdfcraft_render::RenderConfig::default());
+    let page_after = renderer_after.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let px_after = |x: u32, y: u32| {
+        let idx = ((y * page_after.width + x) * 4) as usize;
+        page_after.rgba[idx..idx + 4].to_vec()
+    };
+
+    // A point inside the masked image (e.g. at x=50, inside the image and bottom half of mask)
+    // Non-overlapping with text (text is at y=180).
+    // The pixel renders at [191, 191, 191, 255] (25% black over 100% white).
+    // In raster coordinates, raster y for PDF y=50 in a 200-high page is y=150.
+    let rendered_pixel_before = px_before(50, 150);
+    let rendered_pixel_after = px_after(50, 150);
+    assert_eq!(rendered_pixel_before, vec![191, 191, 191, 255], "baseline pixel rendered with 25% opacity mask");
+    assert_eq!(rendered_pixel_after, rendered_pixel_before, "rendered non-overlapping pixels remain unchanged");
+
+    // Outside the image: pure white background
+    assert_eq!(px_after(5, 5), vec![255, 255, 255, 255]);
+    assert_eq!(px_after(5, 5), px_before(5, 5));
+}
+
 
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {
