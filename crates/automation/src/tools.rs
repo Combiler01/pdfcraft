@@ -1171,7 +1171,7 @@ pub fn tools() -> Vec<ToolDef> {
                     "doc": doc(),
                     "page": { "type": "integer", "minimum": 1 },
                     "image": { "type": "integer", "minimum": 1 },
-                    "action": { "type": "string", "enum": ["move", "rotate", "flip_horizontal", "flip_vertical", "replace", "delete"] },
+                    "action": { "type": "string", "enum": ["move", "rotate", "flip_horizontal", "flip_vertical", "replace", "delete", "bring_to_front", "send_to_back", "bring_forward", "send_backward", "remove_crop", "crop"] },
                     "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
                     "quarters": { "type": "integer" },
                     "path": { "type": "string" },

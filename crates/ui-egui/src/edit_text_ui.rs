@@ -133,39 +133,298 @@ pub struct LineEditor {
 pub struct Extras {
     pub underline: bool,
     pub line_spacing: f64,
+    pub paragraph_spacing: f64,
     pub char_spacing: f64,
     pub scale: f64,
 }
 
 impl Default for Extras {
     fn default() -> Self {
-        Extras { underline: false, line_spacing: 0.0, char_spacing: 0.0, scale: 100.0 }
+        Extras { underline: false, line_spacing: 0.0, paragraph_spacing: 0.0, char_spacing: 0.0, scale: 100.0 }
     }
 }
 
-/// Underline, line spacing, character spacing and horizontal scale for the paragraph being
-/// edited (under Format text). Returns `true` when something changed.
+pub fn is_bulleted(text: &str) -> bool {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else { return false };
+    first.trim_start().starts_with("• ") || first.trim_start().starts_with("- ")
+}
+
+pub fn is_numbered(text: &str) -> bool {
+    let mut lines = text.lines();
+    let Some(first) = lines.next() else { return false };
+    let t = first.trim_start();
+    let num_end = t.find('.').unwrap_or(0);
+    num_end > 0 && t[..num_end].chars().all(|c| c.is_ascii_digit()) && t[num_end..].starts_with(". ")
+}
+
+pub fn toggle_bullet_list(text: &mut String) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let all_bulleted = lines.iter().all(|l| {
+        let t = l.trim_start();
+        t.is_empty() || t.starts_with("• ") || t.starts_with("- ")
+    });
+    let mut new_text = String::with_capacity(text.len() + 16);
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        let trimmed = line.trim_start();
+        if all_bulleted {
+            if let Some(rest) = trimmed.strip_prefix("• ").or_else(|| trimmed.strip_prefix("- ")) {
+                new_text.push_str(rest);
+            } else {
+                new_text.push_str(line);
+            }
+        } else if trimmed.is_empty() {
+            new_text.push_str(line);
+        } else if trimmed.starts_with("• ") {
+            new_text.push_str(line);
+        } else {
+            new_text.push_str("• ");
+            new_text.push_str(line);
+        }
+    }
+    if new_text != *text {
+        *text = new_text;
+        true
+    } else {
+        false
+    }
+}
+
+pub fn toggle_numbered_list(text: &mut String) -> bool {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return false;
+    }
+    let is_num_line = |l: &str| {
+        let t = l.trim_start();
+        if t.is_empty() {
+            return true;
+        }
+        let dot_idx = t.find('.').unwrap_or(0);
+        dot_idx > 0 && t[..dot_idx].chars().all(|c| c.is_ascii_digit()) && t[dot_idx..].starts_with(". ")
+    };
+    let all_numbered = lines.iter().all(|l| is_num_line(l));
+    let mut new_text = String::with_capacity(text.len() + 16);
+    let mut num = 1;
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            new_text.push('\n');
+        }
+        let t = line.trim_start();
+        if all_numbered {
+            if let Some(dot_idx) = t.find('.') {
+                if dot_idx > 0 && t[..dot_idx].chars().all(|c| c.is_ascii_digit()) && t[dot_idx..].starts_with(". ") {
+                    new_text.push_str(&t[dot_idx + 2..]);
+                    continue;
+                }
+            }
+            new_text.push_str(line);
+        } else if t.is_empty() {
+            new_text.push_str(line);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(new_text, "{num}. ");
+            new_text.push_str(t);
+            num += 1;
+        }
+    }
+    if new_text != *text {
+        *text = new_text;
+        true
+    } else {
+        false
+    }
+}
+
+pub fn char_to_superscript(c: char) -> char {
+    match c {
+        '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴',
+        '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
+        '+' => '⁺', '-' | '−' => '⁻', '=' => '⁼', '(' => '⁽', ')' => '⁾',
+        'a' => 'ᵃ', 'b' => 'ᵇ', 'c' => 'ᶜ', 'd' => 'ᵈ', 'e' => 'ᵉ',
+        'f' => 'ᶠ', 'g' => 'ᵍ', 'h' => 'ʰ', 'i' => 'ⁱ', 'j' => 'ʲ',
+        'k' => 'ᵏ', 'l' => 'ˡ', 'm' => 'ᵐ', 'n' => 'ⁿ', 'o' => 'ᵒ',
+        'p' => 'ᵖ', 'r' => 'ʳ', 's' => 'ˢ', 't' => 'ᵗ', 'u' => 'ᵘ',
+        'v' => 'ᵛ', 'w' => 'ʷ', 'x' => 'ˣ', 'y' => 'ʸ', 'z' => 'ᶻ',
+        'A' => 'ᴬ', 'B' => 'ᴮ', 'D' => 'ᴰ', 'E' => 'ᴱ', 'G' => 'ᴳ',
+        'H' => 'ᴴ', 'I' => 'ᴵ', 'J' => 'ᴶ', 'K' => 'ᴷ', 'L' => 'ᴸ',
+        'M' => 'ᴹ', 'N' => 'ᴺ', 'O' => 'ᴼ', 'P' => 'ᴾ', 'R' => 'ᴿ',
+        'T' => 'ᵀ', 'U' => 'ᵁ', 'V' => 'ⱽ', 'W' => 'ᵂ',
+        other => other,
+    }
+}
+
+pub fn char_from_superscript(c: char) -> char {
+    match c {
+        '⁰' => '0', '¹' => '1', '²' => '2', '³' => '3', '⁴' => '4',
+        '⁵' => '5', '⁶' => '6', '⁷' => '7', '⁸' => '8', '⁹' => '9',
+        '⁺' => '+', '⁻' => '-', '⁼' => '=', '⁽' => '(', '⁾' => ')',
+        'ᵃ' => 'a', 'ᵇ' => 'b', 'ᶜ' => 'c', 'ᵈ' => 'd', 'ᵉ' => 'e',
+        'ᶠ' => 'f', 'ᵍ' => 'g', 'ʰ' => 'h', 'ⁱ' => 'i', 'ʲ' => 'j',
+        'ᵏ' => 'k', 'ˡ' => 'l', 'ᵐ' => 'm', 'ⁿ' => 'n', 'ᵒ' => 'o',
+        'ᵖ' => 'p', 'ʳ' => 'r', 'ˢ' => 's', 'ᵗ' => 't', 'ᵘ' => 'u',
+        'ᵛ' => 'v', 'ʷ' => 'w', 'ˣ' => 'x', 'ʸ' => 'y', 'ᶻ' => 'z',
+        'ᴬ' => 'A', 'ᴮ' => 'B', 'ᴰ' => 'D', 'ᴱ' => 'E', 'ᴳ' => 'G',
+        'ᴴ' => 'H', 'ᴵ' => 'I', 'ᴶ' => 'J', 'ᴷ' => 'K', 'ᴸ' => 'L',
+        'ᴹ' => 'M', 'ᴺ' => 'N', 'ᴼ' => 'O', 'ᴾ' => 'P', 'ᴿ' => 'R',
+        'ᵀ' => 'T', 'ᵁ' => 'U', 'ⱽ' => 'V', 'ᵂ' => 'W',
+        other => other,
+    }
+}
+
+pub fn char_to_subscript(c: char) -> char {
+    match c {
+        '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄',
+        '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
+        '+' => '₊', '-' | '−' => '₋', '=' => '₌', '(' => '₍', ')' => '₎',
+        'a' => 'ₐ', 'e' => 'ₑ', 'h' => 'ₕ', 'i' => 'ᵢ', 'j' => 'ⱼ',
+        'k' => 'ₖ', 'l' => 'ₗ', 'm' => 'ₘ', 'n' => 'ₙ', 'o' => 'ₒ',
+        'p' => 'ₚ', 'r' => 'ᵣ', 's' => 'ₛ', 't' => 'ₜ', 'u' => 'ᵤ',
+        'v' => 'ᵥ', 'x' => 'ₓ',
+        other => other,
+    }
+}
+
+pub fn char_from_subscript(c: char) -> char {
+    match c {
+        '₀' => '0', '₁' => '1', '₂' => '2', '₃' => '3', '₄' => '4',
+        '₅' => '5', '₆' => '6', '₇' => '7', '₈' => '8', '₉' => '9',
+        '₊' => '+', '₋' => '-', '₌' => '=', '₍' => '(', '₎' => ')',
+        'ₐ' => 'a', 'ₑ' => 'e', 'ₕ' => 'h', 'ᵢ' => 'i', 'ⱼ' => 'j',
+        'ₖ' => 'k', 'ₗ' => 'l', 'ₘ' => 'm', 'ₙ' => 'n', 'ₒ' => 'o',
+        'ₚ' => 'p', 'ᵣ' => 'r', 'ₛ' => 's', 'ₜ' => 't', 'ᵤ' => 'u',
+        'ᵥ' => 'v', 'ₓ' => 'x',
+        other => other,
+    }
+}
+
+fn snap_char_boundaries(s: &str, start: usize, end: usize) -> (usize, usize) {
+    let mut s_idx = start.min(s.len());
+    while s_idx > 0 && !s.is_char_boundary(s_idx) {
+        s_idx -= 1;
+    }
+    let mut e_idx = end.min(s.len());
+    while e_idx < s.len() && !s.is_char_boundary(e_idx) {
+        e_idx += 1;
+    }
+    (s_idx, e_idx)
+}
+
+pub fn toggle_superscript(ed: &mut LineEditor) -> bool {
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection {
+        (r.start.min(ed.text.len()), r.end.min(ed.text.len()))
+    } else {
+        (0, ed.text.len())
+    };
+    let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
+    if start >= end {
+        return false;
+    }
+    let target = &ed.text[start..end];
+    let all_sup = target.chars().all(|c| char_from_superscript(c) != c);
+    let converted: String = if all_sup {
+        target.chars().map(char_from_superscript).collect()
+    } else {
+        target.chars().map(char_to_superscript).collect()
+    };
+    if converted != target {
+        let conv_len = converted.len();
+        ed.text.replace_range(start..end, &converted);
+        if ed.selection.is_some() {
+            ed.selection = Some(start..start + conv_len);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+pub fn toggle_subscript(ed: &mut LineEditor) -> bool {
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection {
+        (r.start.min(ed.text.len()), r.end.min(ed.text.len()))
+    } else {
+        (0, ed.text.len())
+    };
+    let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
+    if start >= end {
+        return false;
+    }
+    let target = &ed.text[start..end];
+    let all_sub = target.chars().all(|c| char_from_subscript(c) != c);
+    let converted: String = if all_sub {
+        target.chars().map(char_from_subscript).collect()
+    } else {
+        target.chars().map(char_to_subscript).collect()
+    };
+    if converted != target {
+        let conv_len = converted.len();
+        ed.text.replace_range(start..end, &converted);
+        if ed.selection.is_some() {
+            ed.selection = Some(start..start + conv_len);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Underline, value-based line spacing, paragraph spacing, character spacing and horizontal
+/// scale for the paragraph being edited. Returns `true` when something changed.
 pub(crate) fn extras_panel(ui: &mut egui::Ui, e: &mut Extras) -> bool {
     let before = *e;
     ui.horizontal(|ui| {
-        if crate::icons::button(ui, "underline", 26.0, e.underline, tl!("Underline")).clicked() {
-            e.underline = !e.underline;
+        ui.label(egui::RichText::new("↕≡").strong()).on_hover_text(tl!("Line spacing"));
+        let mut ls = if e.line_spacing <= 0.0 { 1.20 } else { e.line_spacing };
+        if ui.add(egui::DragValue::new(&mut ls).range(0.5..=5.0).speed(0.01).custom_formatter(|v, _| format!("{v:.2}"))).changed() {
+            e.line_spacing = (ls * 100.0).round() / 100.0;
         }
-        let zero = tl!("Line spacing").to_string();
-        let label = |v: f64| if v == 0.0 { zero.clone() } else { format!("{v:.2}×") };
-        egui::ComboBox::from_id_salt("line-spacing").selected_text(label(e.line_spacing)).width(110.0).show_ui(ui, |ui| {
-            for v in [1.0, 1.15, 1.5, 2.0] {
-                ui.selectable_value(&mut e.line_spacing, v, label(v));
+        egui::ComboBox::from_id_salt("line-spacing-presets").selected_text("").width(16.0).show_ui(ui, |ui| {
+            for v in [1.0, 1.15, 1.25, 1.33, 1.5, 2.0, 2.5, 3.0] {
+                if ui.selectable_label((e.line_spacing - v).abs() < 0.01, format!("{v:.2}×")).clicked() {
+                    e.line_spacing = v;
+                }
+            }
+        });
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("↕≡").weak()).on_hover_text(tl!("Paragraph spacing"));
+        let mut ps = e.paragraph_spacing;
+        if ui.add(egui::DragValue::new(&mut ps).range(0.0..=100.0).speed(0.05).custom_formatter(|v, _| format!("{v:.2}"))).changed() {
+            e.paragraph_spacing = (ps * 100.0).round() / 100.0;
+        }
+        egui::ComboBox::from_id_salt("para-spacing-presets").selected_text("").width(16.0).show_ui(ui, |ui| {
+            for v in [0.0, 0.13, 0.25, 0.5, 1.0, 2.0] {
+                if ui.selectable_label((e.paragraph_spacing - v).abs() < 0.01, format!("{v:.2}")).clicked() {
+                    e.paragraph_spacing = v;
+                }
             }
         });
     });
     ui.horizontal(|ui| {
-        let l = ui.label(tl!("Character spacing"));
-        ui.add(egui::DragValue::new(&mut e.char_spacing).range(-5.0..=50.0).speed(0.1).suffix(" pt")).labelled_by(l.id);
-    });
-    ui.horizontal(|ui| {
-        let l = ui.label(tl!("Horizontal scale"));
-        ui.add(egui::DragValue::new(&mut e.scale).range(10.0..=400.0).speed(1.0).suffix(" %")).labelled_by(l.id);
+        ui.label(egui::RichText::new("T↔").strong()).on_hover_text(tl!("Horizontal scale"));
+        ui.add(egui::DragValue::new(&mut e.scale).range(10.0..=400.0).speed(1.0).custom_formatter(|v, _| format!("{v:.0}")));
+        egui::ComboBox::from_id_salt("scale-presets").selected_text("").width(16.0).show_ui(ui, |ui| {
+            for v in [50.0, 75.0, 90.0, 100.0, 110.0, 125.0, 150.0, 200.0] {
+                if ui.selectable_label((e.scale - v).abs() < 0.01, format!("{v:.0}%")).clicked() {
+                    e.scale = v;
+                }
+            }
+        });
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("V↔A").strong()).on_hover_text(tl!("Character spacing"));
+        ui.add(egui::DragValue::new(&mut e.char_spacing).range(-5.0..=50.0).speed(0.05).custom_formatter(|v, _| format!("{v:.2}")));
+        egui::ComboBox::from_id_salt("char-spacing-presets").selected_text("").width(16.0).show_ui(ui, |ui| {
+            for v in [-1.0, -0.5, -0.24, 0.0, 0.25, 0.5, 1.0, 2.0] {
+                if ui.selectable_label((e.char_spacing - v).abs() < 0.01, format!("{v:.2} pt")).clicked() {
+                    e.char_spacing = v;
+                }
+            }
+        });
     });
     *e != before
 }
@@ -310,13 +569,41 @@ pub(crate) fn editor_fill(text: Color32) -> Color32 {
     if contrast(text, Color32::WHITE) >= contrast(text, DARK_EDITOR_FILL) { Color32::WHITE } else { DARK_EDITOR_FILL }
 }
 
+/// The 8 resize handles on an image (4 corners + 4 edge centers).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImageHandle {
+    TopLeft,
+    TopCenter,
+    TopRight,
+    RightCenter,
+    BottomRight,
+    BottomCenter,
+    BottomLeft,
+    LeftCenter,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DragTarget {
+    Move,
+    Handle(ImageHandle),
+    CropHandle(ImageHandle),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ImageDrag {
+    pub start: Pos2,
+    pub target: DragTarget,
+    pub initial_rect: Rect,
+}
+
 /// A selected page image, and what the pointer is doing to it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageSelection {
     pub page: usize,
     pub index: usize,
-    /// Dragging: the start point and, for a corner, the opposite corner (screen).
-    drag: Option<(Pos2, Option<Pos2>)>,
+    pub crop_mode: bool,
+    pub crop_rect: Option<Rect>,
+    pub drag: Option<ImageDrag>,
 }
 
 impl ImageSelection {
@@ -325,7 +612,7 @@ impl ImageSelection {
     }
 }
 
-/// Once a selected corner is grabbed, text under it cannot take over the gesture. The same
+/// Once a selected handle is grabbed, text under it cannot take over the gesture. The same
 /// applies after the pointer leaves the image/page while dragging.
 pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) -> bool {
     let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
@@ -336,7 +623,17 @@ pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, inf
     let Some(rect) = image.visible_rect else { return false };
     let b = xf.user_rect(info, page, rect.map(|v| v as f32));
     let p = ui.input(|i| if i.pointer.primary_down() { i.pointer.press_origin() } else { i.pointer.hover_pos() });
-    p.is_some_and(|p| [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().any(|c| c.distance(p) < 8.0))
+    let handles = [
+        b.left_top(),
+        Pos2::new(b.center().x, b.top()),
+        b.right_top(),
+        Pos2::new(b.right(), b.center().y),
+        b.right_bottom(),
+        Pos2::new(b.center().x, b.bottom()),
+        b.left_bottom(),
+        Pos2::new(b.left(), b.center().y),
+    ];
+    p.is_some_and(|p| handles.iter().any(|c| c.distance(p) < 8.0))
 }
 
 /// What a drag on a paragraph box takes hold of.
@@ -400,6 +697,13 @@ pub(crate) enum ImageAction {
     Save(usize, usize),
     Copy(usize, usize),
     CopyFile(usize, usize),
+    Cut(usize, usize),
+    DrawFreehand,
+    Redact(usize, usize),
+    CreateLink(usize, usize),
+    RecognizeText,
+    AddComment(usize, usize),
+    Crop,
 }
 
 fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
@@ -419,7 +723,7 @@ pub(crate) fn image_input(
     info: &DocInfo,
     images: &[pdfcraft_engine::PageImage],
     view: &mut DocView,
-    action: &mut Option<ImageAction>,
+    _action: &mut Option<ImageAction>,
     allow_interaction: bool,
 ) -> bool {
     let boxes: Vec<Rect> = images.iter().map(|im| im.visible_rect.map_or(Rect::NOTHING, |r| xf.user_rect(info, page, r.map(|v| v as f32)))).collect();
@@ -461,91 +765,307 @@ pub(crate) fn image_input(
             painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
     }
-    // The selected image: frame, corner handles, dragging.
+    // The selected image: frame, 8 handles (or crop mode), dragging.
     if let Some(i) = selected.filter(|i| boxes.get(*i).is_some_and(|b| b.is_positive())) {
         let b = boxes[i];
-        let corners = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()];
-        let handles = |rect: Rect| {
-            for c in [rect.left_top(), rect.right_top(), rect.left_bottom(), rect.right_bottom()] {
-                painter.rect(
-                    Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
-                    CornerRadius::ZERO,
-                    Color32::WHITE,
-                    Stroke::new(1.0, ACCENT),
-                    egui::StrokeKind::Middle,
-                );
+        let is_crop = view.image_selection.as_ref().is_some_and(|s| s.crop_mode);
+
+        let handle_pos = |rect: Rect, h: ImageHandle| match h {
+            ImageHandle::TopLeft => rect.left_top(),
+            ImageHandle::TopCenter => Pos2::new(rect.center().x, rect.top()),
+            ImageHandle::TopRight => rect.right_top(),
+            ImageHandle::RightCenter => Pos2::new(rect.right(), rect.center().y),
+            ImageHandle::BottomRight => rect.right_bottom(),
+            ImageHandle::BottomCenter => Pos2::new(rect.center().x, rect.bottom()),
+            ImageHandle::BottomLeft => rect.left_bottom(),
+            ImageHandle::LeftCenter => Pos2::new(rect.left(), rect.center().y),
+        };
+        let all_handles = [
+            ImageHandle::TopLeft,
+            ImageHandle::TopCenter,
+            ImageHandle::TopRight,
+            ImageHandle::RightCenter,
+            ImageHandle::BottomRight,
+            ImageHandle::BottomCenter,
+            ImageHandle::BottomLeft,
+            ImageHandle::LeftCenter,
+        ];
+        let cursor_for = |h: ImageHandle| match h {
+            ImageHandle::TopLeft | ImageHandle::BottomRight => egui::CursorIcon::ResizeNwSe,
+            ImageHandle::TopRight | ImageHandle::BottomLeft => egui::CursorIcon::ResizeNeSw,
+            ImageHandle::TopCenter | ImageHandle::BottomCenter => egui::CursorIcon::ResizeVertical,
+            ImageHandle::LeftCenter | ImageHandle::RightCenter => egui::CursorIcon::ResizeHorizontal,
+        };
+        let draw_handles = |rect: Rect| {
+            for &h in &all_handles {
+                let c = handle_pos(rect, h);
+                match h {
+                    ImageHandle::TopLeft | ImageHandle::TopRight | ImageHandle::BottomLeft | ImageHandle::BottomRight => {
+                        painter.rect(
+                            Rect::from_center_size(c, egui::vec2(8.0, 8.0)),
+                            CornerRadius::ZERO,
+                            Color32::WHITE,
+                            Stroke::new(1.0, ACCENT),
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                    ImageHandle::TopCenter | ImageHandle::BottomCenter => {
+                        painter.rect(
+                            Rect::from_center_size(c, egui::vec2(12.0, 6.0)),
+                            CornerRadius::same(1),
+                            Color32::WHITE,
+                            Stroke::new(1.0, ACCENT),
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                    ImageHandle::LeftCenter | ImageHandle::RightCenter => {
+                        painter.rect(
+                            Rect::from_center_size(c, egui::vec2(6.0, 12.0)),
+                            CornerRadius::same(1),
+                            Color32::WHITE,
+                            Stroke::new(1.0, ACCENT),
+                            egui::StrokeKind::Middle,
+                        );
+                    }
+                }
             }
         };
-        if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
-            painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-            handles(b);
-        }
-        if allow_interaction && let Some(corner) = hover_pos.and_then(|p| corners.iter().position(|c| c.distance(p) < 8.0)) {
-            ui.ctx().set_cursor_icon(if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw });
-        }
-        let origin = ui.input(|i| i.pointer.press_origin());
-        if allow_interaction
-            && resp.drag_started()
-            && let Some(o) = origin
-        {
-            let corner = corners.iter().position(|c| c.distance(o) < 8.0);
-            if corner.is_some() || image_contains(i, o) {
-                let opposite = corner.map(|k| corners[3 - k]);
-                if let Some(s) = view.image_selection.as_mut() {
-                    s.drag = Some((o, opposite));
+
+        if is_crop {
+            let active_crop = view.image_selection.as_ref().and_then(|s| s.crop_rect).unwrap_or(b);
+            let shade_color = Color32::from_rgba_unmultiplied(15, 35, 70, 150);
+            if active_crop.top() > b.top() {
+                painter.rect_filled(Rect::from_min_max(b.min, Pos2::new(b.right(), active_crop.top())), CornerRadius::ZERO, shade_color);
+            }
+            if active_crop.bottom() < b.bottom() {
+                painter.rect_filled(Rect::from_min_max(Pos2::new(b.left(), active_crop.bottom()), b.max), CornerRadius::ZERO, shade_color);
+            }
+            if active_crop.left() > b.left() {
+                painter.rect_filled(Rect::from_min_max(Pos2::new(b.left(), active_crop.top()), Pos2::new(active_crop.left(), active_crop.bottom())), CornerRadius::ZERO, shade_color);
+            }
+            if active_crop.right() < b.right() {
+                painter.rect_filled(Rect::from_min_max(Pos2::new(active_crop.right(), active_crop.top()), Pos2::new(b.right(), active_crop.bottom())), CornerRadius::ZERO, shade_color);
+            }
+
+            painter.rect_stroke(active_crop, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+            let x1 = active_crop.left() + active_crop.width() / 3.0;
+            let x2 = active_crop.left() + active_crop.width() * 2.0 / 3.0;
+            let y1 = active_crop.top() + active_crop.height() / 3.0;
+            let y2 = active_crop.top() + active_crop.height() * 2.0 / 3.0;
+            painter.line_segment([Pos2::new(x1, active_crop.top()), Pos2::new(x1, active_crop.bottom())], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+            painter.line_segment([Pos2::new(x2, active_crop.top()), Pos2::new(x2, active_crop.bottom())], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+            painter.line_segment([Pos2::new(active_crop.left(), y1), Pos2::new(active_crop.right(), y1)], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+            painter.line_segment([Pos2::new(active_crop.left(), y2), Pos2::new(active_crop.right(), y2)], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+
+            let crop_handles = [
+                ImageHandle::TopCenter,
+                ImageHandle::RightCenter,
+                ImageHandle::BottomCenter,
+                ImageHandle::LeftCenter,
+            ];
+            for &h in &crop_handles {
+                let c = handle_pos(active_crop, h);
+                let sz = if matches!(h, ImageHandle::TopCenter | ImageHandle::BottomCenter) { egui::vec2(16.0, 7.0) } else { egui::vec2(7.0, 16.0) };
+                painter.rect(Rect::from_center_size(c, sz), CornerRadius::same(1), Color32::WHITE, Stroke::new(1.5, ACCENT), egui::StrokeKind::Middle);
+            }
+
+            if allow_interaction && let Some(p) = hover_pos {
+                if let Some(&h) = crop_handles.iter().find(|&&h| handle_pos(active_crop, h).distance(p) < 8.0) {
+                    ui.ctx().set_cursor_icon(cursor_for(h));
+                } else if active_crop.contains(p) {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Move);
+                }
+            }
+
+            if allow_interaction {
+                if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                    if active_crop != b {
+                        view.pending_edit = Some(Edit::EditPageImage {
+                            page,
+                            index: i,
+                            change: pdfcraft_engine::ImageEdit::Crop(user_box(xf, info, page, active_crop)),
+                        });
+                    }
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.crop_mode = false;
+                        s.crop_rect = None;
+                    }
+                    return true;
+                }
+                if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.crop_mode = false;
+                        s.crop_rect = None;
+                    }
+                    return true;
+                }
+            }
+        } else {
+            if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
+                painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+                draw_handles(b);
+            }
+            if allow_interaction && let Some(p) = hover_pos {
+                if let Some(&h) = all_handles.iter().find(|&&h| handle_pos(b, h).distance(p) < 8.0) {
+                    ui.ctx().set_cursor_icon(cursor_for(h));
                 }
             }
         }
-        if let Some((start, opposite)) = view.image_selection.as_ref().and_then(|s| s.drag)
+
+        let origin = ui.input(|i| i.pointer.press_origin());
+        if allow_interaction && resp.drag_started() && let Some(o) = origin {
+            if is_crop {
+                let active_crop = view.image_selection.as_ref().and_then(|s| s.crop_rect).unwrap_or(b);
+                let crop_handles = [
+                    ImageHandle::TopCenter,
+                    ImageHandle::RightCenter,
+                    ImageHandle::BottomCenter,
+                    ImageHandle::LeftCenter,
+                ];
+                let hit_edge = crop_handles.iter().copied().find(|&h| handle_pos(active_crop, h).distance(o) < 8.0);
+                if let Some(h) = hit_edge {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = Some(ImageDrag { start: o, target: DragTarget::CropHandle(h), initial_rect: active_crop });
+                    }
+                } else if active_crop.contains(o) {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: active_crop });
+                    }
+                }
+            } else {
+                let hit_handle = all_handles.iter().copied().find(|&h| handle_pos(b, h).distance(o) < 8.0);
+                if let Some(h) = hit_handle {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Handle(h), initial_rect: b });
+                    }
+                } else if image_contains(i, o) {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: b });
+                    }
+                }
+            }
+        }
+
+        if let Some(drag) = view.image_selection.as_ref().and_then(|s| s.drag)
             && let Some(p) = hover_pos
         {
-            let preview = match opposite {
-                // Resize from the opposite corner, keeping the aspect ratio.
-                Some(fixed) => {
-                    let (w0, h0) = (b.width().max(1.0), b.height().max(1.0));
-                    // Use the axis with the larger relative pointer change. Taking the maximum
-                    // absolute size freezes shrinking when the other axis hasn't moved. Measure
-                    // from the press point so grabbing a handle off-centre cannot cause a jump.
-                    let horizontal = (p.x - start.x) * (start.x - fixed.x).signum() / w0;
-                    let vertical = (p.y - start.y) * (start.y - fixed.y).signum() / h0;
-                    let delta = if horizontal.abs() > vertical.abs() { horizontal } else { vertical };
-                    let k = (1.0 + delta).max(0.05);
-                    let (w, h) = (w0 * k, h0 * k);
-                    let x = if start.x < fixed.x { fixed.x - w } else { fixed.x };
-                    let y = if start.y < fixed.y { fixed.y - h } else { fixed.y };
-                    Rect::from_min_size(Pos2::new(x, y), egui::vec2(w, h))
+            let delta = p - drag.start;
+            let initial = drag.initial_rect;
+            if is_crop {
+                let mut new_crop = initial;
+                match drag.target {
+                    DragTarget::CropHandle(ImageHandle::TopCenter) => {
+                        let y = (initial.top() + delta.y).clamp(b.top(), initial.bottom() - 10.0);
+                        new_crop = Rect::from_min_max(Pos2::new(initial.left(), y), initial.max);
+                    }
+                    DragTarget::CropHandle(ImageHandle::BottomCenter) => {
+                        let y = (initial.bottom() + delta.y).clamp(initial.top() + 10.0, b.bottom());
+                        new_crop = Rect::from_min_max(initial.min, Pos2::new(initial.right(), y));
+                    }
+                    DragTarget::CropHandle(ImageHandle::LeftCenter) => {
+                        let x = (initial.left() + delta.x).clamp(b.left(), initial.right() - 10.0);
+                        new_crop = Rect::from_min_max(Pos2::new(x, initial.top()), initial.max);
+                    }
+                    DragTarget::CropHandle(ImageHandle::RightCenter) => {
+                        let x = (initial.right() + delta.x).clamp(initial.left() + 10.0, b.right());
+                        new_crop = Rect::from_min_max(initial.min, Pos2::new(x, initial.bottom()));
+                    }
+                    DragTarget::Move => {
+                        let mut translated = initial.translate(delta);
+                        if translated.left() < b.left() {
+                            translated = translated.translate(egui::vec2(b.left() - translated.left(), 0.0));
+                        }
+                        if translated.right() > b.right() {
+                            translated = translated.translate(egui::vec2(b.right() - translated.right(), 0.0));
+                        }
+                        if translated.top() < b.top() {
+                            translated = translated.translate(egui::vec2(0.0, b.top() - translated.top()));
+                        }
+                        if translated.bottom() > b.bottom() {
+                            translated = translated.translate(egui::vec2(0.0, b.bottom() - translated.bottom()));
+                        }
+                        new_crop = translated;
+                    }
+                    _ => {}
                 }
-                None => b.translate(p - start),
-            };
-            // Move/resize the full placement by the visible frame's change. The engine
-            // transforms an isolated crop together with its image, preserving its contents.
-            let raw = images.get(i).map_or(b, |im| xf.user_rect(info, page, im.rect.map(|v| v as f32)));
-            // A zero-width or zero-height visible frame (or a degenerate ratio) keeps the
-            // placement's scale instead of producing inf/NaN.
-            let ratio = |new: f32, old: f32| if old.abs() > 1e-3 && (new / old).is_finite() { new / old } else { 1.0 };
-            let factor = egui::vec2(ratio(preview.width(), b.width()), ratio(preview.height(), b.height()));
-            let target = Rect::from_min_max(preview.min + (raw.min - b.min) * factor, preview.min + (raw.max - b.min) * factor);
-            let visible = preview.intersect(xf.rect);
-            if visible.is_positive() {
-                painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
-                painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
-                handles(preview);
-            }
-            if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
                 if let Some(s) = view.image_selection.as_mut() {
-                    s.drag = None;
+                    s.crop_rect = Some(new_crop);
                 }
-                if preview != b {
-                    view.pending_edit =
-                        Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(user_box(xf, info, page, target)) });
+                if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = None;
+                    }
                 }
+                ui.ctx().set_cursor_icon(match drag.target {
+                    DragTarget::CropHandle(h) => cursor_for(h),
+                    _ => egui::CursorIcon::Grabbing,
+                });
+                return true;
+            } else {
+                let preview = match drag.target {
+                    DragTarget::Move => initial.translate(delta),
+                    DragTarget::Handle(ImageHandle::TopCenter) => {
+                        let new_top = (initial.top() + delta.y).min(initial.bottom() - 4.0);
+                        Rect::from_min_max(Pos2::new(initial.left(), new_top), Pos2::new(initial.right(), initial.bottom()))
+                    }
+                    DragTarget::Handle(ImageHandle::BottomCenter) => {
+                        let new_bottom = (initial.bottom() + delta.y).max(initial.top() + 4.0);
+                        Rect::from_min_max(Pos2::new(initial.left(), initial.top()), Pos2::new(initial.right(), new_bottom))
+                    }
+                    DragTarget::Handle(ImageHandle::LeftCenter) => {
+                        let new_left = (initial.left() + delta.x).min(initial.right() - 4.0);
+                        Rect::from_min_max(Pos2::new(new_left, initial.top()), Pos2::new(initial.right(), initial.bottom()))
+                    }
+                    DragTarget::Handle(ImageHandle::RightCenter) => {
+                        let new_right = (initial.right() + delta.x).max(initial.left() + 4.0);
+                        Rect::from_min_max(Pos2::new(initial.left(), initial.top()), Pos2::new(new_right, initial.bottom()))
+                    }
+                    DragTarget::Handle(h @ (ImageHandle::TopLeft | ImageHandle::TopRight | ImageHandle::BottomLeft | ImageHandle::BottomRight)) => {
+                        let fixed = match h {
+                            ImageHandle::TopLeft => Pos2::new(initial.right(), initial.bottom()),
+                            ImageHandle::TopRight => Pos2::new(initial.left(), initial.bottom()),
+                            ImageHandle::BottomLeft => Pos2::new(initial.right(), initial.top()),
+                            ImageHandle::BottomRight => Pos2::new(initial.left(), initial.top()),
+                            _ => Pos2::ZERO,
+                        };
+                        let start = drag.start;
+                        let (w0, h0) = (initial.width().max(1.0), initial.height().max(1.0));
+                        let horizontal = (p.x - start.x) * (start.x - fixed.x).signum() / w0;
+                        let vertical = (p.y - start.y) * (start.y - fixed.y).signum() / h0;
+                        let delta = if horizontal.abs() > vertical.abs() { horizontal } else { vertical };
+                        let k = (1.0 + delta).max(0.05);
+                        let (w, h) = (w0 * k, h0 * k);
+                        let x = if start.x < fixed.x { fixed.x - w } else { fixed.x };
+                        let y = if start.y < fixed.y { fixed.y - h } else { fixed.y };
+                        Rect::from_min_size(Pos2::new(x, y), egui::vec2(w, h))
+                    }
+                    _ => initial,
+                };
+                let raw = images.get(i).map_or(b, |im| xf.user_rect(info, page, im.rect.map(|v| v as f32)));
+                let ratio = |new: f32, old: f32| if old.abs() > 1e-3 && (new / old).is_finite() { new / old } else { 1.0 };
+                let factor = egui::vec2(ratio(preview.width(), b.width()), ratio(preview.height(), b.height()));
+                let target = Rect::from_min_max(preview.min + (raw.min - b.min) * factor, preview.min + (raw.max - b.min) * factor);
+                let visible = preview.intersect(xf.rect);
+                if visible.is_positive() {
+                    painter.rect_filled(visible, CornerRadius::ZERO, ACCENT.gamma_multiply(0.04));
+                    painter.rect_stroke(visible, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+                    draw_handles(preview);
+                }
+                if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
+                    if let Some(s) = view.image_selection.as_mut() {
+                        s.drag = None;
+                    }
+                    if preview != b {
+                        view.pending_edit =
+                            Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Move(user_box(xf, info, page, target)) });
+                    }
+                }
+                ui.ctx().set_cursor_icon(match drag.target {
+                    DragTarget::Handle(h) => cursor_for(h),
+                    _ => egui::CursorIcon::Grabbing,
+                });
+                return true;
             }
-            ui.ctx().set_cursor_icon(match opposite {
-                Some(fixed) if (start.x - fixed.x) * (start.y - fixed.y) < 0.0 => egui::CursorIcon::ResizeNeSw,
-                Some(_) => egui::CursorIcon::ResizeNwSe,
-                None => egui::CursorIcon::Grabbing,
-            });
-            return true;
         }
         if allow_interaction
             && ui.input(|inp| inp.key_pressed(egui::Key::Delete) || inp.key_pressed(egui::Key::Backspace))
@@ -560,7 +1080,25 @@ pub(crate) fn image_input(
         return false;
     }
     let Some(p) = hover_pos.filter(|p| xf.rect.contains(*p)) else { return false };
-    let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| b.contains(p) && image_contains(i, p)) else { return false };
+    let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| b.contains(p) && image_contains(i, p)) else {
+        let over_popup = egui::Popup::is_any_open(ui.ctx())
+            || ui.ctx().is_pointer_over_egui()
+            || ui.ctx().egui_wants_pointer_input();
+        if (resp.secondary_clicked() || resp.clicked()) && !over_popup {
+            if let Some(s) = view.image_selection.as_mut() && s.crop_mode {
+                let img_box = boxes.get(s.index).copied();
+                if let Some(crop) = s.crop_rect.filter(|c| img_box.is_some_and(|b| *c != b)) {
+                    view.pending_edit = Some(Edit::EditPageImage {
+                        page,
+                        index: s.index,
+                        change: pdfcraft_engine::ImageEdit::Crop(user_box(xf, info, page, crop)),
+                    });
+                }
+            }
+            view.image_selection = None;
+        }
+        return false;
+    };
     if selected != Some(hit) {
         painter.rect_stroke(boxes[hit], CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
     }
@@ -573,50 +1111,168 @@ pub(crate) fn image_input(
         _ => egui::CursorIcon::PointingHand,
     });
     if resp.clicked() || resp.secondary_clicked() {
-        view.image_selection = Some(ImageSelection { page, index: hit, drag: None });
-    }
-    if selected == Some(hit) {
-        resp.context_menu(|ui| {
-            use pdfcraft_engine::ImageEdit as E;
-            let items: [(&str, Option<E>); 4] = [
-                (tl!("Rotate Clockwise"), Some(E::Rotate(1))),
-                (tl!("Rotate Counterclockwise"), Some(E::Rotate(3))),
-                (tl!("Flip Horizontal"), Some(E::Flip { horizontal: true })),
-                (tl!("Flip Vertical"), Some(E::Flip { horizontal: false })),
-            ];
-            for (label, change) in items {
-                if ui.button(label).clicked() {
-                    view.pending_edit = change.map(|c| Edit::EditPageImage { page, index: hit, change: c });
-                    ui.close();
-                }
-            }
-            let raster = images.get(hit).is_some_and(|image| !image.is_form);
-            if ui.add_enabled(raster, egui::Button::new(tl!("Replace Image…"))).clicked() {
-                *action = Some(ImageAction::Replace(page, hit));
-                ui.close();
-            }
-            if ui.add_enabled(raster, egui::Button::new(tl!("Save Image As…"))).clicked() {
-                *action = Some(ImageAction::Save(page, hit));
-                ui.close();
-            }
-            // Copying also finds the picture inside grouped Form artwork.
-            if ui.button(tl!("Copy Image")).clicked() {
-                *action = Some(ImageAction::Copy(page, hit));
-                ui.close();
-            }
-            if ui.button(tl!("Copy Image in Original Format")).clicked() {
-                *action = Some(ImageAction::CopyFile(page, hit));
-                ui.close();
-            }
-            ui.separator();
-            if ui.button(tl!("Delete")).clicked() {
-                view.image_selection = None;
-                view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Delete });
-                ui.close();
-            }
-        });
+        view.image_selection = Some(ImageSelection { page, index: hit, crop_mode: false, crop_rect: None, drag: None });
     }
     true
+}
+
+/// The right-click context menu for a selected image matching Adobe Acrobat.
+pub(crate) fn image_context_menu(
+    ui: &mut egui::Ui,
+    view: &mut DocView,
+    doc: &pdfcraft_engine::Document,
+    page: usize,
+    hit: usize,
+    action: &mut Option<ImageAction>,
+) {
+    let images = doc.page_images(page);
+    let Some(img) = images.get(hit) else { return };
+    use pdfcraft_engine::ImageEdit as E;
+
+    // Top horizontal icon bar: Comment, Crop, Rotate CCW, Rotate CW, Delete
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if crate::icons::button(ui, "message-square", 24.0, false, tl!("Add a sticky note here")).clicked() {
+            *action = Some(ImageAction::AddComment(page, hit));
+            ui.close();
+        }
+        if crate::icons::button(ui, "crop", 24.0, false, tl!("Crop")).clicked() {
+            *action = Some(ImageAction::Crop);
+            if let Some(s) = view.image_selection.as_mut() {
+                s.crop_mode = true;
+                s.crop_rect = None;
+            }
+            ui.close();
+        }
+        if crate::icons::button(ui, "rotate-ccw", 24.0, false, tl!("Rotate Counterclockwise")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Rotate(3) });
+            ui.close();
+        }
+        if crate::icons::button(ui, "rotate-cw", 24.0, false, tl!("Rotate Clockwise")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Rotate(1) });
+            ui.close();
+        }
+        if crate::icons::button(ui, "trash-2", 24.0, false, tl!("Delete")).clicked() {
+            view.image_selection = None;
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Delete });
+            ui.close();
+        }
+    });
+
+    ui.separator();
+
+    let raster = !img.is_form;
+    if ui.add(egui::Button::new(tl!("Cut")).shortcut_text("Ctrl+X")).clicked() {
+        *action = Some(ImageAction::Cut(page, hit));
+        ui.close();
+    }
+    if ui.add(egui::Button::new(tl!("Copy")).shortcut_text("Ctrl+C")).clicked() {
+        *action = Some(ImageAction::Copy(page, hit));
+        ui.close();
+    }
+    // Paste item: disabled when no item can be pasted into the image layer
+    ui.add_enabled(false, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V"));
+
+    ui.separator();
+
+    let is_cropped = img.visible_rect.is_some() && img.visible_rect != Some(img.rect);
+    if ui.add_enabled(is_cropped, egui::Button::new(tl!("Remove crop"))).clicked() {
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::RemoveCrop });
+        ui.close();
+    }
+
+    if ui.button(tl!("Flip horizontal")).clicked() {
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Flip { horizontal: true } });
+        ui.close();
+    }
+    if ui.button(tl!("Flip vertical")).clicked() {
+        view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Flip { horizontal: false } });
+        ui.close();
+    }
+
+    ui.menu_button(tl!("Arrange image"), |ui| {
+        let total = images.len();
+        if ui.button(tl!("Bring to front")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage {
+                page,
+                index: hit,
+                change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+            });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = total.saturating_sub(1);
+            }
+            ui.close();
+        }
+        if ui.button(tl!("Send to back")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage {
+                page,
+                index: hit,
+                change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack),
+            });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = 0;
+            }
+            ui.close();
+        }
+        if ui.button(tl!("Bring forward")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage {
+                page,
+                index: hit,
+                change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
+            });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = (hit + 1).min(total.saturating_sub(1));
+            }
+            ui.close();
+        }
+        if ui.button(tl!("Send backward")).clicked() {
+            view.pending_edit = Some(Edit::EditPageImage {
+                page,
+                index: hit,
+                change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
+            });
+            if let Some(s) = view.image_selection.as_mut() {
+                s.index = hit.saturating_sub(1);
+            }
+            ui.close();
+        }
+    });
+
+    if ui.add_enabled(raster, egui::Button::new(tl!("Replace image"))).clicked() {
+        *action = Some(ImageAction::Replace(page, hit));
+        ui.close();
+    }
+
+    ui.separator();
+
+    if ui.button(tl!("Draw freehand")).clicked() {
+        *action = Some(ImageAction::DrawFreehand);
+        ui.close();
+    }
+    if ui.button(tl!("Redact image")).clicked() {
+        *action = Some(ImageAction::Redact(page, hit));
+        ui.close();
+    }
+    if ui.add_enabled(raster, egui::Button::new(tl!("Export image"))).clicked() {
+        *action = Some(ImageAction::Save(page, hit));
+        ui.close();
+    }
+
+    ui.separator();
+
+    if ui.button(tl!("Create link")).clicked() {
+        *action = Some(ImageAction::CreateLink(page, hit));
+        ui.close();
+    }
+
+    ui.menu_button(tl!("Edit image using"), |ui| {
+        ui.add_enabled(false, egui::Button::new(tl!("Default image editor")));
+    });
+
+    if ui.button(tl!("Recognize text")).clicked() {
+        *action = Some(ImageAction::RecognizeText);
+        ui.close();
+    }
 }
 
 /// Lines and their screen boxes for a page; hover outlines, click opens the editor. Returns
@@ -1145,5 +1801,100 @@ mod tests {
         assert_eq!(caret_color_on(Color32::from_rgb(0xFF, 0xFF, 0xF4)), Color32::BLACK);
         assert_eq!(caret_color_on(Color32::BLACK), Color32::WHITE);
         assert_eq!(caret_color_on(DARK_EDITOR_FILL), Color32::WHITE);
+    }
+
+    #[test]
+    fn bullet_list_toggles_and_preserves_content() {
+        let mut text = "First line\nSecond line\n\nThird line".to_string();
+        assert!(!is_bulleted(&text));
+        assert!(toggle_bullet_list(&mut text));
+        assert!(is_bulleted(&text));
+        assert_eq!(text, "• First line\n• Second line\n\n• Third line");
+
+        // Toggling again removes bullets
+        assert!(toggle_bullet_list(&mut text));
+        assert!(!is_bulleted(&text));
+        assert_eq!(text, "First line\nSecond line\n\nThird line");
+    }
+
+    #[test]
+    fn numbered_list_toggles_and_preserves_content() {
+        let mut text = "Item A\nItem B\n\nItem C".to_string();
+        assert!(!is_numbered(&text));
+        assert!(toggle_numbered_list(&mut text));
+        assert!(is_numbered(&text));
+        assert_eq!(text, "1. Item A\n2. Item B\n\n3. Item C");
+
+        // Toggling again removes numbering
+        assert!(toggle_numbered_list(&mut text));
+        assert!(!is_numbered(&text));
+        assert_eq!(text, "Item A\nItem B\n\nItem C");
+    }
+
+    #[test]
+    fn superscript_and_subscript_conversion() {
+        let mut ed = LineEditor {
+            page: 0,
+            block: 0,
+            text: "E = mc2".to_string(),
+            original: "E = mc2".to_string(),
+            rect: egui::Rect::ZERO,
+            source_rect: [0.0; 4],
+            max_width: 100.0,
+            overflow: false,
+            selection: Some(6..7), // selecting '2'
+            font_resource: None,
+            fonts: std::collections::BTreeMap::new(),
+            source: None,
+            multiline: false,
+            size: 12.0,
+            focus: true,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras::default(),
+            extras0: Extras::default(),
+        };
+
+        assert!(toggle_superscript(&mut ed));
+        assert_eq!(ed.text, "E = mc²");
+        // Toggling superscript again returns to normal '2'
+        assert!(toggle_superscript(&mut ed));
+        assert_eq!(ed.text, "E = mc2");
+
+        // Test subscript on H2O
+        ed.text = "H2O".to_string();
+        ed.selection = Some(1..2); // selecting '2'
+        assert!(toggle_subscript(&mut ed));
+        assert_eq!(ed.text, "H₂O");
+        assert!(toggle_subscript(&mut ed));
+        assert_eq!(ed.text, "H2O");
+    }
+
+    #[test]
+    fn value_based_line_spacing_in_style() {
+        let ed = LineEditor {
+            page: 0,
+            block: 0,
+            text: "Paragraph text".to_string(),
+            original: "Paragraph text".to_string(),
+            rect: egui::Rect::ZERO,
+            source_rect: [0.0; 4],
+            max_width: 100.0,
+            overflow: false,
+            selection: None,
+            font_resource: None,
+            fonts: std::collections::BTreeMap::new(),
+            source: None,
+            multiline: false,
+            size: 12.0,
+            focus: true,
+            look: pdfcraft_engine::AddedText::default(),
+            look0: pdfcraft_engine::AddedText::default(),
+            extras: Extras { line_spacing: 1.33, underline: true, ..Default::default() },
+            extras0: Extras::default(),
+        };
+        let style = ed.style();
+        assert_eq!(style.line_spacing, Some(1.33));
+        assert_eq!(style.underline, Some(true));
     }
 }

@@ -1673,6 +1673,77 @@ fn page_images_move_turn_replace_and_delete() {
 }
 
 #[test]
+fn image_arrange_stacking_order_and_remove_crop() {
+    let content = "q 100 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET q 150 0 0 150 200 200 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let initial_images = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial_images.len(), 2);
+    assert!(close(initial_images[0].rect, [100.0, 100.0, 200.0, 200.0]));
+    assert!(close(initial_images[1].rect, [200.0, 200.0, 350.0, 350.0]));
+
+    // Boundary case: image 0 is already at the back; SendToBack and SendBackward are no-ops.
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).unwrap();
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).unwrap();
+    let imgs = images::page_images(&doc, 0).unwrap();
+    assert_eq!(imgs.len(), 2);
+    assert!(close(imgs[0].rect, initial_images[0].rect));
+
+    // Bring forward image 0: moves it past the middle text, but it is still behind image 1.
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringForward).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    // Middle text should now precede image 0's Do in the content stream!
+    let text_pos = str_content.find("Middle Text").unwrap();
+    let first_do = str_content.find("/Im0 Do").unwrap();
+    assert!(text_pos < first_do, "text should now precede image 0");
+
+    // Bring to front on image 0: moves it past image 1 to the front!
+    let mut doc = doc;
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let imgs_after_front = images::page_images(&doc, 0).unwrap();
+    assert_eq!(imgs_after_front.len(), 2);
+    // In drawing order, the image that was at [100, 100, 200, 200] is now drawn LAST (index 1)!
+    assert!(close(imgs_after_front[0].rect, [200.0, 200.0, 350.0, 350.0]));
+    assert!(close(imgs_after_front[1].rect, [100.0, 100.0, 200.0, 200.0]));
+
+    // Send to back on the front image (index 1) restores it to the back.
+    let mut doc = doc;
+    images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::SendToBack).unwrap();
+    let imgs_after_back = images::page_images(&doc, 0).unwrap();
+    assert!(close(imgs_after_back[0].rect, [100.0, 100.0, 200.0, 200.0]));
+    assert!(close(imgs_after_back[1].rect, [200.0, 200.0, 350.0, 350.0]));
+
+    // Test remove crop
+    let cropped_content = "q 100 100 50 50 re W n 200 0 0 100 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(cropped_content);
+    let img_before = &images::page_images(&doc, 0).unwrap()[0];
+    assert_ne!(img_before.visible_rect, Some(img_before.rect));
+    images::remove_image_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_after = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_after.visible_rect, Some(img_after.rect));
+
+    // Test crop_image
+    let uncropped_content = "q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(uncropped_content);
+    let img_before = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_before.visible_rect, Some(img_before.rect));
+    images::crop_image(&mut doc, 0, 0, [120.0, 110.0, 250.0, 180.0]).unwrap();
+    let doc = reopen(&doc);
+    let img_cropped = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(close(img_cropped.visible_rect.unwrap(), [120.0, 110.0, 250.0, 180.0]));
+    // And remove_image_crop works on it:
+    let mut doc = doc;
+    images::remove_image_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_restored = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_restored.visible_rect, Some(img_restored.rect));
+}
+
+
+#[test]
 fn form_artwork_edits_only_the_selected_placement() {
     let mut doc = fixture(); // three pages share resources; pages 0 and 1 also share contents
     let mut form = Dict::new();

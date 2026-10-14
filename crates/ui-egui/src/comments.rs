@@ -250,6 +250,8 @@ pub struct CommentPrefs {
     pub pinned: bool,
     /// The tool each flyout group shows (the last one used).
     pub group_tool: [CommentTool; 3],
+    /// Whether to display author name on hover over highlighted text when no comment is added.
+    pub display_author_hover_no_comment: bool,
 }
 
 impl Default for CommentPrefs {
@@ -259,6 +261,7 @@ impl Default for CommentPrefs {
             styles: ALL.iter().map(|t| (*t, Style::default_for(&t.sample()))).collect(),
             pinned: false,
             group_tool: [CommentTool::Note, CommentTool::Highlight, CommentTool::Ink],
+            display_author_hover_no_comment: true,
         }
     }
 }

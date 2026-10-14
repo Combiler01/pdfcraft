@@ -469,6 +469,19 @@ impl Automation {
                         "flip_horizontal" => ImageEdit::Flip { horizontal: true },
                         "flip_vertical" => ImageEdit::Flip { horizontal: false },
                         "delete" => ImageEdit::Delete,
+                        "bring_to_front" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+                        "send_to_back" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack),
+                        "bring_forward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
+                        "send_backward" => ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
+                        "remove_crop" => ImageEdit::RemoveCrop,
+                        "crop" => {
+                            let r: Vec<f64> =
+                                a.get("rect").and_then(Value::as_array).map(|x| x.iter().filter_map(Value::as_f64).collect()).unwrap_or_default();
+                            let r = <[f64; 4]>::try_from(r).map_err(|_| ToolError::InvalidArgs("crop needs rect: 4 numbers".into()))?;
+                            let info = &self.doc(&a)?.info.pages[page];
+                            let (u0, u1) = (info.view_to_user(r[0] as f32, r[1] as f32), info.view_to_user(r[2] as f32, r[3] as f32));
+                            ImageEdit::Crop([u0[0].min(u1[0]) as f64, u0[1].min(u1[1]) as f64, u0[0].max(u1[0]) as f64, u0[1].max(u1[1]) as f64])
+                        }
                         "replace" => {
                             let path = self.resolve(a.str("path")?, false)?;
                             let bytes = std::fs::read(&path).map_err(|e| failed(format!("{}: {e}", path.display())))?;

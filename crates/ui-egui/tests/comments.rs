@@ -994,6 +994,55 @@ fn hovering_a_comment_shows_its_author_and_text() {
 }
 
 #[test]
+fn hovering_highlight_without_comment_respects_display_author_option() {
+    let pdf = String::from_utf8_lossy(TEXT_FIXTURE).replace(
+        "/Contents 5 0 R /Resources",
+        "/Contents 5 0 R /Annots [8 0 R 9 0 R] /Resources",
+    ).replace(
+        "trailer",
+        "8 0 obj << /Type /Annot /Subtype /Highlight /Rect [50 50 150 120] /C [1 1 0] /T (Ada) >> endobj\n9 0 obj << /Type /Annot /Subtype /Highlight /Rect [160 50 250 120] /C [1 1 0] /T (Ada) /Contents (Has comment) >> endobj\ntrailer",
+    );
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("hover.pdf", None, pdf.into_bytes()).expect("opens");
+        app.set_option("left", "closed").unwrap();
+        app.set_option("panel", "none").unwrap();
+        app
+    });
+    h.run_steps(4);
+    settle(&mut h);
+
+    // By default, display_author_hover_no_comment is true. Hovering over empty highlight shows Ada.
+    let p_empty = at(&h, 100.0, 85.0);
+    h.hover_at(p_empty);
+    h.run_steps(3);
+    h.get_by_label_contains("Ada");
+
+    // Disable the option. Hovering over empty highlight does NOT show Ada.
+    h.state_mut().set_option("display-author-hover-no-comment", "false").unwrap();
+    h.hover_at(pos2(10.0, 10.0));
+    h.run_steps(2);
+    h.hover_at(p_empty);
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("Ada").is_none(), "no author popup when option is disabled and no comment");
+
+    // But hovering over the highlight with a comment still shows Ada and the comment!
+    let p_comment = at(&h, 200.0, 85.0);
+    h.hover_at(p_comment);
+    h.run_steps(3);
+    h.get_by_label_contains("Ada");
+    h.get_by_label_contains("Has comment");
+
+    // Settings round-trip test
+    let json = h.state().persist();
+    assert!(json.contains("\"display_author_hover_no_comment\":false"));
+    let mut app2 = PdfCraftApp::new();
+    app2.restore(&json);
+    assert_eq!(app2.comment_prefs.display_author_hover_no_comment, false);
+}
+
+#[test]
 fn the_squiggly_tool_marks_selected_text() {
     let mut h = harness(|_| {});
     h.state_mut().views[0].select_text(0, 4, 8);

@@ -551,43 +551,111 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
 /// Returns the changed style; for a selected item the caller turns it into an update.
 pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> Option<AddedText> {
     let mut s = style.clone();
-    widgets::section_title(ui, tl!("Format text"));
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(110.0).show_ui(ui, |ui| {
+    widgets::section_title(ui, tl!("FORMAT TEXT"));
+    egui::ComboBox::from_id_salt("font-family")
+        .selected_text(s.family.label())
+        .width(ui.available_width().max(180.0))
+        .show_ui(ui, |ui| {
+            ui.label(egui::RichText::new(tl!("Standard fonts")).weak().small());
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
                 ui.selectable_value(&mut s.family, f, f.label());
             }
-        });
-        // A list rather than a drag value: every change is an undo step.
-        egui::ComboBox::from_id_salt("font-size").selected_text(format!("{} pt", s.size)).width(70.0).show_ui(ui, |ui| {
-            for size in [8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
-                ui.selectable_value(&mut s.size, size, format!("{size} pt"));
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(installed) = crate::files::installed_font_files(ui.ctx()) {
+                if !installed.is_empty() {
+                    ui.separator();
+                    ui.label(egui::RichText::new(tl!("Installed fonts")).weak().small());
+                    for font in &installed {
+                        let fam = if font.family.eq_ignore_ascii_case("times") || font.face.to_ascii_lowercase().contains("times") {
+                            FontFamily::Times
+                        } else if font.family.eq_ignore_ascii_case("courier") || font.face.to_ascii_lowercase().contains("courier") {
+                            FontFamily::Courier
+                        } else {
+                            FontFamily::Helvetica
+                        };
+                        if ui.selectable_label(s.family == fam, &font.face).clicked() {
+                            s.family = fam;
+                        }
+                    }
+                }
             }
         });
-    });
     ui.horizontal(|ui| {
-        if ui.selectable_label(s.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold")).clicked() {
-            s.bold = !s.bold;
+        egui::ComboBox::from_id_salt("font-size")
+            .selected_text(format!("{:.1}", s.size))
+            .width(55.0)
+            .show_ui(ui, |ui| {
+                for size in [6.0, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
+                    ui.selectable_value(&mut s.size, size, format!("{size}"));
+                }
+            });
+        let (color_rect, color_resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+        let color_val = crate::comments::color32(s.color);
+        ui.painter().rect_filled(color_rect, t.radius, color_val);
+        ui.painter().rect_stroke(color_rect, t.radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+        let show_palette_id = ui.id().with("show-palette-added");
+        let mut show_palette = ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false);
+        if color_resp.on_hover_text(tl!("Text color")).clicked() {
+            show_palette = !show_palette;
+            ui.data_mut(|d| d.insert_temp(show_palette_id, show_palette));
         }
-        if ui.selectable_label(s.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic")).clicked() {
-            s.italic = !s.italic;
+        ui.add_space(2.0);
+        let is_bullet = crate::edit_text_ui::is_bulleted(&s.text);
+        if crate::icons::button(ui, "list", 24.0, is_bullet, tl!("Bullet list")).clicked() {
+            crate::edit_text_ui::toggle_bullet_list(&mut s.text);
         }
-        ui.separator();
+        let is_num = crate::edit_text_ui::is_numbered(&s.text);
+        if crate::icons::button(ui, "list-ordered", 24.0, is_num, tl!("Numbered list")).clicked() {
+            crate::edit_text_ui::toggle_numbered_list(&mut s.text);
+        }
+        ui.add_space(2.0);
         for (a, icon, tip) in [
             (TextAlign::Left, "align-left", tl!("Align left")),
             (TextAlign::Center, "align-center", tl!("Centre")),
             (TextAlign::Right, "align-right", tl!("Align right")),
             (TextAlign::Justify, "align-justify", tl!("Justify")),
         ] {
-            if crate::icons::button(ui, icon, 26.0, s.align == a, tip).clicked() {
+            if crate::icons::button(ui, icon, 24.0, s.align == a, tip).clicked() {
                 s.align = a;
             }
         }
     });
-    let c = s.color;
-    if let Some(picked) = crate::comments::swatch_grid(ui, Some(c)) {
-        s.color = picked;
+    let show_palette_id = ui.id().with("show-palette-added");
+    if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false) {
+        if let Some(picked) = crate::comments::swatch_grid(ui, Some(s.color)) {
+            s.color = picked;
+        }
     }
+    ui.horizontal(|ui| {
+        let b_resp = ui.selectable_label(s.bold, egui::RichText::new("T").strong().size(14.0));
+        if b_resp.on_hover_text(tl!("Bold")).clicked() {
+            s.bold = !s.bold;
+        }
+        let i_resp = ui.selectable_label(s.italic, egui::RichText::new("T").italics().size(14.0));
+        if i_resp.on_hover_text(tl!("Italic")).clicked() {
+            s.italic = !s.italic;
+        }
+        let u_resp = ui.selectable_label(false, egui::RichText::new("T̲").size(14.0));
+        let _ = u_resp;
+        let sup_resp = ui.selectable_label(false, egui::RichText::new("T¹").size(13.0));
+        if sup_resp.on_hover_text(tl!("Superscript")).clicked() {
+            let all_sup = !s.text.is_empty() && s.text.chars().all(|c| crate::edit_text_ui::char_from_superscript(c) != c);
+            s.text = if all_sup {
+                s.text.chars().map(crate::edit_text_ui::char_from_superscript).collect()
+            } else {
+                s.text.chars().map(crate::edit_text_ui::char_to_superscript).collect()
+            };
+        }
+        let sub_resp = ui.selectable_label(false, egui::RichText::new("T₁").size(13.0));
+        if sub_resp.on_hover_text(tl!("Subscript")).clicked() {
+            let all_sub = !s.text.is_empty() && s.text.chars().all(|c| crate::edit_text_ui::char_from_subscript(c) != c);
+            s.text = if all_sub {
+                s.text.chars().map(crate::edit_text_ui::char_from_subscript).collect()
+            } else {
+                s.text.chars().map(crate::edit_text_ui::char_to_subscript).collect()
+            };
+        }
+    });
     ui.label(egui::RichText::new(tl!("Thai and Arabic use regular fallback fonts when available.")).small().color(t.text_faint));
     (s != *style).then_some(s)
 }

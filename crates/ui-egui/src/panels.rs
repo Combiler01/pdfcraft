@@ -350,41 +350,165 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let mut ed = ed;
         let mut changed = false;
         let font_choices = app.session.get(app.views[i].id).map(|d| d.text_editor_fonts(ed.page)).unwrap_or_default();
-        egui::ComboBox::from_id_salt("document-font-resource")
-            .selected_text(
-                ed.font_resource
-                    .as_ref()
-                    .and_then(|r| font_choices.iter().find(|f| &f.resource == r))
-                    .map_or(tl!("Keep source fonts"), |f| f.face.as_str()),
-            )
+        let current_font_label = if let Some(r) = ed.font_resource.as_ref() {
+            font_choices.iter().find(|f| &f.resource == r).map_or_else(|| r.clone(), |f| f.face.clone())
+        } else if ed.look.family != pdfcraft_engine::FontFamily::Helvetica {
+            ed.look.family.label().to_string()
+        } else {
+            tl!("Keep source fonts").to_string()
+        };
+
+        crate::widgets::section_title(ui, tl!("FORMAT TEXT"));
+        egui::ComboBox::from_id_salt("text-font-dropdown")
+            .selected_text(current_font_label)
+            .width(ui.available_width().max(180.0))
             .show_ui(ui, |ui| {
-                changed |= ui.selectable_value(&mut ed.font_resource, None, tl!("Keep source fonts")).changed();
-                for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
-                    changed |= ui.selectable_value(&mut ed.font_resource, Some(font.resource.clone()), &font.face).changed();
+                if ui.selectable_label(ed.font_resource.is_none(), tl!("Keep source fonts")).clicked() {
+                    ed.font_resource = None;
+                    changed = true;
                 }
-            });
-        if ui.button(tl!("Load font…")).clicked() {
-            app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        egui::ComboBox::from_id_salt("installed-document-font").selected_text(tl!("Installed fonts…")).show_ui(ui, |ui| {
-            if let Some(fonts) = crate::files::installed_font_files(ui.ctx()) {
-                if fonts.is_empty() {
-                    ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                }
-                for font in fonts {
-                    if ui.selectable_label(false, &font.face).clicked() {
-                        app.use_paths(crate::files::FilePurpose::TextFont { page: ed.page }, &[font.path]);
+                if !font_choices.is_empty() {
+                    ui.separator();
+                    ui.label(egui::RichText::new(tl!("Document fonts")).weak().small());
+                    for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
+                        let is_current = ed.font_resource.as_ref() == Some(&font.resource);
+                        if ui.selectable_label(is_current, &font.face).clicked() {
+                            ed.font_resource = Some(font.resource.clone());
+                            changed = true;
+                        }
                     }
                 }
-            } else {
-                ui.label(tl!("Finding document fonts…"));
+                ui.separator();
+                ui.label(egui::RichText::new(tl!("Standard fonts")).weak().small());
+                for f in [pdfcraft_engine::FontFamily::Helvetica, pdfcraft_engine::FontFamily::Times, pdfcraft_engine::FontFamily::Courier] {
+                    let is_current = ed.font_resource.is_none() && ed.look.family == f;
+                    if ui.selectable_label(is_current, f.label()).clicked() {
+                        ed.font_resource = None;
+                        ed.look.family = f;
+                        changed = true;
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    ui.separator();
+                    ui.label(egui::RichText::new(tl!("Installed fonts")).weak().small());
+                    if let Some(installed) = crate::files::installed_font_files(ui.ctx()) {
+                        if installed.is_empty() {
+                            ui.label(egui::RichText::new(tl!("No installed fonts found.")).weak().small());
+                        } else {
+                            for font in &installed {
+                                let is_current = ed.font_resource.as_ref().is_some_and(|r| {
+                                    font_choices.iter().any(|f| &f.resource == r && f.face == font.face)
+                                });
+                                if ui.selectable_label(is_current, &font.face).clicked() {
+                                    if let Ok(bytes) = std::fs::read(&font.path) {
+                                        let edit = pdfcraft_engine::Edit::RegisterTextFont { page: ed.page, bytes: std::sync::Arc::new(bytes.clone()) };
+                                        if app.apply_edit(edit) {
+                                            if let Some(doc) = app.session.get(app.views[i].id) {
+                                                if let Some(f) = doc.text_editor_fonts(ed.page).into_iter().find(|f| f.bytes == bytes) {
+                                                    ed.font_resource = Some(f.resource);
+                                                    changed = true;
+                                                }
+                                                ed.fonts = crate::edit_text_ui::install_source_fonts(ui.ctx(), doc, ed.page);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        ui.label(egui::RichText::new(tl!("Finding installed fonts…")).weak().small());
+                    }
+                }
+                ui.separator();
+                if ui.button(tl!("Load font from file…")).clicked() {
+                    app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
+                }
+            });
+
+        ui.horizontal(|ui| {
+            // Font size ComboBox
+            egui::ComboBox::from_id_salt("font-size")
+                .selected_text(format!("{:.1}", ed.look.size))
+                .width(55.0)
+                .show_ui(ui, |ui| {
+                    for size in [6.0, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
+                        changed |= ui.selectable_value(&mut ed.look.size, size, format!("{size}")).changed();
+                    }
+                });
+            // Color swatch square
+            let (color_rect, color_resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            let color_val = crate::comments::color32(ed.look.color);
+            ui.painter().rect_filled(color_rect, t.radius, color_val);
+            ui.painter().rect_stroke(color_rect, t.radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+            let show_palette_id = ui.id().with("show-palette");
+            let mut show_palette = ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false);
+            if color_resp.on_hover_text(tl!("Text color")).clicked() {
+                show_palette = !show_palette;
+                ui.data_mut(|d| d.insert_temp(show_palette_id, show_palette));
+            }
+            ui.add_space(2.0);
+            // Bullet list button
+            let is_bullet = crate::edit_text_ui::is_bulleted(&ed.text);
+            if crate::icons::button(ui, "list", 24.0, is_bullet, tl!("Bullet list")).clicked() {
+                changed |= crate::edit_text_ui::toggle_bullet_list(&mut ed.text);
+            }
+            // Numbered list button
+            let is_num = crate::edit_text_ui::is_numbered(&ed.text);
+            if crate::icons::button(ui, "list-ordered", 24.0, is_num, tl!("Numbered list")).clicked() {
+                changed |= crate::edit_text_ui::toggle_numbered_list(&mut ed.text);
+            }
+            ui.add_space(2.0);
+            // Alignment buttons
+            for (a, icon, tip) in [
+                (pdfcraft_engine::TextAlign::Left, "align-left", tl!("Align left")),
+                (pdfcraft_engine::TextAlign::Center, "align-center", tl!("Centre")),
+                (pdfcraft_engine::TextAlign::Right, "align-right", tl!("Align right")),
+                (pdfcraft_engine::TextAlign::Justify, "align-justify", tl!("Justify")),
+            ] {
+                if crate::icons::button(ui, icon, 24.0, ed.look.align == a, tip).clicked() {
+                    ed.look.align = a;
+                    changed = true;
+                }
             }
         });
-        if let Some(look) = crate::content_ui::format_panel(ui, t, &ed.look) {
-            ed.look = look;
-            changed = true;
+
+        // Color Swatch Grid (when toggled or open)
+        let show_palette_id = ui.id().with("show-palette");
+        if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false) {
+            if let Some(picked) = crate::comments::swatch_grid(ui, Some(ed.look.color)) {
+                ed.look.color = picked;
+                changed = true;
+            }
         }
+
+        // Formatting Buttons: Bold, Italic, Underline, Superscript, Subscript
+        ui.horizontal(|ui| {
+            let b_resp = ui.selectable_label(ed.look.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold"));
+            if b_resp.clicked() {
+                ed.look.bold = !ed.look.bold;
+                changed = true;
+            }
+            let i_resp = ui.selectable_label(ed.look.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic"));
+            if i_resp.clicked() {
+                ed.look.italic = !ed.look.italic;
+                changed = true;
+            }
+            if crate::icons::button(ui, "underline", 24.0, ed.extras.underline, tl!("Underline")).clicked() {
+                ed.extras.underline = !ed.extras.underline;
+                changed = true;
+            }
+            let sup_resp = ui.selectable_label(false, egui::RichText::new("T¹").size(13.0)).on_hover_text(tl!("Superscript"));
+            if sup_resp.clicked() {
+                changed |= crate::edit_text_ui::toggle_superscript(&mut ed);
+            }
+            let sub_resp = ui.selectable_label(false, egui::RichText::new("T₁").size(13.0)).on_hover_text(tl!("Subscript"));
+            if sub_resp.clicked() {
+                changed |= crate::edit_text_ui::toggle_subscript(&mut ed);
+            }
+        });
+
+        // Spacing: Value-based line spacing, paragraph spacing, horizontal scale, character spacing
         changed |= crate::edit_text_ui::extras_panel(ui, &mut ed.extras);
         if changed {
             let edit = pdfcraft_engine::Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };

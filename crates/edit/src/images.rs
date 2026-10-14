@@ -367,6 +367,15 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     Ok(out)
 }
 
+/// The four stacking order arrangements.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrangeOrder {
+    BringToFront,
+    SendToBack,
+    BringForward,
+    SendBackward,
+}
+
 /// What to do with an image.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ImageChange {
@@ -375,6 +384,12 @@ pub enum ImageChange {
     /// Draw this image XObject instead, in the same place.
     Replace(ObjRef),
     Delete,
+    /// Change the stacking order.
+    Arrange(ArrangeOrder),
+    /// Remove any private crop on the image.
+    RemoveCrop,
+    /// Crop to a user-space box [x0, y0, x1, y1].
+    Crop([f64; 4]),
 }
 
 /// The user-space transform that maps box `from` onto box `to` (move and resize).
@@ -427,6 +442,352 @@ fn clip_matrix(draw: Matrix, cm: Matrix, t: Matrix) -> Option<Matrix> {
     Some(outer.then(&t).then(&outer.invert()?))
 }
 
+fn is_entire_page_wrapped(ops: &[Op]) -> bool {
+    if ops.len() < 2 || !ops.first().is_some_and(|o| o.is("q")) || !ops.last().is_some_and(|o| o.is("Q")) {
+        return false;
+    }
+    let mut depth: usize = 0;
+    for (i, op) in ops.iter().enumerate() {
+        if op.is("q") {
+            depth = depth.saturating_add(1);
+        } else if op.is("Q") {
+            depth = depth.saturating_sub(1);
+            if depth == 0 && i < ops.len().saturating_sub(1) {
+                return false;
+            }
+        }
+    }
+    depth == 0
+}
+
+fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops::Range<usize>> {
+    let mut units = Vec::new();
+    let mut i = scan_start;
+    while i < scan_end {
+        let op = match ops.get(i) {
+            Some(o) => o,
+            None => break,
+        };
+        if op.is("q") {
+            let mut depth: usize = 1;
+            let mut j = i.saturating_add(1);
+            while j < scan_end {
+                if let Some(next) = ops.get(j) {
+                    if next.is("q") {
+                        depth = depth.saturating_add(1);
+                    } else if next.is("Q") {
+                        depth = depth.saturating_sub(1);
+                        if depth == 0 {
+                            j = j.saturating_add(1);
+                            break;
+                        }
+                    }
+                }
+                j = j.saturating_add(1);
+            }
+            units.push(i..j);
+            i = j;
+        } else if op.is("BT") {
+            let mut j = i.saturating_add(1);
+            while j < scan_end {
+                if ops.get(j).is_some_and(|o| o.is("ET")) {
+                    j = j.saturating_add(1);
+                    break;
+                }
+                j = j.saturating_add(1);
+            }
+            units.push(i..j);
+            i = j;
+        } else if op.is("BI") {
+            let mut j = i.saturating_add(1);
+            while j < scan_end {
+                if ops.get(j).is_some_and(|o| o.is("EI")) {
+                    j = j.saturating_add(1);
+                    break;
+                }
+                j = j.saturating_add(1);
+            }
+            units.push(i..j);
+            i = j;
+        } else if op.is("Do") || op.is("sh") {
+            units.push(i..i.saturating_add(1));
+            i = i.saturating_add(1);
+        } else {
+            let mut j = i;
+            let mut found_end = false;
+            while j < scan_end {
+                let next = match ops.get(j) {
+                    Some(o) => o,
+                    None => break,
+                };
+                if matches!(next.op.as_slice(), b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" | b"n") {
+                    j = j.saturating_add(1);
+                    found_end = true;
+                    break;
+                } else if j > i && matches!(next.op.as_slice(), b"q" | b"BT" | b"BI" | b"Do" | b"sh") {
+                    found_end = true;
+                    break;
+                }
+                j = j.saturating_add(1);
+            }
+            let u_end = if found_end { j } else { scan_end };
+            units.push(i..u_end);
+            i = u_end;
+        }
+    }
+    units
+}
+
+/// Change the stacking order of image `index` on `page`.
+pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: ArrangeOrder) -> Result<(), EditError> {
+    let images = page_images(doc, page)?;
+    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let p = page_of(doc, page)?;
+    let all = streams(doc, &p.dict);
+    let mut offset = 0_usize;
+    for (_, data) in all.iter().take(img.stream) {
+        offset = offset
+            .checked_add(data.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    }
+    let data = all.get(img.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
+    let op = parse(&data.1).ops.get(img.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let target = ops
+        .iter()
+        .position(|op| op.span.start == span && op.is("Do"))
+        .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+
+    let is_wrapped = is_entire_page_wrapped(&ops);
+    let (scan_start, scan_end) = if is_wrapped { (1, ops.len().saturating_sub(1)) } else { (0, ops.len()) };
+    let units = content_units(&ops, scan_start, scan_end);
+    let Some(target_idx) = units.iter().position(|u| u.start <= target && target < u.end) else {
+        return Ok(());
+    };
+    if units.len() <= 1 {
+        return Ok(());
+    }
+
+    let (dest_unit, insert_after) = match order {
+        ArrangeOrder::BringToFront => {
+            if target_idx == units.len().saturating_sub(1) {
+                return Ok(());
+            }
+            let Some(u) = units.last() else { return Ok(()) };
+            (u, true)
+        }
+        ArrangeOrder::SendToBack => {
+            if target_idx == 0 {
+                return Ok(());
+            }
+            let Some(u) = units.first() else { return Ok(()) };
+            (u, false)
+        }
+        ArrangeOrder::BringForward => {
+            if target_idx == units.len().saturating_sub(1) {
+                return Ok(());
+            }
+            let Some(u) = units.get(target_idx.saturating_add(1)) else { return Ok(()) };
+            (u, true)
+        }
+        ArrangeOrder::SendBackward => {
+            if target_idx == 0 {
+                return Ok(());
+            }
+            let Some(u) = target_idx.checked_sub(1).and_then(|i| units.get(i)) else { return Ok(()) };
+            (u, false)
+        }
+    };
+
+    let Some(target_unit) = units.get(target_idx) else { return Ok(()) };
+    let (scope_start, scope_end, placement) = image_transform_scope(&ops, target)?.unwrap_or((target, target, Matrix(img.draw_matrix)));
+
+    let unit_ops = if scope_start != scope_end && target_unit.start == scope_start && target_unit.end == scope_end.saturating_add(1) {
+        if placement == Matrix::IDENTITY {
+            ops.get(scope_start..=scope_end).unwrap_or_default().to_vec()
+        } else {
+            let mut out = Vec::new();
+            out.push(Op::new("q", vec![]));
+            out.push(Op::new("cm", placement.0.map(pdfcraft_content::num).to_vec()));
+            if let Some(inner) = ops.get(scope_start.saturating_add(1)..=scope_end) {
+                out.extend_from_slice(inner);
+            }
+            out
+        }
+    } else {
+        vec![
+            Op::new("q", vec![]),
+            Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()),
+            ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])),
+            Op::new("Q", vec![]),
+        ]
+    };
+
+    let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
+    let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
+    let target_span = first_op.span.start..last_op.span.end;
+
+    let dest_pos = if insert_after {
+        let Some(op) = dest_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
+        op.span.end
+    } else {
+        let Some(op) = ops.get(dest_unit.start) else { return Ok(()) };
+        op.span.start
+    };
+
+    let mut serialized = Vec::new();
+    serialized.push(b'\n');
+    serialized.extend_from_slice(&serialize_ops(&unit_ops));
+    serialized.push(b'\n');
+
+    let mut edits = Vec::new();
+    if dest_pos >= target_span.end {
+        edits.push((target_span, Vec::new()));
+        edits.push((dest_pos..dest_pos, serialized));
+    } else if dest_pos <= target_span.start {
+        edits.push((dest_pos..dest_pos, serialized));
+        edits.push((target_span, Vec::new()));
+    } else {
+        return Ok(());
+    }
+
+    let changed = pieces.splice(edits);
+    let contents = crate::text::rewritten_contents(doc, &all, changed);
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
+/// Remove any private clipping path / crop on image `index` on `page`.
+pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
+    let images = page_images(doc, page)?;
+    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let p = page_of(doc, page)?;
+    let all = streams(doc, &p.dict);
+    let mut offset = 0_usize;
+    for (_, data) in all.iter().take(img.stream) {
+        offset = offset
+            .checked_add(data.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    }
+    let data = all.get(img.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
+    let op = parse(&data.1).ops.get(img.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let target = ops
+        .iter()
+        .position(|op| op.span.start == span && op.is("Do"))
+        .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+    if let Some((at, _)) = exclusive_clip(&ops, target) {
+        let end_idx = at.saturating_add(2);
+        if let (Some(start_op), Some(end_op)) = (ops.get(at), ops.get(end_idx)) {
+            let range = start_op.span.start..end_op.span.end;
+            let changed = pieces.splice([(range, Vec::new())]);
+            let contents = crate::text::rewritten_contents(doc, &all, changed);
+            doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+        }
+    }
+    Ok(())
+}
+
+/// Crop image `index` on `page` to `crop_rect` in user space `[x0, y0, x1, y1]`.
+pub fn crop_image(doc: &mut Document, page: usize, index: usize, crop_rect: [f64; 4]) -> Result<(), EditError> {
+    if !crop_rect.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
+        return Err(EditError::Invalid("the crop rectangle coordinates must be finite".into()));
+    }
+    let (x0, y0) = (crop_rect[0].min(crop_rect[2]), crop_rect[1].min(crop_rect[3]));
+    let (w, h) = ((crop_rect[2] - crop_rect[0]).abs(), (crop_rect[3] - crop_rect[1]).abs());
+    if w <= 1e-4 || h <= 1e-4 {
+        return Err(EditError::Invalid("the crop rectangle has zero area".into()));
+    }
+    let images = page_images(doc, page)?;
+    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let p = page_of(doc, page)?;
+    let all = streams(doc, &p.dict);
+    let mut offset = 0_usize;
+    for (_, data) in all.iter().take(img.stream) {
+        offset = offset
+            .checked_add(data.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    }
+    let data = all.get(img.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
+    let op = parse(&data.1).ops.get(img.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
+    let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let target = ops
+        .iter()
+        .position(|op| op.span.start == span && op.is("Do"))
+        .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+
+    let (range, unit_ops) = if let Some((at, _)) = exclusive_clip(&ops, target) {
+        let op_re = ops.get(at).ok_or_else(|| EditError::Invalid("the crop operation is missing".into()))?;
+        (
+            op_re.span.start..op_re.span.end,
+            vec![Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)])],
+        )
+    } else if target >= 2
+        && ops.get(target - 2).is_some_and(|o| o.is("q"))
+        && ops.get(target - 1).is_some_and(|o| o.is("cm"))
+        && ops.get(target + 1).is_some_and(|o| o.is("Q"))
+    {
+        let q_op = &ops[target - 2];
+        let q_end = &ops[target + 1];
+        (
+            q_op.span.start..q_end.span.end,
+            vec![
+                Op::new("q", vec![]),
+                Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)]),
+                Op::new("W", vec![]),
+                Op::new("n", vec![]),
+                ops[target - 1].clone(),
+                ops[target].clone(),
+                Op::new("Q", vec![]),
+            ],
+        )
+    } else if target >= 1 && ops.get(target - 1).is_some_and(|o| o.is("cm")) {
+        let cm_op = &ops[target - 1];
+        let do_op = &ops[target];
+        (
+            cm_op.span.start..do_op.span.end,
+            vec![
+                Op::new("q", vec![]),
+                Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)]),
+                Op::new("W", vec![]),
+                Op::new("n", vec![]),
+                ops[target - 1].clone(),
+                ops[target].clone(),
+                Op::new("Q", vec![]),
+            ],
+        )
+    } else {
+        let do_op = &ops[target];
+        (
+            do_op.span.start..do_op.span.end,
+            vec![
+                Op::new("q", vec![]),
+                Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)]),
+                Op::new("W", vec![]),
+                Op::new("n", vec![]),
+                Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()),
+                ops[target].clone(),
+                Op::new("Q", vec![]),
+            ],
+        )
+    };
+
+    let serialized = serialize_ops(&unit_ops);
+    let changed = pieces.splice([(range, serialized)]);
+    let contents = crate::text::rewritten_contents(doc, &all, changed);
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    Ok(())
+}
+
 /// Change image `index` (from [`page_images`]) on `page`.
 pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &ImageChange) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
@@ -443,6 +804,15 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
         ImageChange::Delete => Vec::new(),
         ImageChange::Transform(t) => {
             return transform_image(doc, &p, &all, &img, *t);
+        }
+        ImageChange::Arrange(order) => {
+            return arrange_image(doc, page, index, *order);
+        }
+        ImageChange::RemoveCrop => {
+            return remove_image_crop(doc, page, index);
+        }
+        ImageChange::Crop(rect) => {
+            return crop_image(doc, page, index, *rect);
         }
         ImageChange::Replace(r) => {
             if img.is_form {

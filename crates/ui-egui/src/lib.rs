@@ -6,6 +6,7 @@
 //! `pdfcraft-engine`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+#![recursion_limit = "256"]
 
 /// Translate an English UI string into the current language (see [`i18n`]).
 macro_rules! tl {
@@ -2125,6 +2126,7 @@ impl PdfCraftApp {
             // Null follows the interface language.
             "date_language": self.session.date_language(),
             "author": self.comment_prefs.author,
+            "display_author_hover_no_comment": self.comment_prefs.display_author_hover_no_comment,
             // Per-tool comment defaults (colours, opacity, widths), so Make Current
             // Properties Default survives a restart (#340).
             "comment_styles": self
@@ -2252,6 +2254,9 @@ impl PdfCraftApp {
         // name is cut to a sane length.
         if let Some(author) = v["author"].as_str().map(str::trim).filter(|a| !a.is_empty()) {
             self.comment_prefs.author = author.chars().take(MAX_AUTHOR_CHARS).collect();
+        }
+        if let Some(display) = v["display_author_hover_no_comment"].as_bool() {
+            self.comment_prefs.display_author_hover_no_comment = display;
         }
         // Per-tool comment styles (#340): each field goes through its clamping setter, so a
         // malformed or hostile entry is clamped or ignored rather than trusted.
@@ -2555,6 +2560,13 @@ impl PdfCraftApp {
                 };
             }
             ("author", _) => self.comment_prefs.author = value.to_string(),
+            ("display-author-hover-no-comment", _) => {
+                self.comment_prefs.display_author_hover_no_comment = match value {
+                    "true" => true,
+                    "false" => false,
+                    _ => return Err("display-author-hover-no-comment must be true or false".into()),
+                };
+            }
             ("ui-scale", _) => self.ui_scale = ui_scale::parse(value)?,
             ("system-title-bar", _) => {
                 self.system_title_bar = match value {

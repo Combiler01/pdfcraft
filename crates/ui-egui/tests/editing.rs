@@ -2549,6 +2549,187 @@ fn check_existing_artwork(name: &'static str, bytes: Vec<u8>) {
 }
 
 #[test]
+fn image_right_click_context_menu_items_and_actions() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    // Select image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+
+    // Right-click image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some());
+
+    for item in [
+        "Cut",
+        "Copy",
+        "Paste",
+        "Flip horizontal",
+        "Flip vertical",
+        "Arrange image",
+        "Replace image",
+        "Draw freehand",
+        "Redact image",
+        "Export image",
+        "Create link",
+        "Edit image using",
+        "Recognize text",
+    ] {
+        h.get_by_label_contains(item);
+    }
+
+    // Top horizontal icon buttons
+    h.get_by_label("Rotate Counterclockwise");
+    h.get_by_label("Rotate Clockwise");
+    h.get_by_label("Delete");
+
+    // Flip horizontal via context menu item
+    h.get_by_label("Flip horizontal").click();
+    h.run_steps(3);
+    let id = h.state().views[0].id;
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Flip image"));
+
+    // Undo flip
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(3);
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), None);
+}
+
+#[test]
+fn default_page_context_menu_when_not_in_edit_mode() {
+    let mut h = harness(1, |_| {});
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    // Right click on page in Select mode
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    // Verify Acrobat page context menu items (Screenshot 3)
+    h.get_by_label("Rotate Counterclockwise");
+    h.get_by_label("Print");
+    h.get_by_label("Select Tool");
+    h.get_by_label("Hand Tool");
+    h.get_by_label("Marquee Zoom");
+
+    for item in [
+        "Add bookmark",
+        "Take a snapshot",
+        "Edit this PDF",
+        "Delete page",
+        "Export this PDF",
+        "Find text or tools",
+        "Document properties…",
+    ] {
+        h.get_by_label_contains(item);
+    }
+    h.get_by_label("Rotate view clockwise");
+    assert!(h.query_all_by_label("Add comment").next().is_some());
+    assert!(h.query_all_by_label("Add text").next().is_some());
+    assert!(h.query_all_by_label("Add image").next().is_some());
+
+    // Clicking "Edit this PDF" enters edit mode
+    h.get_by_label("Edit this PDF").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::EditText);
+}
+
+#[test]
+fn image_edge_handle_stretch_and_crop_mode() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("square.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    // Select image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some());
+
+    // Enter crop mode via context menu
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label("Crop").click();
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop_mode));
+
+    // Confirm crop with Enter key
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(!h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop_mode));
+}
+
+#[test]
+fn text_selection_action_icons() {
+    let mut h = harness(1, |_| {});
+    h.run_steps(4);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let p0 = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    let p1 = egui::pos2(r.left() + 100.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+
+    // Drag to select text
+    h.hover_at(p0);
+    h.run_steps(1);
+    h.drag_at(p0);
+    h.run_steps(1);
+    h.hover_at(p1);
+    h.run_steps(1);
+    h.drop_at(p1);
+    h.run_steps(2);
+
+    assert!(h.state().views[0].selected_text().is_some());
+
+    // Verify all 6 minimalist action icons are present in the floating menu
+    assert!(h.query_all_by_label("Add comment").next().is_some());
+    assert!(h.query_all_by_label("Highlight").next().is_some());
+    assert!(h.query_all_by_label("Underline").next().is_some());
+    assert!(h.query_all_by_label("Strikethrough").next().is_some());
+    assert!(h.query_all_by_label("Replace text").next().is_some());
+    assert!(h.query_all_by_label("Copy").next().is_some());
+}
+
+#[test]
 fn the_format_panel_restyles_the_paragraph_being_edited() {
     let mut h = harness(1, |_| {});
     assert!(h.state_mut().execute("edit.edit_text"));
