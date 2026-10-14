@@ -543,9 +543,44 @@ struct ExtractedScopeState {
     state_ops: Vec<Op>,
 }
 
+#[derive(Clone, Default)]
+struct ExtendedGStateTracker {
+    stack: Vec<Option<Op>>,
+    current_gs: Option<Op>,
+}
+
+impl ExtendedGStateTracker {
+    fn step(&mut self, op: &Op) -> Result<(), EditError> {
+        match op.op.as_slice() {
+            b"q" => {
+                if self.stack.len() >= 256 {
+                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                }
+                self.stack.push(self.current_gs.clone());
+            }
+            b"Q" => {
+                if let Some(prev) = self.stack.pop() {
+                    self.current_gs = prev;
+                }
+            }
+            b"gs" => {
+                self.current_gs = Some(op.clone());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
 fn extract_scope_state(ops: &[Op], start: usize, target: usize) -> Result<Option<ExtractedScopeState>, EditError> {
-    if start >= target || target >= ops.len() {
+    if target >= ops.len() || start > target {
         return Ok(None);
+    }
+    if start == target {
+        return Ok(Some(ExtractedScopeState {
+            clip_ops: Vec::new(),
+            state_ops: Vec::new(),
+        }));
     }
     let mut clip_ops = Vec::new();
     let mut state_ops = Vec::new();
@@ -725,55 +760,68 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     };
 
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
+    let mut tracker = ExtendedGStateTracker::default();
+    let mut source_effective_gs = None;
+    let mut dest_effective_gs = None;
+    let mut dest_ctm = Matrix::IDENTITY;
+
+    let max_scan = scan_target.max(target.saturating_add(1));
     for (i, op) in ops.iter().enumerate() {
+        if i == target {
+            source_effective_gs = tracker.current_gs.clone();
+        }
         if i == scan_target {
+            dest_effective_gs = tracker.current_gs.clone();
+            dest_ctm = state.placement.matrix;
+        }
+        if i >= max_scan {
             break;
         }
         state.apply(op)?;
+        tracker.step(op)?;
     }
-    let dest_ctm = state.placement.matrix;
+    if scan_target >= ops.len() && dest_effective_gs.is_none() {
+        dest_effective_gs = tracker.current_gs.clone();
+        dest_ctm = state.placement.matrix;
+    }
     let Some(dest_inv) = dest_ctm.invert() else { return Ok(()); };
 
-    let target_span = if has_other_paint {
-        if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
-            && sub_start >= target_unit.start
-            && sub_end < target_unit.end
-        {
-            let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
-            let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
-            start_op.span.start..end_op.span.end
-        } else {
-            let target_op = &ops[target];
-            target_op.span.start..target_op.span.end
-        }
+    let (target_span, scope_start) = if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+        && sub_start >= target_unit.start
+        && sub_end < target_unit.end
+    {
+        let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
+        let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
+        (start_op.span.start..end_op.span.end, sub_start)
+    } else if has_other_paint {
+        let target_op = &ops[target];
+        (target_op.span.start..target_op.span.end, target_unit.start)
     } else {
         let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
         let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        first_op.span.start..last_op.span.end
-    };
-
-    let scope_start = if has_other_paint {
-        if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
-            && sub_start >= target_unit.start
-            && sub_end < target_unit.end
-        {
-            sub_start
-        } else {
-            target_unit.start
-        }
-    } else {
-        target_unit.start
+        (first_op.span.start..last_op.span.end, target_unit.start)
     };
 
     let is_clipped = (img.visible_rect.is_some() && img.visible_rect != Some(img.rect)) || !img.clips.is_empty();
 
     let extracted = extract_scope_state(&ops, scope_start, target)?;
-    let Some(extracted) = extracted else {
-        return Ok(());
+    let Some(mut extracted) = extracted else {
+        return Err(EditError::Invalid("unsupported graphics state: unable to cleanly extract image scope state".into()));
     };
 
     if is_clipped && extracted.clip_ops.is_empty() {
-        return Ok(());
+        return Err(EditError::Invalid("unsupported graphics state: inherited clipping path cannot be cleanly preserved".into()));
+    }
+
+    if source_effective_gs.is_none() && dest_effective_gs.is_some() {
+        return Err(EditError::Invalid("unsupported graphics state: moving an opaque image into an active transparency scope is not supported".into()));
+    }
+
+    if let Some(src_gs) = source_effective_gs {
+        let already_has_gs = extracted.state_ops.iter().any(|o| o.is("gs"));
+        if !already_has_gs {
+            extracted.state_ops.push(src_gs);
+        }
     }
 
     let mut unit_ops = Vec::new();

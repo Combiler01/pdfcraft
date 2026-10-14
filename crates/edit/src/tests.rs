@@ -1817,10 +1817,22 @@ fn image_arrange_preserves_position_under_active_ctm() {
     // Move first image to front: must not apply destination CTM twice!
     images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
     let doc = reopen(&doc);
+
+    // 1. Position: check order of operators in the content stream
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let first_do = str_content.find("/Im0 Do").unwrap();
+    let last_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(first_do < last_do, "Position: multiple image Do calls exist and order was updated");
+
+    // 2. Appearance: both images' positions and sizes are preserved
     let after = images::page_images(&doc, 0).unwrap();
     assert_eq!(after.len(), 2);
-    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "first image position preserved");
-    assert_eq!(after[1].rect, [50.0, 50.0, 150.0, 150.0], "second image position preserved");
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: first image position preserved");
+    assert_eq!(after[1].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: second image position preserved");
+
+    // 3. Preservation: outer CTM is preserved
+    assert!(str_content.contains("100 0 0 100 50 50 cm"), "Preservation: initial CTM preserved");
 }
 
 #[test]
@@ -1837,13 +1849,23 @@ fn image_arrange_preserves_shared_group_clipping_bounds() {
     // Bring image 0 to front: moves it past the external text while preserving clipping bounds
     images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
     let doc = reopen(&doc);
-    let after = images::page_images(&doc, 0).unwrap();
-    assert_eq!(after.len(), 2, "both images preserved");
-    assert_eq!(after[0].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "image 0 retains clip");
-    assert_eq!(after[1].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "image 1 retains clip");
+
+    // 1. Position: moved image Do now follows External Text in AST
     let bytes = page_content_bytes(&doc, 0);
     let str_content = String::from_utf8_lossy(&bytes);
-    assert!(str_content.contains("External Text"), "external text preserved");
+    let text_pos = str_content.find("External Text").unwrap();
+    let moved_do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < moved_do_pos, "Position: moved image Do follows External Text");
+
+    // 2. Appearance: both images retain exact clipping bounds and geometry
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images preserved");
+    assert_eq!(after[0].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "Appearance: image 0 retains clip");
+    assert_eq!(after[1].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "Appearance: image 1 retains clip");
+
+    // 3. Preservation: External Text and original group drawing preserved
+    assert!(str_content.contains("External Text"), "Preservation: external text preserved");
+    assert!(str_content.contains("120 120 40 40 re W n"), "Preservation: clipping path operators preserved");
 }
 
 #[test]
@@ -1856,16 +1878,24 @@ fn image_arrange_preserves_extended_graphics_state_opacity() {
 
     images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
     let doc = reopen(&doc);
-    let after = images::page_images(&doc, 0).unwrap();
-    assert_eq!(after.len(), 1, "image preserved");
-    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0]);
 
+    // 1. Position: /Im0 Do moved past External Text
     let bytes = page_content_bytes(&doc, 0);
     let str_content = String::from_utf8_lossy(&bytes);
-    assert!(str_content.contains("/GS0 gs"), "extended graphics state /GS0 gs is retained");
-    let gs_pos = str_content.rfind("/GS0 gs").unwrap();
+    let text_pos = str_content.find("External Text").unwrap();
     let do_pos = str_content.rfind("/Im0 Do").unwrap();
-    assert!(gs_pos < do_pos, "/GS0 gs must precede /Im0 Do in the new unit");
+    assert!(text_pos < do_pos, "Position: /Im0 Do moved past External Text");
+
+    // 2. Appearance: /GS0 gs is retained and directly precedes /Im0 Do
+    let gs_pos = str_content.rfind("/GS0 gs").unwrap();
+    assert!(text_pos < gs_pos, "Appearance: /GS0 gs is in the new moved unit");
+    assert!(gs_pos < do_pos, "Appearance: /GS0 gs directly precedes /Im0 Do");
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "image preserved");
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: rect preserved");
+
+    // 3. Preservation: External Text is preserved
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (External Text) Tj ET"), "Preservation: text preserved");
 }
 
 #[test]
@@ -1877,13 +1907,117 @@ fn image_arrange_preserves_exact_non_rectangular_clipping_path() {
 
     images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
     let doc = reopen(&doc);
+
+    // 1. Position: moved image follows External Text in AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let last_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < last_do, "Position: moved image follows External Text");
+
+    // 2. Appearance: polygon geometry and even-odd rule are preserved
+    assert!(str_content.contains("W*"), "Appearance: even-odd W* fill rule preserved");
+    assert!(str_content.contains("120 120 m 160 120 l 140 160 l h W* n"), "Appearance: exact polygon clip preserved");
     let after = images::page_images(&doc, 0).unwrap();
     assert_eq!(after.len(), 2, "both images preserved");
 
+    // 3. Preservation: External Text and remaining original group content preserved
+    assert!(str_content.contains("External Text"), "Preservation: external text preserved");
+}
+
+#[test]
+fn unwrapped_image_moves_successfully() {
+    let content = "100 0 0 100 50 50 cm /Im0 Do BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Initial order: /Im0 Do precedes Middle Text
+    let initial_bytes = page_content_bytes(&doc, 0);
+    let initial_str = String::from_utf8_lossy(&initial_bytes);
+    let init_do = initial_str.find("/Im0 Do").unwrap();
+    let init_text = initial_str.find("Middle Text").unwrap();
+    assert!(init_do < init_text, "/Im0 Do initially precedes Middle Text");
+
+    // Move unwrapped image to front (past Middle Text)
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: /Im0 Do now follows Middle Text in the content stream AST
     let bytes = page_content_bytes(&doc, 0);
     let str_content = String::from_utf8_lossy(&bytes);
-    assert!(str_content.contains("W*"), "even-odd W* fill rule must be preserved");
-    assert!(str_content.contains("120 120 m 160 120 l 140 160 l h W* n"), "exact non-rectangular clip path preserved");
+    let after_text = str_content.find("Middle Text").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_do, "Position: /Im0 Do actually moved after Middle Text");
+
+    // 2. Appearance: image rect and visibility are unchanged
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: image coordinates preserved");
+    assert_eq!(after[0].visible_rect, Some([50.0, 50.0, 150.0, 150.0]));
+
+    // 3. Preservation: Middle Text and CTM remain intact
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET"), "Preservation: text operation preserved");
+    assert!(str_content.contains("100 0 0 100 50 50 cm"), "Preservation: original cm preserved");
+}
+
+#[test]
+fn inherited_source_opacity_is_preserved() {
+    // Outer q sets /GS0 gs; inner q draws /Im0 Do; outer Q restores state before External Text
+    let content = "q /GS0 gs q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Initial order: /Im0 Do precedes External Text
+    let initial_bytes = page_content_bytes(&doc, 0);
+    let initial_str = String::from_utf8_lossy(&initial_bytes);
+    let init_do = initial_str.find("/Im0 Do").unwrap();
+    let init_text = initial_str.find("External Text").unwrap();
+    assert!(init_do < init_text, "/Im0 Do initially precedes External Text");
+
+    // Move image to front (past External Text, outside its original outer q...Q scope)
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    // 1. Position: /Im0 Do now follows External Text in the AST
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let after_text = str_content.find("External Text").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_do, "Position: /Im0 Do moved past External Text");
+
+    // 2. Appearance: effective appearance state (/GS0 gs) is injected and precedes /Im0 Do in the new unit
+    let after_gs = str_content.rfind("/GS0 gs").unwrap();
+    assert!(after_text < after_gs, "Appearance: /GS0 gs injected into the new unit at destination");
+    assert!(after_gs < after_do, "Appearance: /GS0 gs directly precedes /Im0 Do in the moved unit");
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "Appearance: rect preserved");
+
+    // 3. Preservation: External Text and original outer scope structure are preserved
+    assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (External Text) Tj ET"), "Preservation: external text preserved");
+}
+
+#[test]
+fn destination_opacity_pollution_is_prevented() {
+    // /Im0 Do is fully opaque at the start; destination has active top-level /GS_translucent gs
+    let content = "100 0 0 100 50 50 cm /Im0 Do /GS_translucent gs BT /F1 12 Tf 72 700 Td (Translucent Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial_bytes = page_content_bytes(&doc, 0);
+
+    // Attempting to move opaque image 0 to front into active transparency scope must safely bail out with Err
+    let res = images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res.is_err(), "must return an explicit Err rather than silently corrupting opacity");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("unsupported graphics state"), "error describes unsupported graphics state: {err_msg}");
+
+    // Preservation: the document contents are completely unmodified
+    let doc = reopen(&doc);
+    let after_bytes = page_content_bytes(&doc, 0);
+    assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
 }
 
 
