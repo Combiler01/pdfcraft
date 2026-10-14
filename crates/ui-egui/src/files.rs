@@ -466,9 +466,8 @@ impl PdfCraftApp {
                 if self.apply_edit(Edit::RegisterTextFont { page, bytes: Arc::new(bytes.clone()) })
                     && let Some((index, id)) = self.active_ids()
                 {
-                    let resource = self.session.get(id).and_then(|doc| {
-                        doc.text_editor_fonts(page).into_iter().find(|f| f.bytes == bytes).map(|f| f.resource)
-                    });
+                    let resource =
+                        self.session.get(id).and_then(|doc| doc.text_editor_fonts(page).into_iter().find(|f| f.bytes == bytes).map(|f| f.resource));
                     if let Some(resource) = resource
                         && let Some(ed) = self.views[index].line_editor.as_mut()
                     {

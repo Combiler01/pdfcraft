@@ -359,10 +359,9 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         };
 
         crate::widgets::section_title(ui, tl!("FORMAT TEXT"));
-        egui::ComboBox::from_id_salt("text-font-dropdown")
-            .selected_text(current_font_label)
-            .width(ui.available_width().max(180.0))
-            .show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("text-font-dropdown").selected_text(current_font_label).width(ui.available_width().max(180.0)).show_ui(
+            ui,
+            |ui| {
                 if ui.selectable_label(ed.font_resource.is_none(), tl!("Keep source fonts")).clicked() {
                     ed.font_resource = None;
                     changed = true;
@@ -397,9 +396,8 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                             ui.label(egui::RichText::new(tl!("No installed fonts found.")).weak().small());
                         } else {
                             for font in &installed {
-                                let is_current = ed.font_resource.as_ref().is_some_and(|r| {
-                                    font_choices.iter().any(|f| &f.resource == r && f.face == font.face)
-                                });
+                                let is_current =
+                                    ed.font_resource.as_ref().is_some_and(|r| font_choices.iter().any(|f| &f.resource == r && f.face == font.face));
                                 if ui.selectable_label(is_current, &font.face).clicked()
                                     && let Ok(bytes) = std::fs::read(&font.path)
                                 {
@@ -424,18 +422,16 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 if ui.button(tl!("Load font from file…")).clicked() {
                     app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
                 }
-            });
+            },
+        );
 
         ui.horizontal(|ui| {
             // Font size ComboBox
-            egui::ComboBox::from_id_salt("font-size")
-                .selected_text(format!("{:.1}", ed.look.size))
-                .width(55.0)
-                .show_ui(ui, |ui| {
-                    for size in [6.0, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
-                        changed |= ui.selectable_value(&mut ed.look.size, size, format!("{size}")).changed();
-                    }
-                });
+            egui::ComboBox::from_id_salt("font-size").selected_text(format!("{:.1}", ed.look.size)).width(55.0).show_ui(ui, |ui| {
+                for size in [6.0, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
+                    changed |= ui.selectable_value(&mut ed.look.size, size, format!("{size}")).changed();
+                }
+            });
             // Color swatch square
             let (color_rect, color_resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
             let color_val = crate::comments::color32(ed.look.color);

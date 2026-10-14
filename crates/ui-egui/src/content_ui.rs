@@ -552,24 +552,18 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
 pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> Option<AddedText> {
     let mut s = style.clone();
     widgets::section_title(ui, tl!("FORMAT TEXT"));
-    egui::ComboBox::from_id_salt("font-family")
-        .selected_text(s.family.label())
-        .width(ui.available_width().max(180.0))
-        .show_ui(ui, |ui| {
-            ui.label(egui::RichText::new(tl!("Standard fonts")).weak().small());
-            for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
-                ui.selectable_value(&mut s.family, f, f.label());
+    egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(ui.available_width().max(180.0)).show_ui(ui, |ui| {
+        ui.label(egui::RichText::new(tl!("Standard fonts")).weak().small());
+        for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
+            ui.selectable_value(&mut s.family, f, f.label());
+        }
+    });
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("font-size").selected_text(format!("{:.1}", s.size)).width(55.0).show_ui(ui, |ui| {
+            for size in [6.0, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
+                ui.selectable_value(&mut s.size, size, format!("{size}"));
             }
         });
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("font-size")
-            .selected_text(format!("{:.1}", s.size))
-            .width(55.0)
-            .show_ui(ui, |ui| {
-                for size in [6.0, 8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0] {
-                    ui.selectable_value(&mut s.size, size, format!("{size}"));
-                }
-            });
         let (color_rect, color_resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
         let color_val = crate::comments::color32(s.color);
         ui.painter().rect_filled(color_rect, t.radius, color_val);
@@ -759,11 +753,7 @@ impl crate::PdfCraftApp {
     pub(crate) fn cut_page_image(&mut self, view_idx: usize, page: usize, index: usize) {
         self.copy_page_image(page, index);
         if let Some(view) = self.views.get_mut(view_idx) {
-            view.pending_edit = Some(pdfcraft_engine::Edit::EditPageImage {
-                page,
-                index,
-                change: pdfcraft_engine::ImageEdit::Delete,
-            });
+            view.pending_edit = Some(pdfcraft_engine::Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
             view.image_selection = None;
         }
     }
@@ -783,7 +773,9 @@ impl crate::PdfCraftApp {
 
     /// Paste an image from the clipboard onto `page`.
     pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
-        let Some((i, id)) = self.active_ids() else { return false; };
+        let Some((i, id)) = self.active_ids() else {
+            return false;
+        };
         if let Some(doc) = self.session.get(id)
             && !doc.allows_modification()
         {
@@ -808,9 +800,10 @@ impl crate::PdfCraftApp {
         let image_data: Option<(String, Vec<u8>)> = if has_system_cb {
             match os_image {
                 Some((width, height, bytes)) => {
-                    let matches_internal = self.last_copied_image.as_ref().is_some_and(|(w, h, rgba)| {
-                        *w as usize == width && *h as usize == height && rgba.as_slice() == bytes.as_slice()
-                    });
+                    let matches_internal = self
+                        .last_copied_image
+                        .as_ref()
+                        .is_some_and(|(w, h, rgba)| *w as usize == width && *h as usize == height && rgba.as_slice() == bytes.as_slice());
                     if matches_internal && let Some((name, file_bytes)) = self.last_copied_file.clone() {
                         Some((name, file_bytes))
                     } else if let Ok(png_bytes) = crate::create_ui::png_from_rgba(width, height, &bytes) {
@@ -857,21 +850,10 @@ impl crate::PdfCraftApp {
         };
 
         let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
-        if self.apply_edit(pdfcraft_engine::Edit::AddImage {
-            page,
-            rect: target_rect,
-            name,
-            bytes: std::sync::Arc::new(bytes),
-        }) {
+        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
             if let Some(v) = self.views.get_mut(i) {
                 v.current = page;
-                v.image_selection = Some(crate::edit_text_ui::ImageSelection {
-                    page,
-                    index: before,
-                    crop_mode: false,
-                    crop_rect: None,
-                    drag: None,
-                });
+                v.image_selection = Some(crate::edit_text_ui::ImageSelection { page, index: before, crop_mode: false, crop_rect: None, drag: None });
             }
             self.quick_tool = crate::QuickTool::EditText;
             self.notify_tr("Image pasted");

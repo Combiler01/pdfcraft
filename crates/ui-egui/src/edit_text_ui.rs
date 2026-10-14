@@ -244,62 +244,206 @@ pub fn toggle_numbered_list(text: &mut String) -> bool {
 
 pub fn char_to_superscript(c: char) -> char {
     match c {
-        '0' => '⁰', '1' => '¹', '2' => '²', '3' => '³', '4' => '⁴',
-        '5' => '⁵', '6' => '⁶', '7' => '⁷', '8' => '⁸', '9' => '⁹',
-        '+' => '⁺', '-' | '−' => '⁻', '=' => '⁼', '(' => '⁽', ')' => '⁾',
-        'a' => 'ᵃ', 'b' => 'ᵇ', 'c' => 'ᶜ', 'd' => 'ᵈ', 'e' => 'ᵉ',
-        'f' => 'ᶠ', 'g' => 'ᵍ', 'h' => 'ʰ', 'i' => 'ⁱ', 'j' => 'ʲ',
-        'k' => 'ᵏ', 'l' => 'ˡ', 'm' => 'ᵐ', 'n' => 'ⁿ', 'o' => 'ᵒ',
-        'p' => 'ᵖ', 'r' => 'ʳ', 's' => 'ˢ', 't' => 'ᵗ', 'u' => 'ᵘ',
-        'v' => 'ᵛ', 'w' => 'ʷ', 'x' => 'ˣ', 'y' => 'ʸ', 'z' => 'ᶻ',
-        'A' => 'ᴬ', 'B' => 'ᴮ', 'D' => 'ᴰ', 'E' => 'ᴱ', 'G' => 'ᴳ',
-        'H' => 'ᴴ', 'I' => 'ᴵ', 'J' => 'ᴶ', 'K' => 'ᴷ', 'L' => 'ᴸ',
-        'M' => 'ᴹ', 'N' => 'ᴺ', 'O' => 'ᴼ', 'P' => 'ᴾ', 'R' => 'ᴿ',
-        'T' => 'ᵀ', 'U' => 'ᵁ', 'V' => 'ⱽ', 'W' => 'ᵂ',
+        '0' => '⁰',
+        '1' => '¹',
+        '2' => '²',
+        '3' => '³',
+        '4' => '⁴',
+        '5' => '⁵',
+        '6' => '⁶',
+        '7' => '⁷',
+        '8' => '⁸',
+        '9' => '⁹',
+        '+' => '⁺',
+        '-' | '−' => '⁻',
+        '=' => '⁼',
+        '(' => '⁽',
+        ')' => '⁾',
+        'a' => 'ᵃ',
+        'b' => 'ᵇ',
+        'c' => 'ᶜ',
+        'd' => 'ᵈ',
+        'e' => 'ᵉ',
+        'f' => 'ᶠ',
+        'g' => 'ᵍ',
+        'h' => 'ʰ',
+        'i' => 'ⁱ',
+        'j' => 'ʲ',
+        'k' => 'ᵏ',
+        'l' => 'ˡ',
+        'm' => 'ᵐ',
+        'n' => 'ⁿ',
+        'o' => 'ᵒ',
+        'p' => 'ᵖ',
+        'r' => 'ʳ',
+        's' => 'ˢ',
+        't' => 'ᵗ',
+        'u' => 'ᵘ',
+        'v' => 'ᵛ',
+        'w' => 'ʷ',
+        'x' => 'ˣ',
+        'y' => 'ʸ',
+        'z' => 'ᶻ',
+        'A' => 'ᴬ',
+        'B' => 'ᴮ',
+        'D' => 'ᴰ',
+        'E' => 'ᴱ',
+        'G' => 'ᴳ',
+        'H' => 'ᴴ',
+        'I' => 'ᴵ',
+        'J' => 'ᴶ',
+        'K' => 'ᴷ',
+        'L' => 'ᴸ',
+        'M' => 'ᴹ',
+        'N' => 'ᴺ',
+        'O' => 'ᴼ',
+        'P' => 'ᴾ',
+        'R' => 'ᴿ',
+        'T' => 'ᵀ',
+        'U' => 'ᵁ',
+        'V' => 'ⱽ',
+        'W' => 'ᵂ',
         other => other,
     }
 }
 
 pub fn char_from_superscript(c: char) -> char {
     match c {
-        '⁰' => '0', '¹' => '1', '²' => '2', '³' => '3', '⁴' => '4',
-        '⁵' => '5', '⁶' => '6', '⁷' => '7', '⁸' => '8', '⁹' => '9',
-        '⁺' => '+', '⁻' => '-', '⁼' => '=', '⁽' => '(', '⁾' => ')',
-        'ᵃ' => 'a', 'ᵇ' => 'b', 'ᶜ' => 'c', 'ᵈ' => 'd', 'ᵉ' => 'e',
-        'ᶠ' => 'f', 'ᵍ' => 'g', 'ʰ' => 'h', 'ⁱ' => 'i', 'ʲ' => 'j',
-        'ᵏ' => 'k', 'ˡ' => 'l', 'ᵐ' => 'm', 'ⁿ' => 'n', 'ᵒ' => 'o',
-        'ᵖ' => 'p', 'ʳ' => 'r', 'ˢ' => 's', 'ᵗ' => 't', 'ᵘ' => 'u',
-        'ᵛ' => 'v', 'ʷ' => 'w', 'ˣ' => 'x', 'ʸ' => 'y', 'ᶻ' => 'z',
-        'ᴬ' => 'A', 'ᴮ' => 'B', 'ᴰ' => 'D', 'ᴱ' => 'E', 'ᴳ' => 'G',
-        'ᴴ' => 'H', 'ᴵ' => 'I', 'ᴶ' => 'J', 'ᴷ' => 'K', 'ᴸ' => 'L',
-        'ᴹ' => 'M', 'ᴺ' => 'N', 'ᴼ' => 'O', 'ᴾ' => 'P', 'ᴿ' => 'R',
-        'ᵀ' => 'T', 'ᵁ' => 'U', 'ⱽ' => 'V', 'ᵂ' => 'W',
+        '⁰' => '0',
+        '¹' => '1',
+        '²' => '2',
+        '³' => '3',
+        '⁴' => '4',
+        '⁵' => '5',
+        '⁶' => '6',
+        '⁷' => '7',
+        '⁸' => '8',
+        '⁹' => '9',
+        '⁺' => '+',
+        '⁻' => '-',
+        '⁼' => '=',
+        '⁽' => '(',
+        '⁾' => ')',
+        'ᵃ' => 'a',
+        'ᵇ' => 'b',
+        'ᶜ' => 'c',
+        'ᵈ' => 'd',
+        'ᵉ' => 'e',
+        'ᶠ' => 'f',
+        'ᵍ' => 'g',
+        'ʰ' => 'h',
+        'ⁱ' => 'i',
+        'ʲ' => 'j',
+        'ᵏ' => 'k',
+        'ˡ' => 'l',
+        'ᵐ' => 'm',
+        'ⁿ' => 'n',
+        'ᵒ' => 'o',
+        'ᵖ' => 'p',
+        'ʳ' => 'r',
+        'ˢ' => 's',
+        'ᵗ' => 't',
+        'ᵘ' => 'u',
+        'ᵛ' => 'v',
+        'ʷ' => 'w',
+        'ˣ' => 'x',
+        'ʸ' => 'y',
+        'ᶻ' => 'z',
+        'ᴬ' => 'A',
+        'ᴮ' => 'B',
+        'ᴰ' => 'D',
+        'ᴱ' => 'E',
+        'ᴳ' => 'G',
+        'ᴴ' => 'H',
+        'ᴵ' => 'I',
+        'ᴶ' => 'J',
+        'ᴷ' => 'K',
+        'ᴸ' => 'L',
+        'ᴹ' => 'M',
+        'ᴺ' => 'N',
+        'ᴼ' => 'O',
+        'ᴾ' => 'P',
+        'ᴿ' => 'R',
+        'ᵀ' => 'T',
+        'ᵁ' => 'U',
+        'ⱽ' => 'V',
+        'ᵂ' => 'W',
         other => other,
     }
 }
 
 pub fn char_to_subscript(c: char) -> char {
     match c {
-        '0' => '₀', '1' => '₁', '2' => '₂', '3' => '₃', '4' => '₄',
-        '5' => '₅', '6' => '₆', '7' => '₇', '8' => '₈', '9' => '₉',
-        '+' => '₊', '-' | '−' => '₋', '=' => '₌', '(' => '₍', ')' => '₎',
-        'a' => 'ₐ', 'e' => 'ₑ', 'h' => 'ₕ', 'i' => 'ᵢ', 'j' => 'ⱼ',
-        'k' => 'ₖ', 'l' => 'ₗ', 'm' => 'ₘ', 'n' => 'ₙ', 'o' => 'ₒ',
-        'p' => 'ₚ', 'r' => 'ᵣ', 's' => 'ₛ', 't' => 'ₜ', 'u' => 'ᵤ',
-        'v' => 'ᵥ', 'x' => 'ₓ',
+        '0' => '₀',
+        '1' => '₁',
+        '2' => '₂',
+        '3' => '₃',
+        '4' => '₄',
+        '5' => '₅',
+        '6' => '₆',
+        '7' => '₇',
+        '8' => '₈',
+        '9' => '₉',
+        '+' => '₊',
+        '-' | '−' => '₋',
+        '=' => '₌',
+        '(' => '₍',
+        ')' => '₎',
+        'a' => 'ₐ',
+        'e' => 'ₑ',
+        'h' => 'ₕ',
+        'i' => 'ᵢ',
+        'j' => 'ⱼ',
+        'k' => 'ₖ',
+        'l' => 'ₗ',
+        'm' => 'ₘ',
+        'n' => 'ₙ',
+        'o' => 'ₒ',
+        'p' => 'ₚ',
+        'r' => 'ᵣ',
+        's' => 'ₛ',
+        't' => 'ₜ',
+        'u' => 'ᵤ',
+        'v' => 'ᵥ',
+        'x' => 'ₓ',
         other => other,
     }
 }
 
 pub fn char_from_subscript(c: char) -> char {
     match c {
-        '₀' => '0', '₁' => '1', '₂' => '2', '₃' => '3', '₄' => '4',
-        '₅' => '5', '₆' => '6', '₇' => '7', '₈' => '8', '₉' => '9',
-        '₊' => '+', '₋' => '-', '₌' => '=', '₍' => '(', '₎' => ')',
-        'ₐ' => 'a', 'ₑ' => 'e', 'ₕ' => 'h', 'ᵢ' => 'i', 'ⱼ' => 'j',
-        'ₖ' => 'k', 'ₗ' => 'l', 'ₘ' => 'm', 'ₙ' => 'n', 'ₒ' => 'o',
-        'ₚ' => 'p', 'ᵣ' => 'r', 'ₛ' => 's', 'ₜ' => 't', 'ᵤ' => 'u',
-        'ᵥ' => 'v', 'ₓ' => 'x',
+        '₀' => '0',
+        '₁' => '1',
+        '₂' => '2',
+        '₃' => '3',
+        '₄' => '4',
+        '₅' => '5',
+        '₆' => '6',
+        '₇' => '7',
+        '₈' => '8',
+        '₉' => '9',
+        '₊' => '+',
+        '₋' => '-',
+        '₌' => '=',
+        '₍' => '(',
+        '₎' => ')',
+        'ₐ' => 'a',
+        'ₑ' => 'e',
+        'ₕ' => 'h',
+        'ᵢ' => 'i',
+        'ⱼ' => 'j',
+        'ₖ' => 'k',
+        'ₗ' => 'l',
+        'ₘ' => 'm',
+        'ₙ' => 'n',
+        'ₒ' => 'o',
+        'ₚ' => 'p',
+        'ᵣ' => 'r',
+        'ₛ' => 's',
+        'ₜ' => 't',
+        'ᵤ' => 'u',
+        'ᵥ' => 'v',
+        'ₓ' => 'x',
         other => other,
     }
 }
@@ -317,22 +461,15 @@ fn snap_char_boundaries(s: &str, start: usize, end: usize) -> (usize, usize) {
 }
 
 pub fn toggle_superscript(ed: &mut LineEditor) -> bool {
-    let (s_pos, e_pos) = if let Some(r) = &ed.selection {
-        (r.start.min(ed.text.len()), r.end.min(ed.text.len()))
-    } else {
-        (0, ed.text.len())
-    };
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection { (r.start.min(ed.text.len()), r.end.min(ed.text.len())) } else { (0, ed.text.len()) };
     let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
     if start >= end {
         return false;
     }
     let target = &ed.text[start..end];
     let all_sup = target.chars().all(|c| char_from_superscript(c) != c);
-    let converted: String = if all_sup {
-        target.chars().map(char_from_superscript).collect()
-    } else {
-        target.chars().map(char_to_superscript).collect()
-    };
+    let converted: String =
+        if all_sup { target.chars().map(char_from_superscript).collect() } else { target.chars().map(char_to_superscript).collect() };
     if converted != target {
         let conv_len = converted.len();
         ed.text.replace_range(start..end, &converted);
@@ -346,22 +483,14 @@ pub fn toggle_superscript(ed: &mut LineEditor) -> bool {
 }
 
 pub fn toggle_subscript(ed: &mut LineEditor) -> bool {
-    let (s_pos, e_pos) = if let Some(r) = &ed.selection {
-        (r.start.min(ed.text.len()), r.end.min(ed.text.len()))
-    } else {
-        (0, ed.text.len())
-    };
+    let (s_pos, e_pos) = if let Some(r) = &ed.selection { (r.start.min(ed.text.len()), r.end.min(ed.text.len())) } else { (0, ed.text.len()) };
     let (start, end) = snap_char_boundaries(&ed.text, s_pos, e_pos);
     if start >= end {
         return false;
     }
     let target = &ed.text[start..end];
     let all_sub = target.chars().all(|c| char_from_subscript(c) != c);
-    let converted: String = if all_sub {
-        target.chars().map(char_from_subscript).collect()
-    } else {
-        target.chars().map(char_to_subscript).collect()
-    };
+    let converted: String = if all_sub { target.chars().map(char_from_subscript).collect() } else { target.chars().map(char_to_subscript).collect() };
     if converted != target {
         let conv_len = converted.len();
         ed.text.replace_range(start..end, &converted);
@@ -842,10 +971,18 @@ pub(crate) fn image_input(
                 painter.rect_filled(Rect::from_min_max(Pos2::new(b.left(), active_crop.bottom()), b.max), CornerRadius::ZERO, shade_color);
             }
             if active_crop.left() > b.left() {
-                painter.rect_filled(Rect::from_min_max(Pos2::new(b.left(), active_crop.top()), Pos2::new(active_crop.left(), active_crop.bottom())), CornerRadius::ZERO, shade_color);
+                painter.rect_filled(
+                    Rect::from_min_max(Pos2::new(b.left(), active_crop.top()), Pos2::new(active_crop.left(), active_crop.bottom())),
+                    CornerRadius::ZERO,
+                    shade_color,
+                );
             }
             if active_crop.right() < b.right() {
-                painter.rect_filled(Rect::from_min_max(Pos2::new(active_crop.right(), active_crop.top()), Pos2::new(b.right(), active_crop.bottom())), CornerRadius::ZERO, shade_color);
+                painter.rect_filled(
+                    Rect::from_min_max(Pos2::new(active_crop.right(), active_crop.top()), Pos2::new(b.right(), active_crop.bottom())),
+                    CornerRadius::ZERO,
+                    shade_color,
+                );
             }
 
             painter.rect_stroke(active_crop, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
@@ -853,10 +990,14 @@ pub(crate) fn image_input(
             let x2 = active_crop.left() + active_crop.width() * 2.0 / 3.0;
             let y1 = active_crop.top() + active_crop.height() / 3.0;
             let y2 = active_crop.top() + active_crop.height() * 2.0 / 3.0;
-            painter.line_segment([Pos2::new(x1, active_crop.top()), Pos2::new(x1, active_crop.bottom())], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
-            painter.line_segment([Pos2::new(x2, active_crop.top()), Pos2::new(x2, active_crop.bottom())], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
-            painter.line_segment([Pos2::new(active_crop.left(), y1), Pos2::new(active_crop.right(), y1)], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
-            painter.line_segment([Pos2::new(active_crop.left(), y2), Pos2::new(active_crop.right(), y2)], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+            painter
+                .line_segment([Pos2::new(x1, active_crop.top()), Pos2::new(x1, active_crop.bottom())], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+            painter
+                .line_segment([Pos2::new(x2, active_crop.top()), Pos2::new(x2, active_crop.bottom())], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+            painter
+                .line_segment([Pos2::new(active_crop.left(), y1), Pos2::new(active_crop.right(), y1)], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
+            painter
+                .line_segment([Pos2::new(active_crop.left(), y2), Pos2::new(active_crop.right(), y2)], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
 
             let crop_handles = [
                 ImageHandle::TopLeft,
@@ -875,7 +1016,13 @@ pub(crate) fn image_input(
                     ImageHandle::LeftCenter | ImageHandle::RightCenter => egui::vec2(6.0, 16.0),
                     _ => egui::vec2(10.0, 10.0),
                 };
-                painter.rect(Rect::from_center_size(c, sz), CornerRadius::same(1), Color32::WHITE, Stroke::new(1.5, ACCENT), egui::StrokeKind::Middle);
+                painter.rect(
+                    Rect::from_center_size(c, sz),
+                    CornerRadius::same(1),
+                    Color32::WHITE,
+                    Stroke::new(1.5, ACCENT),
+                    egui::StrokeKind::Middle,
+                );
             }
 
             if allow_interaction && let Some(p) = hover_pos {
@@ -897,11 +1044,7 @@ pub(crate) fn image_input(
                             change: pdfcraft_engine::ImageEdit::Crop(user_box(xf, info, page, active_crop)),
                         });
                     } else if images.get(i).is_some_and(|im| im.visible_rect.is_some() && im.visible_rect != Some(im.rect)) {
-                        view.pending_edit = Some(Edit::EditPageImage {
-                            page,
-                            index: i,
-                            change: pdfcraft_engine::ImageEdit::RemoveCrop,
-                        });
+                        view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::RemoveCrop });
                     }
                     if let Some(s) = view.image_selection.as_mut() {
                         s.crop_mode = false;
@@ -931,7 +1074,10 @@ pub(crate) fn image_input(
         }
 
         let origin = ui.input(|i| i.pointer.press_origin());
-        if allow_interaction && resp.drag_started() && let Some(o) = origin {
+        if allow_interaction
+            && resp.drag_started()
+            && let Some(o) = origin
+        {
             if is_crop {
                 let active_crop = view.image_selection.as_ref().and_then(|s| s.crop_rect).unwrap_or(b);
                 let crop_handles = [
@@ -1167,14 +1313,13 @@ pub(crate) fn image_input(
             || ui.ctx().is_pointer_over_egui()
             || ui.ctx().egui_wants_pointer_input();
         if (resp.secondary_clicked() || resp.clicked()) && !over_popup {
-            if let Some(s) = view.image_selection.as_mut() && s.crop_mode {
+            if let Some(s) = view.image_selection.as_mut()
+                && s.crop_mode
+            {
                 let img_box = boxes.get(s.index).copied();
                 if let Some(crop) = s.crop_rect.filter(|c| img_box.is_some_and(|b| *c != b)) {
-                    view.pending_edit = Some(Edit::EditPageImage {
-                        page,
-                        index: s.index,
-                        change: pdfcraft_engine::ImageEdit::Crop(user_box(xf, info, page, crop)),
-                    });
+                    view.pending_edit =
+                        Some(Edit::EditPageImage { page, index: s.index, change: pdfcraft_engine::ImageEdit::Crop(user_box(xf, info, page, crop)) });
                 }
             }
             view.image_selection = None;
@@ -1278,44 +1423,28 @@ pub(crate) fn image_context_menu(
     ui.menu_button(tl!("Arrange image"), |ui| {
         let total = images.len();
         if ui.button(tl!("Bring to front")).clicked() {
-            view.pending_edit = Some(Edit::EditPageImage {
-                page,
-                index: hit,
-                change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
-            });
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront) });
             if let Some(s) = view.image_selection.as_mut() {
                 s.index = total.saturating_sub(1);
             }
             ui.close();
         }
         if ui.button(tl!("Send to back")).clicked() {
-            view.pending_edit = Some(Edit::EditPageImage {
-                page,
-                index: hit,
-                change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack),
-            });
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack) });
             if let Some(s) = view.image_selection.as_mut() {
                 s.index = 0;
             }
             ui.close();
         }
         if ui.button(tl!("Bring forward")).clicked() {
-            view.pending_edit = Some(Edit::EditPageImage {
-                page,
-                index: hit,
-                change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringForward),
-            });
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringForward) });
             if let Some(s) = view.image_selection.as_mut() {
                 s.index = (hit + 1).min(total.saturating_sub(1));
             }
             ui.close();
         }
         if ui.button(tl!("Send backward")).clicked() {
-            view.pending_edit = Some(Edit::EditPageImage {
-                page,
-                index: hit,
-                change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward),
-            });
+            view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward) });
             if let Some(s) = view.image_selection.as_mut() {
                 s.index = hit.saturating_sub(1);
             }

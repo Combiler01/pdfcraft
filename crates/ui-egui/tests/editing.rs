@@ -2639,15 +2639,8 @@ fn default_page_context_menu_when_not_in_edit_mode() {
     h.get_by_label("Hand Tool");
     h.get_by_label("Marquee Zoom");
 
-    for item in [
-        "Add bookmark",
-        "Take a snapshot",
-        "Edit this PDF",
-        "Delete page",
-        "Export this PDF",
-        "Find text or tools",
-        "Document properties…",
-    ] {
+    for item in ["Add bookmark", "Take a snapshot", "Edit this PDF", "Delete page", "Export this PDF", "Find text or tools", "Document properties…"]
+    {
         h.get_by_label_contains(item);
     }
     h.get_by_label("Rotate view clockwise");
@@ -2666,7 +2659,9 @@ fn default_page_context_menu_when_not_in_edit_mode() {
 #[test]
 fn image_edge_handle_stretch_and_crop_mode() {
     let mut png = Vec::new();
-    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -2738,13 +2733,7 @@ fn tiny_image_crop_handle_drag_does_not_panic() {
 
     // Enter crop mode on image 0
     let view = &mut h.state_mut().views[0];
-    view.image_selection = Some(pdfcraft_ui_egui::ImageSelection {
-        page: 0,
-        index: 0,
-        drag: None,
-        crop_mode: true,
-        crop_rect: None,
-    });
+    view.image_selection = Some(pdfcraft_ui_egui::ImageSelection { page: 0, index: 0, drag: None, crop_mode: true, crop_rect: None });
     h.run_steps(1);
 
     // Simulate drag on TopLeft crop handle with an initial_rect of 5.0 x 5.0
@@ -4420,9 +4409,7 @@ fn private_new_chinese_keyboard_input_preserves_font_layout_and_saved_pixels() {
 #[test]
 fn image_copy_cut_paste_keyboard_and_context_menu() {
     let mut png = Vec::new();
-    image::RgbImage::from_pixel(60, 40, image::Rgb([180, 50, 50]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([180, 50, 50])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
@@ -4502,4 +4489,3 @@ fn stale_clipboard_plain_text_does_not_paste_image() {
     // paste_image should fail and return false without pasting
     assert!(!h.state_mut().paste_image(0, None), "must not paste stale cached image");
 }
-

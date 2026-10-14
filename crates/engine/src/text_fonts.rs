@@ -88,4 +88,3 @@ mod tests {
         assert!(!dirs.is_empty());
     }
 }
-

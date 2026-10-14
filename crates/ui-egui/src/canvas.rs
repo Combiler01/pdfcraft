@@ -3242,7 +3242,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
                 return;
             }
-            if tool == QuickTool::EditText && let Some(sel) = view.image_selection.clone() {
+            if tool == QuickTool::EditText
+                && let Some(sel) = view.image_selection.clone()
+            {
                 crate::edit_text_ui::image_context_menu(ui, view, doc, sel.page, sel.index, can_paste_image, &mut image_action);
                 return;
             }
@@ -3612,7 +3614,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if let Some(sel) = app.views[index].image_selection.clone() {
                 app.copy_page_image(sel.page, sel.index);
             } else if let Some(text) = app.views[index].selected_text() {
-                if let Some(id) = app.views.get(index).map(|v| v.id) && app.may_copy(id) {
+                if let Some(id) = app.views.get(index).map(|v| v.id)
+                    && app.may_copy(id)
+                {
                     ui.ctx().copy_text(text);
                 }
             } else if let Some((page, at)) = app.views[index].comments.context_at
@@ -3644,13 +3648,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.quick_tool = QuickTool::MarqueeZoom;
         }
         Some(PageMenuAction::AddComment(page, at)) => {
-            app.views[index].comments.composer = Some(crate::comments::Composer {
-                page,
-                at,
-                kind: crate::comments::ComposerKind::Note,
-                text: String::new(),
-                focus: true,
-            });
+            app.views[index].comments.composer =
+                Some(crate::comments::Composer { page, at, kind: crate::comments::ComposerKind::Note, text: String::new(), focus: true });
         }
         Some(PageMenuAction::AddBookmark(_page)) => {
             app.bookmark_action(crate::panels::BmAction::New);
