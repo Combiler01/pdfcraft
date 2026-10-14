@@ -1768,6 +1768,43 @@ fn image_arrange_stacking_order_and_remove_crop() {
     assert_eq!(img_restored_moved.visible_rect, Some(img_restored_moved.rect));
 }
 
+#[test]
+fn image_arrange_preserves_shared_group_drawings() {
+    let content = "q 100 0 0 100 100 100 cm /Im0 Do /Im0 Do Q BT /F1 12 Tf 72 700 Td (End Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2, "both images initially present in shared group");
+
+    // Bring image 0 to front: it must not delete image 1 that shares the same q...Q group!
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images must be preserved after BringToFront");
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.contains("End Text"), "text in page must be preserved");
+}
+
+#[test]
+fn image_crop_preserves_outer_cm_for_subsequent_drawings() {
+    let content = "100 0 0 100 50 50 cm /Im0 Do /Im0 Do";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    assert_eq!(initial[1].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Crop image 0
+    images::crop_image(&mut doc, 0, 0, [60.0, 60.0, 120.0, 120.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images must remain");
+    // Image 0 is cropped:
+    assert!(close(after[0].visible_rect.unwrap(), [60.0, 60.0, 120.0, 120.0]));
+    // Crucial: Image 1 must still have its rect at [50, 50, 150, 150], proving outer cm was not destroyed!
+    assert_eq!(after[1].rect, [50.0, 50.0, 150.0, 150.0], "subsequent image must retain global cm");
+}
+
 
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {

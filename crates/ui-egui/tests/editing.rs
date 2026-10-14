@@ -2717,9 +2717,61 @@ fn image_edge_handle_stretch_and_crop_mode() {
     h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
     h.get_by_label("Remove crop").click();
-    h.run_steps(4);
     let images = h.state().session.get(doc_id).unwrap().page_images(0);
     assert_eq!(images[0].visible_rect, Some(images[0].rect), "crop is removed");
+}
+
+#[test]
+fn tiny_image_crop_handle_drag_does_not_panic() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(5, 5, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("tiny.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    // Enter crop mode on image 0
+    let view = &mut h.state_mut().views[0];
+    view.image_selection = Some(pdfcraft_ui_egui::ImageSelection {
+        page: 0,
+        index: 0,
+        drag: None,
+        crop_mode: true,
+        crop_rect: None,
+    });
+    h.run_steps(1);
+
+    // Simulate drag on TopLeft crop handle with an initial_rect of 5.0 x 5.0
+    let initial = egui::Rect::from_min_size(egui::pos2(100.0, 100.0), egui::vec2(5.0, 5.0));
+    let view = &mut h.state_mut().views[0];
+    if let Some(s) = view.image_selection.as_mut() {
+        s.drag = Some(pdfcraft_ui_egui::ImageDrag {
+            start: egui::pos2(100.0, 100.0),
+            target: pdfcraft_ui_egui::DragTarget::CropHandle(pdfcraft_ui_egui::ImageHandle::TopLeft),
+            initial_rect: initial,
+        });
+    }
+
+    // Hover/drag to a new position, triggering the clamp calculation
+    h.hover_at(egui::pos2(105.0, 105.0));
+    h.run_steps(2);
+
+    // Also test BottomRight handle
+    let view = &mut h.state_mut().views[0];
+    if let Some(s) = view.image_selection.as_mut() {
+        s.drag = Some(pdfcraft_ui_egui::ImageDrag {
+            start: egui::pos2(105.0, 105.0),
+            target: pdfcraft_ui_egui::DragTarget::CropHandle(pdfcraft_ui_egui::ImageHandle::BottomRight),
+            initial_rect: initial,
+        });
+    }
+    h.hover_at(egui::pos2(95.0, 95.0));
+    h.run_steps(2);
 }
 
 #[test]

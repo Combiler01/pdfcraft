@@ -975,41 +975,73 @@ pub(crate) fn image_input(
             let initial = drag.initial_rect;
             if is_crop {
                 let mut new_crop = initial;
+                let img_screen_w = b.width().max(0.0);
+                let img_screen_h = b.height().max(0.0);
+                let safe_min_w = 10.0_f32.min(img_screen_w).min(initial.width().max(0.0)).max(0.0);
+                let safe_min_h = 10.0_f32.min(img_screen_h).min(initial.height().max(0.0)).max(0.0);
                 match drag.target {
                     DragTarget::CropHandle(ImageHandle::TopLeft) => {
-                        let x = (initial.left() + delta.x).clamp(b.left(), initial.right() - 10.0);
-                        let y = (initial.top() + delta.y).clamp(b.top(), initial.bottom() - 10.0);
+                        let min_x = b.left();
+                        let max_x = (initial.right() - safe_min_w).max(min_x);
+                        let x = (initial.left() + delta.x).clamp(min_x, max_x);
+
+                        let min_y = b.top();
+                        let max_y = (initial.bottom() - safe_min_h).max(min_y);
+                        let y = (initial.top() + delta.y).clamp(min_y, max_y);
                         new_crop = Rect::from_min_max(Pos2::new(x, y), initial.max);
                     }
                     DragTarget::CropHandle(ImageHandle::TopRight) => {
-                        let x = (initial.right() + delta.x).clamp(initial.left() + 10.0, b.right());
-                        let y = (initial.top() + delta.y).clamp(b.top(), initial.bottom() - 10.0);
+                        let min_x = (initial.left() + safe_min_w).min(b.right());
+                        let max_x = b.right().max(min_x);
+                        let x = (initial.right() + delta.x).clamp(min_x, max_x);
+
+                        let min_y = b.top();
+                        let max_y = (initial.bottom() - safe_min_h).max(min_y);
+                        let y = (initial.top() + delta.y).clamp(min_y, max_y);
                         new_crop = Rect::from_min_max(Pos2::new(initial.left(), y), Pos2::new(x, initial.bottom()));
                     }
                     DragTarget::CropHandle(ImageHandle::BottomLeft) => {
-                        let x = (initial.left() + delta.x).clamp(b.left(), initial.right() - 10.0);
-                        let y = (initial.bottom() + delta.y).clamp(initial.top() + 10.0, b.bottom());
+                        let min_x = b.left();
+                        let max_x = (initial.right() - safe_min_w).max(min_x);
+                        let x = (initial.left() + delta.x).clamp(min_x, max_x);
+
+                        let min_y = (initial.top() + safe_min_h).min(b.bottom());
+                        let max_y = b.bottom().max(min_y);
+                        let y = (initial.bottom() + delta.y).clamp(min_y, max_y);
                         new_crop = Rect::from_min_max(Pos2::new(x, initial.top()), Pos2::new(initial.right(), y));
                     }
                     DragTarget::CropHandle(ImageHandle::BottomRight) => {
-                        let x = (initial.right() + delta.x).clamp(initial.left() + 10.0, b.right());
-                        let y = (initial.bottom() + delta.y).clamp(initial.top() + 10.0, b.bottom());
+                        let min_x = (initial.left() + safe_min_w).min(b.right());
+                        let max_x = b.right().max(min_x);
+                        let x = (initial.right() + delta.x).clamp(min_x, max_x);
+
+                        let min_y = (initial.top() + safe_min_h).min(b.bottom());
+                        let max_y = b.bottom().max(min_y);
+                        let y = (initial.bottom() + delta.y).clamp(min_y, max_y);
                         new_crop = Rect::from_min_max(initial.min, Pos2::new(x, y));
                     }
                     DragTarget::CropHandle(ImageHandle::TopCenter) => {
-                        let y = (initial.top() + delta.y).clamp(b.top(), initial.bottom() - 10.0);
+                        let min_y = b.top();
+                        let max_y = (initial.bottom() - safe_min_h).max(min_y);
+                        let y = (initial.top() + delta.y).clamp(min_y, max_y);
                         new_crop = Rect::from_min_max(Pos2::new(initial.left(), y), initial.max);
                     }
                     DragTarget::CropHandle(ImageHandle::BottomCenter) => {
-                        let y = (initial.bottom() + delta.y).clamp(initial.top() + 10.0, b.bottom());
+                        let min_y = (initial.top() + safe_min_h).min(b.bottom());
+                        let max_y = b.bottom().max(min_y);
+                        let y = (initial.bottom() + delta.y).clamp(min_y, max_y);
                         new_crop = Rect::from_min_max(initial.min, Pos2::new(initial.right(), y));
                     }
                     DragTarget::CropHandle(ImageHandle::LeftCenter) => {
-                        let x = (initial.left() + delta.x).clamp(b.left(), initial.right() - 10.0);
+                        let min_x = b.left();
+                        let max_x = (initial.right() - safe_min_w).max(min_x);
+                        let x = (initial.left() + delta.x).clamp(min_x, max_x);
                         new_crop = Rect::from_min_max(Pos2::new(x, initial.top()), initial.max);
                     }
                     DragTarget::CropHandle(ImageHandle::RightCenter) => {
-                        let x = (initial.right() + delta.x).clamp(initial.left() + 10.0, b.right());
+                        let min_x = (initial.left() + safe_min_w).min(b.right());
+                        let max_x = b.right().max(min_x);
+                        let x = (initial.right() + delta.x).clamp(min_x, max_x);
                         new_crop = Rect::from_min_max(initial.min, Pos2::new(x, initial.bottom()));
                     }
                     DragTarget::Move => {

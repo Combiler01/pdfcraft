@@ -73,7 +73,8 @@ mod autoscroll;
 mod bidi;
 pub mod bulk_fields;
 mod dialogs;
-mod edit_text_ui;
+pub mod edit_text_ui;
+pub use edit_text_ui::{DragTarget, ImageDrag, ImageHandle, ImageSelection};
 mod editing;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod file_watch;

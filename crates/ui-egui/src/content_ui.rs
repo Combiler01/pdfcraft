@@ -560,25 +560,6 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
             for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
                 ui.selectable_value(&mut s.family, f, f.label());
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            if let Some(installed) = crate::files::installed_font_files(ui.ctx())
-                && !installed.is_empty()
-            {
-                ui.separator();
-                ui.label(egui::RichText::new(tl!("Installed fonts")).weak().small());
-                for font in &installed {
-                    let fam = if font.family.eq_ignore_ascii_case("times") || font.face.to_ascii_lowercase().contains("times") {
-                        FontFamily::Times
-                    } else if font.family.eq_ignore_ascii_case("courier") || font.face.to_ascii_lowercase().contains("courier") {
-                        FontFamily::Courier
-                    } else {
-                        FontFamily::Helvetica
-                    };
-                    if ui.selectable_label(s.family == fam, &font.face).clicked() {
-                        s.family = fam;
-                    }
-                }
-            }
         });
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt("font-size")
@@ -789,18 +770,16 @@ impl crate::PdfCraftApp {
 
     /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
     pub fn can_paste_image(&self) -> bool {
-        if self.last_copied_image.is_some() || self.last_copied_file.is_some() {
-            return true;
-        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.system_clipboard
                 && let Ok(mut cb) = arboard::Clipboard::new()
+                && cb.get_image().is_ok()
             {
-                return cb.get_image().is_ok();
+                return true;
             }
         }
-        false
+        self.last_copied_image.is_some() || self.last_copied_file.is_some()
     }
 
     /// Paste an image from the clipboard onto `page`.
@@ -813,27 +792,40 @@ impl crate::PdfCraftApp {
             return false;
         }
 
-        let image_data: Option<(String, Vec<u8>)> = if let Some((name, bytes)) = self.last_copied_file.clone() {
+        #[cfg(not(target_arch = "wasm32"))]
+        let os_png = if self.system_clipboard {
+            if let Ok(mut cb) = arboard::Clipboard::new()
+                && let Ok(img) = cb.get_image()
+            {
+                let matches_internal = self.last_copied_image.as_ref().is_some_and(|(w, h, rgba)| {
+                    *w as usize == img.width && *h as usize == img.height && rgba.as_slice() == img.bytes.as_ref()
+                });
+                if !matches_internal {
+                    crate::create_ui::png_from_rgba(img.width, img.height, &img.bytes).ok().map(|bytes| {
+                        (img.width as u32, img.height as u32, img.bytes.to_vec(), bytes)
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        #[cfg(target_arch = "wasm32")]
+        let os_png: Option<(u32, u32, Vec<u8>, Vec<u8>)> = None;
+
+        let image_data: Option<(String, Vec<u8>)> = if let Some((w, h, rgba, png_bytes)) = os_png {
+            self.last_copied_image = Some((w, h, rgba));
+            self.last_copied_file = Some(("clipboard_image.png".to_string(), png_bytes.clone()));
+            self.last_copied_image_rect = None;
+            Some(("clipboard_image.png".to_string(), png_bytes))
+        } else if let Some((name, bytes)) = self.last_copied_file.clone() {
             Some((name, bytes))
         } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
             crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
         } else {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if self.system_clipboard {
-                    arboard::Clipboard::new()
-                        .ok()
-                        .and_then(|mut cb| cb.get_image().ok())
-                        .and_then(|img| {
-                            crate::create_ui::png_from_rgba(img.width, img.height, &img.bytes)
-                                .ok()
-                                .map(|b| ("clipboard_image.png".to_string(), b))
-                        })
-                } else {
-                    None
-                }
-            }
-            #[cfg(target_arch = "wasm32")]
             None
         };
 
