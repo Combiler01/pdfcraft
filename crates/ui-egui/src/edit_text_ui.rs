@@ -616,7 +616,7 @@ impl ImageSelection {
 /// applies after the pointer leaves the image/page while dragging.
 pub(crate) fn image_owns_pointer(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) -> bool {
     let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
-    if selection.drag.is_some() {
+    if selection.drag.is_some() || selection.crop_mode {
         return true;
     }
     let Some(image) = view.edit_images.get(&page).and_then(|(_, images)| images.get(selection.index)) else { return false };
@@ -698,6 +698,7 @@ pub(crate) enum ImageAction {
     Copy(usize, usize),
     CopyFile(usize, usize),
     Cut(usize, usize),
+    Paste(usize, [f64; 4]),
     DrawFreehand,
     Redact(usize, usize),
     CreateLink(usize, usize),
@@ -858,14 +859,22 @@ pub(crate) fn image_input(
             painter.line_segment([Pos2::new(active_crop.left(), y2), Pos2::new(active_crop.right(), y2)], Stroke::new(0.75, ACCENT.gamma_multiply(0.5)));
 
             let crop_handles = [
+                ImageHandle::TopLeft,
                 ImageHandle::TopCenter,
+                ImageHandle::TopRight,
                 ImageHandle::RightCenter,
+                ImageHandle::BottomRight,
                 ImageHandle::BottomCenter,
+                ImageHandle::BottomLeft,
                 ImageHandle::LeftCenter,
             ];
             for &h in &crop_handles {
                 let c = handle_pos(active_crop, h);
-                let sz = if matches!(h, ImageHandle::TopCenter | ImageHandle::BottomCenter) { egui::vec2(16.0, 7.0) } else { egui::vec2(7.0, 16.0) };
+                let sz = match h {
+                    ImageHandle::TopCenter | ImageHandle::BottomCenter => egui::vec2(16.0, 6.0),
+                    ImageHandle::LeftCenter | ImageHandle::RightCenter => egui::vec2(6.0, 16.0),
+                    _ => egui::vec2(10.0, 10.0),
+                };
                 painter.rect(Rect::from_center_size(c, sz), CornerRadius::same(1), Color32::WHITE, Stroke::new(1.5, ACCENT), egui::StrokeKind::Middle);
             }
 
@@ -878,12 +887,20 @@ pub(crate) fn image_input(
             }
 
             if allow_interaction {
-                if ui.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                let enter_pressed = ui.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                let dbl_click = resp.double_clicked() && hover_pos.is_some_and(|p| active_crop.contains(p));
+                if enter_pressed || dbl_click {
                     if active_crop != b {
                         view.pending_edit = Some(Edit::EditPageImage {
                             page,
                             index: i,
                             change: pdfcraft_engine::ImageEdit::Crop(user_box(xf, info, page, active_crop)),
+                        });
+                    } else if images.get(i).is_some_and(|im| im.visible_rect.is_some() && im.visible_rect != Some(im.rect)) {
+                        view.pending_edit = Some(Edit::EditPageImage {
+                            page,
+                            index: i,
+                            change: pdfcraft_engine::ImageEdit::RemoveCrop,
                         });
                     }
                     if let Some(s) = view.image_selection.as_mut() {
@@ -892,7 +909,7 @@ pub(crate) fn image_input(
                     }
                     return true;
                 }
-                if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
+                if ui.input_mut(|inp| inp.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                     if let Some(s) = view.image_selection.as_mut() {
                         s.crop_mode = false;
                         s.crop_rect = None;
@@ -918,9 +935,13 @@ pub(crate) fn image_input(
             if is_crop {
                 let active_crop = view.image_selection.as_ref().and_then(|s| s.crop_rect).unwrap_or(b);
                 let crop_handles = [
+                    ImageHandle::TopLeft,
                     ImageHandle::TopCenter,
+                    ImageHandle::TopRight,
                     ImageHandle::RightCenter,
+                    ImageHandle::BottomRight,
                     ImageHandle::BottomCenter,
+                    ImageHandle::BottomLeft,
                     ImageHandle::LeftCenter,
                 ];
                 let hit_edge = crop_handles.iter().copied().find(|&h| handle_pos(active_crop, h).distance(o) < 8.0);
@@ -955,6 +976,26 @@ pub(crate) fn image_input(
             if is_crop {
                 let mut new_crop = initial;
                 match drag.target {
+                    DragTarget::CropHandle(ImageHandle::TopLeft) => {
+                        let x = (initial.left() + delta.x).clamp(b.left(), initial.right() - 10.0);
+                        let y = (initial.top() + delta.y).clamp(b.top(), initial.bottom() - 10.0);
+                        new_crop = Rect::from_min_max(Pos2::new(x, y), initial.max);
+                    }
+                    DragTarget::CropHandle(ImageHandle::TopRight) => {
+                        let x = (initial.right() + delta.x).clamp(initial.left() + 10.0, b.right());
+                        let y = (initial.top() + delta.y).clamp(b.top(), initial.bottom() - 10.0);
+                        new_crop = Rect::from_min_max(Pos2::new(initial.left(), y), Pos2::new(x, initial.bottom()));
+                    }
+                    DragTarget::CropHandle(ImageHandle::BottomLeft) => {
+                        let x = (initial.left() + delta.x).clamp(b.left(), initial.right() - 10.0);
+                        let y = (initial.bottom() + delta.y).clamp(initial.top() + 10.0, b.bottom());
+                        new_crop = Rect::from_min_max(Pos2::new(x, initial.top()), Pos2::new(initial.right(), y));
+                    }
+                    DragTarget::CropHandle(ImageHandle::BottomRight) => {
+                        let x = (initial.right() + delta.x).clamp(initial.left() + 10.0, b.right());
+                        let y = (initial.bottom() + delta.y).clamp(initial.top() + 10.0, b.bottom());
+                        new_crop = Rect::from_min_max(initial.min, Pos2::new(x, y));
+                    }
                     DragTarget::CropHandle(ImageHandle::TopCenter) => {
                         let y = (initial.top() + delta.y).clamp(b.top(), initial.bottom() - 10.0);
                         new_crop = Rect::from_min_max(Pos2::new(initial.left(), y), initial.max);
@@ -1072,8 +1113,15 @@ pub(crate) fn image_input(
             && ui.input(|inp| inp.key_pressed(egui::Key::Delete) || inp.key_pressed(egui::Key::Backspace))
             && !ui.ctx().egui_wants_keyboard_input()
         {
-            view.image_selection = None;
-            view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Delete });
+            if is_crop {
+                if let Some(s) = view.image_selection.as_mut() {
+                    s.crop_mode = false;
+                    s.crop_rect = None;
+                }
+            } else {
+                view.image_selection = None;
+                view.pending_edit = Some(Edit::EditPageImage { page, index: i, change: pdfcraft_engine::ImageEdit::Delete });
+            }
             return true;
         }
     }
@@ -1083,6 +1131,7 @@ pub(crate) fn image_input(
     let Some(p) = hover_pos.filter(|p| xf.rect.contains(*p)) else { return false };
     let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| b.contains(p) && image_contains(i, p)) else {
         let over_popup = egui::Popup::is_any_open(ui.ctx())
+            || resp.context_menu_opened()
             || ui.ctx().is_pointer_over_egui()
             || ui.ctx().egui_wants_pointer_input();
         if (resp.secondary_clicked() || resp.clicked()) && !over_popup {
@@ -1124,6 +1173,7 @@ pub(crate) fn image_context_menu(
     doc: &pdfcraft_engine::Document,
     page: usize,
     hit: usize,
+    can_paste: bool,
     action: &mut Option<ImageAction>,
 ) {
     let images = doc.page_images(page);
@@ -1171,8 +1221,10 @@ pub(crate) fn image_context_menu(
         *action = Some(ImageAction::Copy(page, hit));
         ui.close();
     }
-    // Paste item: disabled when no item can be pasted into the image layer
-    ui.add_enabled(false, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V"));
+    if ui.add_enabled(can_paste, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V")).clicked() {
+        *action = Some(ImageAction::Paste(page, img.rect));
+        ui.close();
+    }
 
     ui.separator();
 

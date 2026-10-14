@@ -704,6 +704,7 @@ pub struct PdfCraftApp {
     /// The last image copied in its original format (file name, bytes), also put on the
     /// system clipboard as a file when `system_clipboard` is on.
     pub last_copied_file: Option<(String, Vec<u8>)>,
+    pub last_copied_image_rect: Option<[f64; 4]>,
     pub system_clipboard: bool,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
@@ -992,6 +993,7 @@ impl PdfCraftApp {
             last_snapshot: None,
             last_copied_image: None,
             last_copied_file: None,
+            last_copied_image_rect: None,
             system_clipboard: true,
             attach_override: None,
             duplicate_draft: None,
@@ -2682,7 +2684,7 @@ impl PdfCraftApp {
                 object_ui::nudge_keys(ctx, &mut self.views[i], doc);
             }
             canvas::shortcuts(&mut self.views[i], ctx);
-            self.copy_key(i, ctx);
+            self.clipboard_keys(i, ctx);
             self.image_pick_keys(i, ctx);
         }
     }
@@ -2706,16 +2708,42 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
-    fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
-        // ⌘C arrives as a Copy event on most platforms.
-        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-        if !copy || ctx.egui_wants_keyboard_input() {
+    /// ⌘C / ⌘X / ⌘V copy, cut and paste text or images on canvas (unless a text field has focus).
+    fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        if ctx.egui_wants_keyboard_input() || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
             return;
         }
-        let Some((id, text)) = self.views.get(i).and_then(|v| Some((v.id, v.selected_text()?))) else { return };
-        if self.may_copy(id) {
-            ctx.copy_text(text);
+        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)));
+        let cut = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
+        let paste = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
+            || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
+
+        if copy {
+            if let Some(text) = self.views.get(i).and_then(|v| v.selected_text())
+                && let Some(id) = self.views.get(i).map(|v| v.id)
+                && self.may_copy(id)
+            {
+                ctx.copy_text(text);
+            } else if let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+                && let Some(id) = self.views.get(i).map(|v| v.id)
+                && self.may_copy(id)
+            {
+                self.copy_page_image(sel.page, sel.index);
+            }
+        }
+        if cut
+            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+            && let Some(id) = self.views.get(i).map(|v| v.id)
+            && self.may_copy(id)
+        {
+            self.cut_page_image(i, sel.page, sel.index);
+        }
+        if paste {
+            let page = self.views.get(i).map_or(0, |v| v.current);
+            self.paste_image(page, None);
         }
     }
 

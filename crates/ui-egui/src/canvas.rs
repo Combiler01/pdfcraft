@@ -542,6 +542,8 @@ pub(crate) enum PageMenuAction {
     SelectTool,
     HandTool,
     MarqueeZoom,
+    Copy,
+    Paste(usize, [f64; 2]),
     AddComment(usize, [f64; 2]),
     AddBookmark(usize),
     TakeSnapshot,
@@ -558,6 +560,8 @@ pub(crate) fn default_page_context_menu(
     ui: &mut egui::Ui,
     page: usize,
     at: [f64; 2],
+    can_copy: bool,
+    can_paste: bool,
     action: &mut Option<PageMenuAction>,
 ) {
     // Top horizontal icon bar: Rotate CCW, Print, Select tool, Hand tool, Marquee Zoom
@@ -584,6 +588,17 @@ pub(crate) fn default_page_context_menu(
             ui.close();
         }
     });
+
+    ui.separator();
+
+    if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy")).shortcut_text("Ctrl+C")).clicked() {
+        *action = Some(PageMenuAction::Copy);
+        ui.close();
+    }
+    if ui.add_enabled(can_paste, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V")).clicked() {
+        *action = Some(PageMenuAction::Paste(page, at));
+        ui.close();
+    }
 
     ui.separator();
 
@@ -2191,6 +2206,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
+    let can_paste_image = app.can_paste_image();
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
@@ -3227,7 +3243,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 return;
             }
             if tool == QuickTool::EditText && let Some(sel) = view.image_selection.clone() {
-                crate::edit_text_ui::image_context_menu(ui, view, doc, sel.page, sel.index, &mut image_action);
+                crate::edit_text_ui::image_context_menu(ui, view, doc, sel.page, sel.index, can_paste_image, &mut image_action);
                 return;
             }
             if view.comments.selected.is_some() {
@@ -3260,11 +3276,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     ui.separator();
                 }
             }
+            let has_copy_image = copy_image.is_some();
             if copy_image.is_some() {
                 canvas_action = copy_image;
             }
             let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
-            default_page_context_menu(ui, page, at, &mut page_action);
+            let can_copy = view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image;
+            let can_paste = can_paste_image;
+            default_page_context_menu(ui, page, at, can_copy, can_paste, &mut page_action);
         });
         (wanted, visible_now)
     });
@@ -3531,13 +3550,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(crate::edit_text_ui::ImageAction::Copy(page, i)) => app.copy_page_image(page, i),
         Some(crate::edit_text_ui::ImageAction::CopyFile(page, i)) => app.copy_page_image_file(page, i),
         Some(crate::edit_text_ui::ImageAction::Cut(page, i)) => {
-            app.copy_page_image(page, i);
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::EditPageImage {
-                page,
-                index: i,
-                change: pdfcraft_engine::ImageEdit::Delete,
-            });
-            app.views[index].image_selection = None;
+            app.cut_page_image(index, page, i);
+        }
+        Some(crate::edit_text_ui::ImageAction::Paste(page, rect)) => {
+            let offset_rect = [rect[0] + 20.0, rect[1] - 20.0, rect[2] + 20.0, rect[3] - 20.0];
+            app.paste_image(page, Some(offset_rect));
         }
         Some(crate::edit_text_ui::ImageAction::DrawFreehand) => {
             app.quick_tool = crate::QuickTool::Comment(crate::comments::CommentTool::Ink);
@@ -3591,6 +3608,23 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         None => {}
     }
     match page_action {
+        Some(PageMenuAction::Copy) => {
+            if let Some(sel) = app.views[index].image_selection.clone() {
+                app.copy_page_image(sel.page, sel.index);
+            } else if let Some(text) = app.views[index].selected_text() {
+                if let Some(id) = app.views.get(index).map(|v| v.id) && app.may_copy(id) {
+                    ui.ctx().copy_text(text);
+                }
+            } else if let Some((page, at)) = app.views[index].comments.context_at
+                && let Some(doc) = app.session.get(app.views[index].id)
+                && let Some(image) = doc.page_image_at(page, at)
+            {
+                app.copy_page_image(page, image);
+            }
+        }
+        Some(PageMenuAction::Paste(page, at)) => {
+            app.paste_image_at(page, at);
+        }
         Some(PageMenuAction::RotateCCW(page)) => {
             app.views[index].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: -90 });
         }

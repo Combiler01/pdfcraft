@@ -745,6 +745,15 @@ impl crate::PdfCraftApp {
         if !self.may_copy(id) {
             return;
         }
+        let img_rect = self.session.get(id).and_then(|d| d.page_images(page).into_iter().nth(index).map(|im| im.rect));
+        self.last_copied_image_rect = img_rect;
+        if let Some(doc) = self.session.get(id)
+            && let Ok((ext, bytes)) = doc.page_image_copy_file(page, index)
+        {
+            let stem = crate::image_pick::safe_name(doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(s, _)| s));
+            let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
+            self.last_copied_file = Some((name, bytes));
+        }
         let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return };
         let copied = pixels.and_then(|(w, h, rgba)| {
             #[cfg(not(target_arch = "wasm32"))]
@@ -763,6 +772,128 @@ impl crate::PdfCraftApp {
             Ok((w, h)) => self.notify_fmt("The image has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())]),
             Err(e) => self.notify_fmt("Couldn't copy the image: {e}", &[("e", &e)]),
         }
+    }
+
+    /// Cut Image: copy image `index` on `page` to the clipboard, then delete it.
+    pub(crate) fn cut_page_image(&mut self, view_idx: usize, page: usize, index: usize) {
+        self.copy_page_image(page, index);
+        if let Some(view) = self.views.get_mut(view_idx) {
+            view.pending_edit = Some(pdfcraft_engine::Edit::EditPageImage {
+                page,
+                index,
+                change: pdfcraft_engine::ImageEdit::Delete,
+            });
+            view.image_selection = None;
+        }
+    }
+
+    /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
+    pub fn can_paste_image(&self) -> bool {
+        if self.last_copied_image.is_some() || self.last_copied_file.is_some() {
+            return true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.system_clipboard
+                && let Ok(mut cb) = arboard::Clipboard::new()
+            {
+                return cb.get_image().is_ok();
+            }
+        }
+        false
+    }
+
+    /// Paste an image from the clipboard onto `page`.
+    pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
+        let Some((i, id)) = self.active_ids() else { return false; };
+        if let Some(doc) = self.session.get(id)
+            && !doc.allows_modification()
+        {
+            self.notify_error(tl!("The document's security settings don't allow changes"));
+            return false;
+        }
+
+        let image_data: Option<(String, Vec<u8>)> = if let Some((name, bytes)) = self.last_copied_file.clone() {
+            Some((name, bytes))
+        } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
+            crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if self.system_clipboard {
+                    arboard::Clipboard::new()
+                        .ok()
+                        .and_then(|mut cb| cb.get_image().ok())
+                        .and_then(|img| {
+                            crate::create_ui::png_from_rgba(img.width, img.height, &img.bytes)
+                                .ok()
+                                .map(|b| ("clipboard_image.png".to_string(), b))
+                        })
+                } else {
+                    None
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            None
+        };
+
+        let Some((name, bytes)) = image_data else {
+            self.notify_tr("No image on clipboard to paste");
+            return false;
+        };
+
+        let target_rect = match rect {
+            Some(r) => Some(r),
+            None => {
+                if let Some(src_rect) = self.last_copied_image_rect {
+                    let w = src_rect[2] - src_rect[0];
+                    let h = src_rect[3] - src_rect[1];
+                    let offset_x = 20.0;
+                    let offset_y = -20.0;
+                    let new_r = [src_rect[0] + offset_x, src_rect[1] + offset_y, src_rect[0] + offset_x + w, src_rect[1] + offset_y + h];
+                    self.last_copied_image_rect = Some(new_r);
+                    Some(new_r)
+                } else {
+                    None
+                }
+            }
+        };
+
+        let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
+        if self.apply_edit(pdfcraft_engine::Edit::AddImage {
+            page,
+            rect: target_rect,
+            name,
+            bytes: std::sync::Arc::new(bytes),
+        }) {
+            if let Some(v) = self.views.get_mut(i) {
+                v.current = page;
+                v.image_selection = Some(crate::edit_text_ui::ImageSelection {
+                    page,
+                    index: before,
+                    crop_mode: false,
+                    crop_rect: None,
+                    drag: None,
+                });
+            }
+            self.quick_tool = crate::QuickTool::EditText;
+            self.notify_tr("Image pasted");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
+    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
+        let rect = if let Some(src_r) = self.last_copied_image_rect {
+            let w = src_r[2] - src_r[0];
+            let h = src_r[3] - src_r[1];
+            Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5])
+        } else {
+            None
+        };
+        self.paste_image(page, rect)
     }
 
     /// Click an image field: pick a picture for it.

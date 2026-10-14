@@ -1740,6 +1740,32 @@ fn image_arrange_stacking_order_and_remove_crop() {
     let doc = reopen(&doc);
     let img_restored = &images::page_images(&doc, 0).unwrap()[0];
     assert_eq!(img_restored.visible_rect, Some(img_restored.rect));
+
+    // Test cropping an image that was moved (has an outer transform)
+    let mut doc = image_page_with("q 200 0 0 100 100 100 cm /Im0 Do Q");
+    let move_transform = [1.0, 0.0, 0.0, 1.0, 50.0, 40.0];
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(move_transform)).unwrap();
+    let doc = reopen(&doc);
+    let img_moved = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_moved.rect, [150.0, 140.0, 350.0, 240.0]);
+    let mut doc = doc;
+    images::crop_image(&mut doc, 0, 0, [170.0, 150.0, 300.0, 220.0]).unwrap();
+    let doc = reopen(&doc);
+    let img_crop_moved = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(img_crop_moved.visible_rect.is_some(), "cropped image must not be deleted");
+    assert!(close(img_crop_moved.visible_rect.unwrap(), [170.0, 150.0, 300.0, 220.0]));
+    // Adjust crop (re-crop)
+    let mut doc = doc;
+    images::crop_image(&mut doc, 0, 0, [180.0, 160.0, 280.0, 210.0]).unwrap();
+    let doc = reopen(&doc);
+    let img_recropped = &images::page_images(&doc, 0).unwrap()[0];
+    assert!(close(img_recropped.visible_rect.unwrap(), [180.0, 160.0, 280.0, 210.0]));
+    // Remove crop from moved image
+    let mut doc = doc;
+    images::remove_image_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_restored_moved = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_restored_moved.visible_rect, Some(img_restored_moved.rect));
 }
 
 

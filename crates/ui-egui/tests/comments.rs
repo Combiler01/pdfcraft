@@ -1039,7 +1039,7 @@ fn hovering_highlight_without_comment_respects_display_author_option() {
     assert!(json.contains("\"display_author_hover_no_comment\":false"));
     let mut app2 = PdfCraftApp::new();
     app2.restore(&json);
-    assert_eq!(app2.comment_prefs.display_author_hover_no_comment, false);
+    assert!(!app2.comment_prefs.display_author_hover_no_comment);
 }
 
 #[test]

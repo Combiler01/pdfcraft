@@ -2654,6 +2654,8 @@ fn default_page_context_menu_when_not_in_edit_mode() {
     assert!(h.query_all_by_label("Add comment").next().is_some());
     assert!(h.query_all_by_label("Add text").next().is_some());
     assert!(h.query_all_by_label("Add image").next().is_some());
+    assert!(h.query_all_by_label_contains("Copy").next().is_some());
+    assert!(h.query_all_by_label_contains("Paste").next().is_some());
 
     // Clicking "Edit this PDF" enters edit mode
     h.get_by_label("Edit this PDF").click();
@@ -2694,10 +2696,30 @@ fn image_edge_handle_stretch_and_crop_mode() {
     h.run_steps(2);
     assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop_mode));
 
+    // Set smaller crop rect
+    let smaller = egui::Rect::from_center_size(c, egui::vec2(50.0, 50.0));
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
+
     // Confirm crop with Enter key
     h.key_press(egui::Key::Enter);
-    h.run_steps(2);
+    h.run_steps(4);
     assert!(!h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop_mode));
+    let doc_id = h.state().views[0].id;
+    let images = h.state().session.get(doc_id).unwrap().page_images(0);
+    assert_eq!(images.len(), 1, "image still exists: {images:?}");
+    assert!(images[0].visible_rect.is_some(), "cropped image is visible");
+    assert_ne!(images[0].visible_rect, Some(images[0].rect), "image is cropped");
+
+    // Remove crop via context menu
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label("Remove crop").click();
+    h.run_steps(4);
+    let images = h.state().session.get(doc_id).unwrap().page_images(0);
+    assert_eq!(images[0].visible_rect, Some(images[0].rect), "crop is removed");
 }
 
 #[test]
@@ -4340,4 +4362,68 @@ fn private_new_chinese_keyboard_input_preserves_font_layout_and_saved_pixels() {
     }
     assert_eq!(std::fs::read(path).unwrap(), original);
     println!("verified Chinese keyboard insertion/deletion and save/reopen rendering on {pages} pages");
+}
+
+#[test]
+fn image_copy_cut_paste_keyboard_and_context_menu() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([180, 50, 50]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let id = h.state().views[0].id;
+    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(initial_count, 1, "starts with 1 image");
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+
+    // 1. Select the image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "image selected");
+
+    // 2. Copy via keyboard shortcut (COMMAND+C / Event::Copy)
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    assert!(h.state().last_copied_image.is_some(), "image copied to clipboard buffer");
+
+    // 3. Paste via keyboard shortcut (COMMAND+V / Event::Paste)
+    h.event(egui::Event::Paste("".into()));
+    h.run_steps(3);
+    let after_paste = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(after_paste, 2, "now has 2 images");
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(1), "new image is selected");
+
+    // 4. Cut via keyboard shortcut (COMMAND+X / Event::Cut)
+    h.event(egui::Event::Cut);
+    h.run_steps(3);
+    let after_cut = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(after_cut, 1, "cut deleted the pasted image");
+    assert!(h.state().views[0].image_selection.is_none(), "selection cleared after cut");
+
+    // 5. Paste again via context menu on the page
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label_contains("Paste").click();
+    h.run_steps(3);
+    let after_paste2 = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(after_paste2, 2, "pasted via context menu");
 }

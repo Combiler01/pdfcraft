@@ -59,7 +59,7 @@ pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: 
 }
 
 /// A file name without characters file systems refuse.
-fn safe_name(s: &str) -> String {
+pub(crate) fn safe_name(s: &str) -> String {
     let cleaned: String = s.chars().map(|c| if c.is_control() || r#"/\:*?"<>|"#.contains(c) { '_' } else { c }).take(80).collect();
     let cleaned = cleaned.trim().trim_matches('.').to_string();
     if cleaned.is_empty() { "PdfCraft".into() } else { cleaned }

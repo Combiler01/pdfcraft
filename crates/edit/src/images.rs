@@ -660,6 +660,122 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     Ok(())
 }
 
+/// Locate the innermost graphics state scope enclosing only `target` (with no other painting operations).
+/// Returns `Some((start, end, scope_matrix))` where `start` is the index of `q`, `end` is the index of `Q`,
+/// and `scope_matrix` is the CTM in effect immediately before entering that `q`.
+fn image_exclusive_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usize, Matrix)>, EditError> {
+    struct Scope {
+        start: usize,
+        matrix: Matrix,
+        inherited_clip: bool,
+        inherited_path: bool,
+        selected: bool,
+        other_paint: bool,
+    }
+    let mut stack: Vec<Scope> = Vec::new();
+    let mut matrix = Matrix::IDENTITY;
+    let mut clipped = false;
+    let mut path = false;
+    let mut pending_clip = false;
+    let mut text = false;
+    let mut at_image = None;
+    let mut isolated = None;
+    for (index, op) in ops.iter().enumerate() {
+        match op.op.as_slice() {
+            b"q" => {
+                if stack.len() >= 256 {
+                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                }
+                stack.push(Scope { start: index, matrix, inherited_clip: clipped, inherited_path: path, selected: false, other_paint: false });
+            }
+            b"Q" => {
+                if let Some(scope) = stack.pop() {
+                    if scope.selected && !scope.other_paint && !scope.inherited_clip && !scope.inherited_path {
+                        isolated.get_or_insert((scope.start, index, scope.matrix));
+                    }
+                    matrix = scope.matrix;
+                    clipped = scope.inherited_clip;
+                }
+            }
+            b"cm" => {
+                if let Some(m) = op.nums::<6>() {
+                    matrix = Matrix(m).then(&matrix);
+                }
+            }
+            b"BT" => text = true,
+            b"ET" => text = false,
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" => path = true,
+            b"W" | b"W*" => pending_clip = true,
+            _ => {}
+        }
+        if index == target {
+            if text {
+                return Err(EditError::Invalid("an image inside a text object cannot be cropped".into()));
+            }
+            at_image = Some(matrix);
+            for scope in &mut stack {
+                scope.selected = true;
+            }
+        } else if matches!(
+            op.op.as_slice(),
+            b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+        ) {
+            for scope in &mut stack {
+                scope.other_paint = true;
+            }
+        }
+        if matches!(op.op.as_slice(), b"n" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*") {
+            clipped |= pending_clip;
+            pending_clip = false;
+            path = false;
+        }
+    }
+    if at_image.is_none() {
+        return Err(EditError::Invalid("the image operation is missing".into()));
+    }
+    Ok(isolated)
+}
+
+fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize, scope_matrix: Matrix) -> Vec<Op> {
+    let mut drawing = Vec::new();
+    let mut i = start.saturating_add(1);
+    while i < end {
+        let op = match ops.get(i) {
+            Some(o) => o,
+            None => break,
+        };
+        if op.is("cm")
+            && scope_matrix != Matrix::IDENTITY
+            && let (Some(m), Some(inv)) = (op.nums::<6>(), scope_matrix.invert())
+            && Matrix(m) == inv
+            && ops.get(i + 1).is_some_and(|next| next.is("re"))
+        {
+            i = i.saturating_add(1);
+            continue;
+        }
+        if op.is("re") {
+            i = i.saturating_add(1);
+            if ops.get(i).is_some_and(|next| next.is("W") || next.is("W*")) {
+                i = i.saturating_add(1);
+            }
+            if ops.get(i).is_some_and(|next| next.is("n")) {
+                i = i.saturating_add(1);
+            }
+            if scope_matrix != Matrix::IDENTITY
+                && ops.get(i).is_some_and(|next| next.is("cm"))
+                && let Some(m) = ops.get(i).and_then(|next| next.nums::<6>())
+                && Matrix(m) == scope_matrix
+            {
+                i = i.saturating_add(1);
+            }
+            continue;
+        }
+        drawing.push(op.clone());
+        i = i.saturating_add(1);
+    }
+    drawing
+}
+
 /// Remove any private clipping path / crop on image `index` on `page`.
 pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
@@ -682,14 +798,19 @@ pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Resul
         .iter()
         .position(|op| op.span.start == span && op.is("Do"))
         .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
-    if let Some((at, _)) = exclusive_clip(&ops, target) {
-        let end_idx = at.saturating_add(2);
-        if let (Some(start_op), Some(end_op)) = (ops.get(at), ops.get(end_idx)) {
-            let range = start_op.span.start..end_op.span.end;
-            let changed = pieces.splice([(range, Vec::new())]);
-            let contents = crate::text::rewritten_contents(doc, &all, changed);
-            doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
-        }
+    if let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? {
+        let drawing_ops = extract_image_drawing_ops(&ops, start, end, scope_matrix);
+        let start_op = ops.get(start).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+        let end_op = ops.get(end).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+        let range = start_op.span.start..end_op.span.end;
+        let mut unit_ops = Vec::new();
+        unit_ops.push(Op::new("q", vec![]));
+        unit_ops.extend(drawing_ops);
+        unit_ops.push(Op::new("Q", vec![]));
+        let serialized = serialize_ops(&unit_ops);
+        let changed = pieces.splice([(range, serialized)]);
+        let contents = crate::text::rewritten_contents(doc, &all, changed);
+        doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     }
     Ok(())
 }
@@ -725,62 +846,52 @@ pub fn crop_image(doc: &mut Document, page: usize, index: usize, crop_rect: [f64
         .position(|op| op.span.start == span && op.is("Do"))
         .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
 
-    let (range, unit_ops) = if let Some((at, _)) = exclusive_clip(&ops, target) {
-        let op_re = ops.get(at).ok_or_else(|| EditError::Invalid("the crop operation is missing".into()))?;
-        (
-            op_re.span.start..op_re.span.end,
-            vec![Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)])],
-        )
-    } else if target >= 2
-        && ops.get(target - 2).is_some_and(|o| o.is("q"))
-        && ops.get(target - 1).is_some_and(|o| o.is("cm"))
-        && ops.get(target + 1).is_some_and(|o| o.is("Q"))
-    {
-        let q_op = &ops[target - 2];
-        let q_end = &ops[target + 1];
-        (
-            q_op.span.start..q_end.span.end,
-            vec![
-                Op::new("q", vec![]),
-                Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)]),
-                Op::new("W", vec![]),
-                Op::new("n", vec![]),
-                ops[target - 1].clone(),
-                ops[target].clone(),
-                Op::new("Q", vec![]),
-            ],
-        )
-    } else if target >= 1 && ops.get(target - 1).is_some_and(|o| o.is("cm")) {
-        let cm_op = &ops[target - 1];
-        let do_op = &ops[target];
-        (
-            cm_op.span.start..do_op.span.end,
-            vec![
-                Op::new("q", vec![]),
-                Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)]),
-                Op::new("W", vec![]),
-                Op::new("n", vec![]),
-                ops[target - 1].clone(),
-                ops[target].clone(),
-                Op::new("Q", vec![]),
-            ],
-        )
+    let (start, end, drawing_ops, scope_matrix) = if let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? {
+        let drawing_ops = extract_image_drawing_ops(&ops, start, end, scope_matrix);
+        (start, end, drawing_ops, scope_matrix)
     } else {
-        let do_op = &ops[target];
-        (
-            do_op.span.start..do_op.span.end,
-            vec![
-                Op::new("q", vec![]),
-                Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)]),
-                Op::new("W", vec![]),
-                Op::new("n", vec![]),
-                Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()),
-                ops[target].clone(),
-                Op::new("Q", vec![]),
-            ],
-        )
+        let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
+        let mut scope_matrix = Matrix::IDENTITY;
+        let start = if target >= 1 && ops.get(target - 1).is_some_and(|o| o.is("cm")) {
+            target - 1
+        } else {
+            target
+        };
+        for (i, o) in ops.iter().enumerate() {
+            if i == start {
+                scope_matrix = state.placement.matrix;
+                break;
+            }
+            state.apply(o)?;
+        }
+        let drawing_ops = ops.get(start..=target).unwrap_or_default().to_vec();
+        (start, target, drawing_ops, scope_matrix)
     };
 
+    let mut unit_ops = Vec::new();
+    unit_ops.push(Op::new("q", vec![]));
+    if scope_matrix != Matrix::IDENTITY
+        && let Some(inv) = scope_matrix.invert()
+    {
+        unit_ops.push(Op::new("cm", inv.0.map(pdfcraft_content::num).to_vec()));
+    }
+    unit_ops.push(Op::new("re", vec![
+        pdfcraft_content::num(x0),
+        pdfcraft_content::num(y0),
+        pdfcraft_content::num(w),
+        pdfcraft_content::num(h),
+    ]));
+    unit_ops.push(Op::new("W", vec![]));
+    unit_ops.push(Op::new("n", vec![]));
+    if scope_matrix != Matrix::IDENTITY {
+        unit_ops.push(Op::new("cm", scope_matrix.0.map(pdfcraft_content::num).to_vec()));
+    }
+    unit_ops.extend(drawing_ops);
+    unit_ops.push(Op::new("Q", vec![]));
+
+    let start_op = ops.get(start).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let end_op = ops.get(end).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let range = start_op.span.start..end_op.span.end;
     let serialized = serialize_ops(&unit_ops);
     let changed = pieces.splice([(range, serialized)]);
     let contents = crate::text::rewritten_contents(doc, &all, changed);
