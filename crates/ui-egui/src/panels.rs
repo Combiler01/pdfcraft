@@ -400,18 +400,18 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                                 let is_current = ed.font_resource.as_ref().is_some_and(|r| {
                                     font_choices.iter().any(|f| &f.resource == r && f.face == font.face)
                                 });
-                                if ui.selectable_label(is_current, &font.face).clicked() {
-                                    if let Ok(bytes) = std::fs::read(&font.path) {
-                                        let edit = pdfcraft_engine::Edit::RegisterTextFont { page: ed.page, bytes: std::sync::Arc::new(bytes.clone()) };
-                                        if app.apply_edit(edit) {
-                                            if let Some(doc) = app.session.get(app.views[i].id) {
-                                                if let Some(f) = doc.text_editor_fonts(ed.page).into_iter().find(|f| f.bytes == bytes) {
-                                                    ed.font_resource = Some(f.resource);
-                                                    changed = true;
-                                                }
-                                                ed.fonts = crate::edit_text_ui::install_source_fonts(ui.ctx(), doc, ed.page);
-                                            }
+                                if ui.selectable_label(is_current, &font.face).clicked()
+                                    && let Ok(bytes) = std::fs::read(&font.path)
+                                {
+                                    let edit = pdfcraft_engine::Edit::RegisterTextFont { page: ed.page, bytes: std::sync::Arc::new(bytes.clone()) };
+                                    if app.apply_edit(edit)
+                                        && let Some(doc) = app.session.get(app.views[i].id)
+                                    {
+                                        if let Some(f) = doc.text_editor_fonts(ed.page).into_iter().find(|f| f.bytes == bytes) {
+                                            ed.font_resource = Some(f.resource);
+                                            changed = true;
                                         }
+                                        ed.fonts = crate::edit_text_ui::install_source_fonts(ui.ctx(), doc, ed.page);
                                     }
                                 }
                             }
@@ -475,11 +475,11 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
         // Color Swatch Grid (when toggled or open)
         let show_palette_id = ui.id().with("show-palette");
-        if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false) {
-            if let Some(picked) = crate::comments::swatch_grid(ui, Some(ed.look.color)) {
-                ed.look.color = picked;
-                changed = true;
-            }
+        if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false)
+            && let Some(picked) = crate::comments::swatch_grid(ui, Some(ed.look.color))
+        {
+            ed.look.color = picked;
+            changed = true;
         }
 
         // Formatting Buttons: Bold, Italic, Underline, Superscript, Subscript

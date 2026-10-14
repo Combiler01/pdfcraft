@@ -179,9 +179,7 @@ pub fn toggle_bullet_list(text: &mut String) -> bool {
             } else {
                 new_text.push_str(line);
             }
-        } else if trimmed.is_empty() {
-            new_text.push_str(line);
-        } else if trimmed.starts_with("• ") {
+        } else if trimmed.is_empty() || trimmed.starts_with("• ") {
             new_text.push_str(line);
         } else {
             new_text.push_str("• ");
@@ -218,11 +216,13 @@ pub fn toggle_numbered_list(text: &mut String) -> bool {
         }
         let t = line.trim_start();
         if all_numbered {
-            if let Some(dot_idx) = t.find('.') {
-                if dot_idx > 0 && t[..dot_idx].chars().all(|c| c.is_ascii_digit()) && t[dot_idx..].starts_with(". ") {
-                    new_text.push_str(&t[dot_idx + 2..]);
-                    continue;
-                }
+            if let Some(dot_idx) = t.find('.')
+                && dot_idx > 0
+                && t[..dot_idx].chars().all(|c| c.is_ascii_digit())
+                && t[dot_idx..].starts_with(". ")
+            {
+                new_text.push_str(&t[dot_idx + 2..]);
+                continue;
             }
             new_text.push_str(line);
         } else if t.is_empty() {
@@ -905,10 +905,11 @@ pub(crate) fn image_input(
                 painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
                 draw_handles(b);
             }
-            if allow_interaction && let Some(p) = hover_pos {
-                if let Some(&h) = all_handles.iter().find(|&&h| handle_pos(b, h).distance(p) < 8.0) {
-                    ui.ctx().set_cursor_icon(cursor_for(h));
-                }
+            if allow_interaction
+                && let Some(p) = hover_pos
+                && let Some(&h) = all_handles.iter().find(|&&h| handle_pos(b, h).distance(p) < 8.0)
+            {
+                ui.ctx().set_cursor_icon(cursor_for(h));
             }
         }
 
@@ -927,10 +928,10 @@ pub(crate) fn image_input(
                     if let Some(s) = view.image_selection.as_mut() {
                         s.drag = Some(ImageDrag { start: o, target: DragTarget::CropHandle(h), initial_rect: active_crop });
                     }
-                } else if active_crop.contains(o) {
-                    if let Some(s) = view.image_selection.as_mut() {
-                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: active_crop });
-                    }
+                } else if active_crop.contains(o)
+                    && let Some(s) = view.image_selection.as_mut()
+                {
+                    s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: active_crop });
                 }
             } else {
                 let hit_handle = all_handles.iter().copied().find(|&h| handle_pos(b, h).distance(o) < 8.0);
@@ -938,10 +939,10 @@ pub(crate) fn image_input(
                     if let Some(s) = view.image_selection.as_mut() {
                         s.drag = Some(ImageDrag { start: o, target: DragTarget::Handle(h), initial_rect: b });
                     }
-                } else if image_contains(i, o) {
-                    if let Some(s) = view.image_selection.as_mut() {
-                        s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: b });
-                    }
+                } else if image_contains(i, o)
+                    && let Some(s) = view.image_selection.as_mut()
+                {
+                    s.drag = Some(ImageDrag { start: o, target: DragTarget::Move, initial_rect: b });
                 }
             }
         }
@@ -991,10 +992,10 @@ pub(crate) fn image_input(
                 if let Some(s) = view.image_selection.as_mut() {
                     s.crop_rect = Some(new_crop);
                 }
-                if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
-                    if let Some(s) = view.image_selection.as_mut() {
-                        s.drag = None;
-                    }
+                if (resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()))
+                    && let Some(s) = view.image_selection.as_mut()
+                {
+                    s.drag = None;
                 }
                 ui.ctx().set_cursor_icon(match drag.target {
                     DragTarget::CropHandle(h) => cursor_for(h),

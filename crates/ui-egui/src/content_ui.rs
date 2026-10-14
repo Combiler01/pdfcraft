@@ -561,21 +561,21 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
                 ui.selectable_value(&mut s.family, f, f.label());
             }
             #[cfg(not(target_arch = "wasm32"))]
-            if let Some(installed) = crate::files::installed_font_files(ui.ctx()) {
-                if !installed.is_empty() {
-                    ui.separator();
-                    ui.label(egui::RichText::new(tl!("Installed fonts")).weak().small());
-                    for font in &installed {
-                        let fam = if font.family.eq_ignore_ascii_case("times") || font.face.to_ascii_lowercase().contains("times") {
-                            FontFamily::Times
-                        } else if font.family.eq_ignore_ascii_case("courier") || font.face.to_ascii_lowercase().contains("courier") {
-                            FontFamily::Courier
-                        } else {
-                            FontFamily::Helvetica
-                        };
-                        if ui.selectable_label(s.family == fam, &font.face).clicked() {
-                            s.family = fam;
-                        }
+            if let Some(installed) = crate::files::installed_font_files(ui.ctx())
+                && !installed.is_empty()
+            {
+                ui.separator();
+                ui.label(egui::RichText::new(tl!("Installed fonts")).weak().small());
+                for font in &installed {
+                    let fam = if font.family.eq_ignore_ascii_case("times") || font.face.to_ascii_lowercase().contains("times") {
+                        FontFamily::Times
+                    } else if font.family.eq_ignore_ascii_case("courier") || font.face.to_ascii_lowercase().contains("courier") {
+                        FontFamily::Courier
+                    } else {
+                        FontFamily::Helvetica
+                    };
+                    if ui.selectable_label(s.family == fam, &font.face).clicked() {
+                        s.family = fam;
                     }
                 }
             }
@@ -621,10 +621,10 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
         }
     });
     let show_palette_id = ui.id().with("show-palette-added");
-    if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false) {
-        if let Some(picked) = crate::comments::swatch_grid(ui, Some(s.color)) {
-            s.color = picked;
-        }
+    if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false)
+        && let Some(picked) = crate::comments::swatch_grid(ui, Some(s.color))
+    {
+        s.color = picked;
     }
     ui.horizontal(|ui| {
         let b_resp = ui.selectable_label(s.bold, egui::RichText::new("T").strong().size(14.0));
