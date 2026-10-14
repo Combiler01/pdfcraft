@@ -792,9 +792,10 @@ impl crate::PdfCraftApp {
         }
 
         #[cfg(not(target_arch = "wasm32"))]
-        let (has_system_cb, os_image_res) = if self.system_clipboard {
+        let (has_system_cb, os_image) = if self.system_clipboard {
             if let Ok(mut cb) = arboard::Clipboard::new() {
-                (true, Some(cb.get_image()))
+                let img_opt = cb.get_image().ok().map(|img| (img.width, img.height, img.bytes.to_vec()));
+                (true, img_opt)
             } else {
                 (false, None)
             }
@@ -802,18 +803,18 @@ impl crate::PdfCraftApp {
             (false, None)
         };
         #[cfg(target_arch = "wasm32")]
-        let (has_system_cb, os_image_res): (bool, Option<Result<arboard::ImageData<'static>, arboard::Error>>) = (false, None);
+        let (has_system_cb, os_image): (bool, Option<(usize, usize, Vec<u8>)>) = (false, None);
 
         let image_data: Option<(String, Vec<u8>)> = if has_system_cb {
-            match os_image_res {
-                Some(Ok(img)) => {
+            match os_image {
+                Some((width, height, bytes)) => {
                     let matches_internal = self.last_copied_image.as_ref().is_some_and(|(w, h, rgba)| {
-                        *w as usize == img.width && *h as usize == img.height && rgba.as_slice() == img.bytes.as_ref()
+                        *w as usize == width && *h as usize == height && rgba.as_slice() == bytes.as_slice()
                     });
-                    if matches_internal && let Some((name, bytes)) = self.last_copied_file.clone() {
-                        Some((name, bytes))
-                    } else if let Ok(png_bytes) = crate::create_ui::png_from_rgba(img.width, img.height, &img.bytes) {
-                        self.last_copied_image = Some((img.width as u32, img.height as u32, img.bytes.to_vec()));
+                    if matches_internal && let Some((name, file_bytes)) = self.last_copied_file.clone() {
+                        Some((name, file_bytes))
+                    } else if let Ok(png_bytes) = crate::create_ui::png_from_rgba(width, height, &bytes) {
+                        self.last_copied_image = Some((width as u32, height as u32, bytes));
                         self.last_copied_file = Some(("clipboard_image.png".to_string(), png_bytes.clone()));
                         self.last_copied_image_rect = None;
                         Some(("clipboard_image.png".to_string(), png_bytes))
@@ -823,7 +824,7 @@ impl crate::PdfCraftApp {
                 }
                 // When system clipboard is active and accessible but contains text or non-image data:
                 // Do NOT fall back to stale in-memory cached image!
-                _ => None,
+                None => None,
             }
         } else if let Some((name, bytes)) = self.last_copied_file.clone() {
             Some((name, bytes))

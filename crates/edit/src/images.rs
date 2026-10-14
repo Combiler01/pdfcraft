@@ -538,6 +538,109 @@ fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops
     units
 }
 
+struct ExtractedScopeState {
+    clip_ops: Vec<Op>,
+    state_ops: Vec<Op>,
+}
+
+fn extract_scope_state(ops: &[Op], start: usize, target: usize) -> Result<Option<ExtractedScopeState>, EditError> {
+    if start >= target || target >= ops.len() {
+        return Ok(None);
+    }
+    let mut clip_ops = Vec::new();
+    let mut state_ops = Vec::new();
+    let mut pending_path: Vec<Op> = Vec::new();
+    let mut pending_clip = false;
+    let mut active_path = false;
+    let mut depth: usize = 0;
+    let mut matrix = Matrix::IDENTITY;
+    let mut matrix_at_clip = None;
+
+    let scan_start = if ops.get(start).is_some_and(|o| o.is("q")) {
+        start.saturating_add(1)
+    } else {
+        start
+    };
+
+    for i in scan_start..target {
+        let Some(op) = ops.get(i) else { return Ok(None); };
+        match op.op.as_slice() {
+            b"q" => {
+                if depth >= 256 {
+                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                }
+                depth = depth.saturating_add(1);
+            }
+            b"Q" => {
+                if depth == 0 {
+                    return Ok(None);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ if depth > 0 => {}
+            b"cm" => {
+                if active_path {
+                    return Ok(None);
+                }
+                if let Some(m) = op.nums::<6>() {
+                    matrix = Matrix(m).then(&matrix);
+                }
+            }
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" | b"h" => {
+                active_path = true;
+                pending_path.push(op.clone());
+            }
+            b"W" | b"W*" => {
+                if !active_path {
+                    return Ok(None);
+                }
+                pending_clip = true;
+                pending_path.push(op.clone());
+            }
+            b"n" => {
+                if pending_clip {
+                    if matrix_at_clip.is_none() {
+                        matrix_at_clip = Some(matrix);
+                    } else if matrix_at_clip != Some(matrix) {
+                        return Ok(None);
+                    }
+                    clip_ops.extend(std::mem::take(&mut pending_path));
+                    clip_ops.push(op.clone());
+                    pending_clip = false;
+                    active_path = false;
+                } else {
+                    pending_path.clear();
+                    active_path = false;
+                }
+            }
+            b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*" => {
+                if pending_clip {
+                    return Ok(None);
+                }
+                pending_path.clear();
+                active_path = false;
+            }
+            b"gs" | b"CS" | b"cs" | b"SC" | b"sc" | b"SCN" | b"scn" | b"G" | b"g" | b"RG" | b"rg" | b"K" | b"k" | b"ri" | b"i" => {
+                state_ops.push(op.clone());
+            }
+            b"BT" => {
+                return Ok(None);
+            }
+            _ => {}
+        }
+    }
+
+    if depth != 0 || active_path || pending_clip {
+        return Ok(None);
+    }
+
+    if !clip_ops.is_empty() && matrix_at_clip != Some(Matrix::IDENTITY) {
+        return Ok(None);
+    }
+
+    Ok(Some(ExtractedScopeState { clip_ops, state_ops }))
+}
+
 /// Change the stacking order of image `index` on `page`.
 pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: ArrangeOrder) -> Result<(), EditError> {
     let images = page_images(doc, page)?;
@@ -649,34 +752,37 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         first_op.span.start..last_op.span.end
     };
 
-    let is_clipped = img.visible_rect.is_some() && img.visible_rect != Some(img.rect);
-    if has_other_paint && is_clipped && img.clips.len() > 1 {
-        // Safely decline extraction when complex multi-path clipping cannot be preserved
+    let scope_start = if has_other_paint {
+        if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+            && sub_start >= target_unit.start
+            && sub_end < target_unit.end
+        {
+            sub_start
+        } else {
+            target_unit.start
+        }
+    } else {
+        target_unit.start
+    };
+
+    let is_clipped = (img.visible_rect.is_some() && img.visible_rect != Some(img.rect)) || !img.clips.is_empty();
+
+    let extracted = extract_scope_state(&ops, scope_start, target)?;
+    let Some(extracted) = extracted else {
+        return Ok(());
+    };
+
+    if is_clipped && extracted.clip_ops.is_empty() {
         return Ok(());
     }
 
     let mut unit_ops = Vec::new();
     unit_ops.push(Op::new("q", vec![]));
-    if is_clipped {
+    if !extracted.clip_ops.is_empty() {
         if dest_ctm != Matrix::IDENTITY {
             unit_ops.push(Op::new("cm", dest_inv.0.map(pdfcraft_content::num).to_vec()));
         }
-        if let Some(clip) = img.visible_rect {
-            let cx0 = clip[0];
-            let cy0 = clip[1];
-            let cw = clip[2] - clip[0];
-            let ch = clip[3] - clip[1];
-            if cw > 0.0 && ch > 0.0 {
-                unit_ops.push(Op::new("re", vec![
-                    pdfcraft_content::num(cx0),
-                    pdfcraft_content::num(cy0),
-                    pdfcraft_content::num(cw),
-                    pdfcraft_content::num(ch),
-                ]));
-                unit_ops.push(Op::new("W", vec![]));
-                unit_ops.push(Op::new("n", vec![]));
-            }
-        }
+        unit_ops.extend(extracted.clip_ops);
         if Matrix(img.draw_matrix) != Matrix::IDENTITY {
             unit_ops.push(Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()));
         }
@@ -686,6 +792,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             unit_ops.push(Op::new("cm", local.0.map(pdfcraft_content::num).to_vec()));
         }
     }
+    unit_ops.extend(extracted.state_ops);
     unit_ops.push(ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])));
     unit_ops.push(Op::new("Q", vec![]));
 

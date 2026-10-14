@@ -1846,6 +1846,46 @@ fn image_arrange_preserves_shared_group_clipping_bounds() {
     assert!(str_content.contains("External Text"), "external text preserved");
 }
 
+#[test]
+fn image_arrange_preserves_extended_graphics_state_opacity() {
+    let content = "q /GS0 gs 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1, "image preserved");
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.contains("/GS0 gs"), "extended graphics state /GS0 gs is retained");
+    let gs_pos = str_content.rfind("/GS0 gs").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(gs_pos < do_pos, "/GS0 gs must precede /Im0 Do in the new unit");
+}
+
+#[test]
+fn image_arrange_preserves_exact_non_rectangular_clipping_path() {
+    let content = "q 120 120 m 160 120 l 140 160 l h W* n 100 0 0 100 100 100 cm /Im0 Do /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images preserved");
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.contains("W*"), "even-odd W* fill rule must be preserved");
+    assert!(str_content.contains("120 120 m 160 120 l 140 160 l h W* n"), "exact non-rectangular clip path preserved");
+}
+
 
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {
