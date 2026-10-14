@@ -1805,6 +1805,47 @@ fn image_crop_preserves_outer_cm_for_subsequent_drawings() {
     assert_eq!(after[1].rect, [50.0, 50.0, 150.0, 150.0], "subsequent image must retain global cm");
 }
 
+#[test]
+fn image_arrange_preserves_position_under_active_ctm() {
+    let content = "100 0 0 100 50 50 cm /Im0 Do /Im0 Do";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    assert_eq!(initial[1].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    // Move first image to front: must not apply destination CTM twice!
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "first image position preserved");
+    assert_eq!(after[1].rect, [50.0, 50.0, 150.0, 150.0], "second image position preserved");
+}
+
+#[test]
+fn image_arrange_preserves_shared_group_clipping_bounds() {
+    let content = "q 120 120 40 40 re W n 100 0 0 100 100 100 cm /Im0 Do /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert_eq!(initial[0].rect, [100.0, 100.0, 200.0, 200.0]);
+    assert_eq!(initial[0].visible_rect, Some([120.0, 120.0, 160.0, 160.0]));
+    assert_eq!(initial[1].rect, [100.0, 100.0, 200.0, 200.0]);
+    assert_eq!(initial[1].visible_rect, Some([120.0, 120.0, 160.0, 160.0]));
+
+    // Bring image 0 to front: moves it past the external text while preserving clipping bounds
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2, "both images preserved");
+    assert_eq!(after[0].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "image 0 retains clip");
+    assert_eq!(after[1].visible_rect, Some([120.0, 120.0, 160.0, 160.0]), "image 1 retains clip");
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.contains("External Text"), "external text preserved");
+}
+
 
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {

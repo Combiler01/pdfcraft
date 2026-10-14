@@ -2717,6 +2717,7 @@ fn image_edge_handle_stretch_and_crop_mode() {
     h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
     h.get_by_label("Remove crop").click();
+    h.run_steps(4);
     let images = h.state().session.get(doc_id).unwrap().page_images(0);
     assert_eq!(images[0].visible_rect, Some(images[0].rect), "crop is removed");
 }
@@ -4479,3 +4480,26 @@ fn image_copy_cut_paste_keyboard_and_context_menu() {
     let after_paste2 = h.state().session.get(id).unwrap().page_images(0).len();
     assert_eq!(after_paste2, 2, "pasted via context menu");
 }
+
+#[test]
+fn stale_clipboard_plain_text_does_not_paste_image() {
+    let mut h = harness(1, |_| {});
+    h.run_steps(4);
+    // Put an image into internal cache
+    h.state_mut().last_copied_image = Some((10, 10, vec![0; 400]));
+    h.state_mut().last_copied_file = Some(("cached.png".to_string(), vec![1, 2, 3]));
+    h.state_mut().system_clipboard = true;
+
+    // Set actual system clipboard to plain text
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        cb.set_text("just plain text").ok();
+    }
+
+    // can_paste_image should now be false because the system clipboard has text, not an image!
+    assert!(!h.state().can_paste_image(), "cannot paste image when system clipboard has text");
+
+    // paste_image should fail and return false without pasting
+    assert!(!h.state_mut().paste_image(0, None), "must not paste stale cached image");
+}
+

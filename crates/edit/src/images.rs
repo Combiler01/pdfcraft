@@ -613,69 +613,81 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             )
     });
 
-    let (target_span, unit_ops) = if has_other_paint {
-        if let Ok(Some((sub_start, sub_end, sub_placement))) = image_exclusive_scope(&ops, target)
+    let (dest_pos, scan_target) = if insert_after {
+        let Some(op) = dest_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
+        (op.span.end, dest_unit.end)
+    } else {
+        let Some(op) = ops.get(dest_unit.start) else { return Ok(()) };
+        (op.span.start, dest_unit.start)
+    };
+
+    let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
+    for (i, op) in ops.iter().enumerate() {
+        if i == scan_target {
+            break;
+        }
+        state.apply(op)?;
+    }
+    let dest_ctm = state.placement.matrix;
+    let Some(dest_inv) = dest_ctm.invert() else { return Ok(()); };
+
+    let target_span = if has_other_paint {
+        if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
             && sub_start >= target_unit.start
             && sub_end < target_unit.end
         {
-            let u_ops = if sub_placement == Matrix::IDENTITY {
-                ops.get(sub_start..=sub_end).unwrap_or_default().to_vec()
-            } else {
-                let mut out = Vec::new();
-                out.push(Op::new("q", vec![]));
-                out.push(Op::new("cm", sub_placement.0.map(pdfcraft_content::num).to_vec()));
-                if let Some(inner) = ops.get(sub_start.saturating_add(1)..=sub_end) {
-                    out.extend_from_slice(inner);
-                }
-                out
-            };
             let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
             let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
-            (start_op.span.start..end_op.span.end, u_ops)
+            start_op.span.start..end_op.span.end
         } else {
-            let u_ops = vec![
-                Op::new("q", vec![]),
-                Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()),
-                ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])),
-                Op::new("Q", vec![]),
-            ];
             let target_op = &ops[target];
-            (target_op.span.start..target_op.span.end, u_ops)
+            target_op.span.start..target_op.span.end
         }
     } else {
-        let (scope_start, scope_end, placement) = image_transform_scope(&ops, target)?.unwrap_or((target, target, Matrix(img.draw_matrix)));
-        let u_ops = if scope_start != scope_end && target_unit.start == scope_start && target_unit.end == scope_end.saturating_add(1) {
-            if placement == Matrix::IDENTITY {
-                ops.get(scope_start..=scope_end).unwrap_or_default().to_vec()
-            } else {
-                let mut out = Vec::new();
-                out.push(Op::new("q", vec![]));
-                out.push(Op::new("cm", placement.0.map(pdfcraft_content::num).to_vec()));
-                if let Some(inner) = ops.get(scope_start.saturating_add(1)..=scope_end) {
-                    out.extend_from_slice(inner);
-                }
-                out
-            }
-        } else {
-            vec![
-                Op::new("q", vec![]),
-                Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()),
-                ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])),
-                Op::new("Q", vec![]),
-            ]
-        };
         let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
         let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        (first_op.span.start..last_op.span.end, u_ops)
+        first_op.span.start..last_op.span.end
     };
 
-    let dest_pos = if insert_after {
-        let Some(op) = dest_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        op.span.end
+    let is_clipped = img.visible_rect.is_some() && img.visible_rect != Some(img.rect);
+    if has_other_paint && is_clipped && img.clips.len() > 1 {
+        // Safely decline extraction when complex multi-path clipping cannot be preserved
+        return Ok(());
+    }
+
+    let mut unit_ops = Vec::new();
+    unit_ops.push(Op::new("q", vec![]));
+    if is_clipped {
+        if dest_ctm != Matrix::IDENTITY {
+            unit_ops.push(Op::new("cm", dest_inv.0.map(pdfcraft_content::num).to_vec()));
+        }
+        if let Some(clip) = img.visible_rect {
+            let cx0 = clip[0];
+            let cy0 = clip[1];
+            let cw = clip[2] - clip[0];
+            let ch = clip[3] - clip[1];
+            if cw > 0.0 && ch > 0.0 {
+                unit_ops.push(Op::new("re", vec![
+                    pdfcraft_content::num(cx0),
+                    pdfcraft_content::num(cy0),
+                    pdfcraft_content::num(cw),
+                    pdfcraft_content::num(ch),
+                ]));
+                unit_ops.push(Op::new("W", vec![]));
+                unit_ops.push(Op::new("n", vec![]));
+            }
+        }
+        if Matrix(img.draw_matrix) != Matrix::IDENTITY {
+            unit_ops.push(Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()));
+        }
     } else {
-        let Some(op) = ops.get(dest_unit.start) else { return Ok(()) };
-        op.span.start
-    };
+        let local = Matrix(img.draw_matrix).then(&dest_inv);
+        if local != Matrix::IDENTITY {
+            unit_ops.push(Op::new("cm", local.0.map(pdfcraft_content::num).to_vec()));
+        }
+    }
+    unit_ops.push(ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])));
+    unit_ops.push(Op::new("Q", vec![]));
 
     let mut serialized = Vec::new();
     serialized.push(b'\n');
