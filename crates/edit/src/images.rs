@@ -10,6 +10,27 @@ use std::sync::Arc;
 
 use crate::EditError;
 
+/// The identity of a soft mask (`/SMask`) in the PDF graphics state.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaskIdentity {
+    /// Indirect reference to a mask dictionary or stream.
+    Ref(u32, u16),
+    /// Indirect reference to the transparency group (`/G`) in a mask dictionary.
+    Group(u32, u16),
+    /// Explicit named mask or resource name.
+    Named(Vec<u8>),
+}
+
+impl std::fmt::Display for MaskIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MaskIdentity::Ref(num, generation) => write!(f, "{num} {generation} R"),
+            MaskIdentity::Group(num, generation) => write!(f, "group {num} {generation} R"),
+            MaskIdentity::Named(name) => write!(f, "{}", String::from_utf8_lossy(name)),
+        }
+    }
+}
+
 /// An image drawn on a page.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PageImage {
@@ -30,6 +51,8 @@ pub struct PageImage {
     /// Pixel size; zero for vector/grouped Form artwork.
     pub width: u32,
     pub height: u32,
+    /// Active soft mask identity at the image placement, if any.
+    pub smask: Option<MaskIdentity>,
     stream: usize,
     op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
@@ -213,12 +236,16 @@ impl ImageState {
 pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditError> {
     let p = page_of(doc, page)?;
     let xo = xobjects(doc, &p.dict);
+    let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
+    let ext_gstates = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
     // The graphics state carries over from one stream to the next.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
+    let mut tracker = ExtendedGStateTracker::default();
     for (si, (_, data)) in streams(doc, &p.dict).into_iter().enumerate() {
         for (i, op) in parse(&data).ops.iter().enumerate() {
             state.apply(op)?;
+            tracker.step(op, &ext_gstates, doc)?;
             let ctm = state.placement.matrix;
             if op.is("Do") {
                 let Some(name) = op.name(0) else { continue };
@@ -274,6 +301,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
                     is_form,
                     width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                     height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
+                    smask: tracker.current_state.smask.clone(),
                     stream: si,
                     op: i,
                     draw_matrix: ctm.0,
@@ -347,6 +375,7 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                     is_form: false,
                     width: s.dict.int(b"Width").unwrap_or(0).max(0) as u32,
                     height: s.dict.int(b"Height").unwrap_or(0).max(0) as u32,
+                    smask: None,
                     stream,
                     op: i,
                     draw_matrix: ctm.0,
@@ -548,7 +577,7 @@ struct EffectiveGState {
     ca: Option<f64>,
     ca_stroke: Option<f64>,
     bm: Option<Vec<u8>>,
-    smask: Option<Vec<u8>>,
+    smask: Option<MaskIdentity>,
 }
 
 impl EffectiveGState {
@@ -564,11 +593,8 @@ impl EffectiveGState {
         self.bm.as_deref().unwrap_or(b"Normal")
     }
 
-    fn effective_smask(&self) -> Option<&[u8]> {
-        match self.smask.as_deref() {
-            Some(b"None") | None => None,
-            Some(other) => Some(other),
-        }
+    fn effective_smask(&self) -> Option<&MaskIdentity> {
+        self.smask.as_ref()
     }
 
     fn visually_differs(&self, other: &EffectiveGState) -> bool {
@@ -578,7 +604,7 @@ impl EffectiveGState {
             || self.effective_smask() != other.effective_smask()
     }
 
-    fn merge_dict(&mut self, dict: &Dict, doc: &Document) {
+    fn merge_dict(&mut self, dict: &Dict, doc: &Document, gs_name: Option<&[u8]>) {
         if let Some(val) = dict.get(b"ca").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()) {
             self.ca = Some(val);
         }
@@ -594,11 +620,28 @@ impl EffectiveGState {
                 self.bm = Some(first_name);
             }
         }
-        if let Some(smask_obj) = dict.get(b"SMask").map(|v| doc.resolve(v)) {
-            if let Some(name) = smask_obj.as_name() {
-                self.smask = Some(name.to_vec());
-            } else if smask_obj.as_dict().is_some() {
-                self.smask = Some(b"CustomSMask".to_vec());
+        if let Some(raw_smask) = dict.get(b"SMask") {
+            let resolved = doc.resolve(raw_smask);
+            if let Some(name) = resolved.as_name() {
+                if name == b"None" {
+                    self.smask = None;
+                } else {
+                    self.smask = Some(MaskIdentity::Named(name.to_vec()));
+                }
+            } else if let Some(mask_dict) = resolved.as_dict() {
+                if let Some(gr) = mask_dict.get(b"G").and_then(|g| g.as_ref()) {
+                    self.smask = Some(MaskIdentity::Group(gr.num, gr.generation));
+                } else if let Some(r) = raw_smask.as_ref() {
+                    self.smask = Some(MaskIdentity::Ref(r.num, r.generation));
+                } else if let Some(name) = mask_dict.get(b"Name").map(|n| doc.resolve(n)).and_then(|n| n.as_name().map(|s| s.to_vec())) {
+                    self.smask = Some(MaskIdentity::Named(name));
+                } else if let Some(name) = gs_name {
+                    self.smask = Some(MaskIdentity::Named(name.to_vec()));
+                } else {
+                    self.smask = Some(MaskIdentity::Named(b"CustomMask".to_vec()));
+                }
+            } else if let Some(r) = raw_smask.as_ref() {
+                self.smask = Some(MaskIdentity::Ref(r.num, r.generation));
             }
         }
     }
@@ -615,7 +658,7 @@ impl ExtendedGStateTracker {
     fn step(&mut self, op: &Op, ext_gstates: &Dict, doc: &Document) -> Result<(), EditError> {
         match op.op.as_slice() {
             b"q" => {
-                if self.stack.len() >= 256 {
+                if self.stack.len() >= 4096 {
                     return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
                 }
                 self.stack.push((self.current_state.clone(), self.active_gs_ops.clone()));
@@ -629,7 +672,7 @@ impl ExtendedGStateTracker {
             b"gs" => {
                 if let Some(name) = op.name(0) {
                     if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
-                        self.current_state.merge_dict(&dict, doc);
+                        self.current_state.merge_dict(&dict, doc, Some(name));
                     } else if self.current_state.ca.is_none() {
                         self.current_state.ca = Some(0.5);
                     }
@@ -672,7 +715,7 @@ fn extract_scope_state(ops: &[Op], start: usize, target: usize) -> Result<Option
         let Some(op) = ops.get(i) else { return Ok(None); };
         match op.op.as_slice() {
             b"q" => {
-                if depth >= 256 {
+                if depth >= 4096 {
                     return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
                 }
                 depth = depth.saturating_add(1);
@@ -889,13 +932,17 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         return Err(EditError::Invalid("unsupported graphics state: inherited clipping path cannot be cleanly preserved".into()));
     }
 
+    let mut outer_gs_ops = Vec::new();
     for src_gs in &source_gs_ops {
         let name = src_gs.name(0);
         let already_present = extracted.state_ops.iter().any(|o| o.name(0) == name);
         if !already_present {
-            extracted.state_ops.push(src_gs.clone());
+            outer_gs_ops.push(src_gs.clone());
         }
     }
+    let mut combined_state_ops = outer_gs_ops;
+    combined_state_ops.extend(extracted.state_ops);
+    extracted.state_ops = combined_state_ops;
 
     let mut reconstructed_state = dest_effective_state.clone();
     for op in &extracted.state_ops {
@@ -903,7 +950,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             && let Some(name) = op.name(0)
         {
             if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
-                reconstructed_state.merge_dict(&dict, doc);
+                reconstructed_state.merge_dict(&dict, doc, Some(name));
             } else if reconstructed_state.ca.is_none() {
                 reconstructed_state.ca = Some(0.5);
             }
@@ -918,6 +965,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
 
     let mut unit_ops = Vec::new();
     unit_ops.push(Op::new("q", vec![]));
+    unit_ops.extend(extracted.state_ops);
     if !extracted.clip_ops.is_empty() {
         if dest_ctm != Matrix::IDENTITY {
             unit_ops.push(Op::new("cm", dest_inv.0.map(pdfcraft_content::num).to_vec()));
@@ -932,7 +980,6 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             unit_ops.push(Op::new("cm", local.0.map(pdfcraft_content::num).to_vec()));
         }
     }
-    unit_ops.extend(extracted.state_ops);
     unit_ops.push(ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])));
     unit_ops.push(Op::new("Q", vec![]));
 

@@ -2074,6 +2074,101 @@ fn destination_differing_blend_mode_pollution_is_prevented() {
     assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
 }
 
+fn nested_soft_mask_page(content: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R /GroupA 9 0 R /GroupB 10 0 R >> /ExtGState << /GSA 7 0 R /GSB 8 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        "<< /Type /ExtGState /SMask << /Type /Mask /S /Alpha /G 9 0 R >> >>".into(),
+        "<< /Type /ExtGState /SMask << /Type /Mask /S /Alpha /G 10 0 R >> >>".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /I true >> /Length 20 >>\nstream\n0 g 0 0 100 50 re f\nendstream".into(),
+        "<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Group << /S /Transparency /I true >> /Length 20 >>\nstream\n0 g 0 0 50 100 re f\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn nested_soft_masks_replay_in_correct_order_and_effective_mask_is_rendered() {
+    let content = "q /GSA gs q /GSB gs 100 0 0 100 0 0 cm /Im0 Do Q Q BT /F1 12 Tf 10 90 Td (External Text) Tj ET";
+    let mut doc = nested_soft_mask_page(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+    assert_eq!(initial[0].smask, Some(images::MaskIdentity::Group(10, 0)));
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+
+    let content_bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&content_bytes);
+
+    // 1. Assert emitted stream order: outer /GSA gs must precede inner /GSB gs, which precedes /Im0 Do
+    let after_text = str_content.find("External Text").unwrap();
+    let after_a = str_content.rfind("/GSA gs").unwrap();
+    let after_b = str_content.rfind("/GSB gs").unwrap();
+    let after_do = str_content.rfind("/Im0 Do").unwrap();
+    assert!(after_text < after_a, "Position: /GSA gs relocated past external text");
+    assert!(after_a < after_b, "Order: outer /GSA gs must be replayed before inner /GSB gs");
+    assert!(after_b < after_do, "Order: inner /GSB gs must immediately precede /Im0 Do");
+
+    // 2. Assert effective mask upon saving and reopening is correctly identified as B
+    let reopened_doc = reopen(&doc);
+    let reopened_images = images::page_images(&reopened_doc, 0).unwrap();
+    assert_eq!(reopened_images.len(), 1);
+    assert_eq!(reopened_images[0].smask, Some(images::MaskIdentity::Group(10, 0)));
+
+    // 3. Rendered-pixel assertion: render output and verify Mask B (left 50x100) is effective, not Mask A (bottom 100x50)
+    let pdf_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes), pdfcraft_render::RenderConfig::default());
+    let page = renderer.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let px = |x: u32, y: u32| {
+        let idx = ((y * page.width + x) * 4) as usize;
+        page.rgba[idx..idx + 4].to_vec()
+    };
+    // Left half (inside Mask B): image is rendered black
+    assert_eq!(px(25, 25), vec![0, 0, 0, 255], "point (25, 25) is inside Mask B: image rendered");
+    assert_eq!(px(25, 75), vec![0, 0, 0, 255], "point (25, 75) is inside Mask B: image rendered");
+    // Right half (outside Mask B): masked out to white page background
+    assert_eq!(px(75, 25), vec![255, 255, 255, 255], "point (75, 25) is outside Mask B: masked out to white");
+    assert_eq!(px(75, 75), vec![255, 255, 255, 255], "point (75, 75) is outside Mask B: masked out to white");
+}
+
+#[test]
+fn destination_differing_mask_pollution_is_prevented() {
+    // /Im0 Do has no mask; destination has active top-level /GSA gs (Mask A)
+    let content = "100 0 0 100 0 0 cm /Im0 Do /GSA gs BT /F1 12 Tf 10 90 Td (Masked Section) Tj ET";
+    let mut doc = nested_soft_mask_page(content);
+    let initial_bytes = page_content_bytes(&doc, 0);
+
+    let res = images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res.is_err(), "must return an explicit Err rather than corrupting mask state");
+    let err_msg = res.unwrap_err().to_string();
+    assert!(err_msg.contains("unsupported graphics state"), "error describes unsupported graphics state: {err_msg}");
+
+    // Preservation: document contents are completely unmodified
+    let doc = reopen(&doc);
+    let after_bytes = page_content_bytes(&doc, 0);
+    assert_eq!(initial_bytes, after_bytes, "Preservation: content stream remained completely unmodified");
+}
+
 
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {
