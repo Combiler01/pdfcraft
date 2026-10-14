@@ -2133,12 +2133,8 @@ fn nested_soft_masks_replay_in_correct_order_and_effective_mask_is_rendered() {
     // 3. Rendered-pixel assertion: render output and verify Mask B (left 50x100) is effective, not Mask A (bottom 100x50)
     let pdf_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
     let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes), pdfcraft_render::RenderConfig::default());
-    let page = renderer.render(pdfcraft_render::RenderRequest {
-        page: 0,
-        kind: pdfcraft_render::RequestKind::Pixels,
-        scale: 1.0,
-        ..Default::default()
-    });
+    let page =
+        renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() });
     let px = |x: u32, y: u32| {
         let idx = ((y * page.width + x) * 4) as usize;
         page.rgba[idx..idx + 4].to_vec()
@@ -2242,11 +2238,7 @@ fn non_identity_cm_before_gs_preserves_mask_coordinates_and_rendering() {
     let reopened_doc = reopen(&doc);
     let reopened_images = images::page_images(&reopened_doc, 0).unwrap();
     assert_eq!(reopened_images.len(), 1);
-    assert!(
-        close(reopened_images[0].rect, [10.0, 10.0, 110.0, 110.0]),
-        "Image bounds preserved: {:?}",
-        reopened_images[0].rect
-    );
+    assert!(close(reopened_images[0].rect, [10.0, 10.0, 110.0, 110.0]), "Image bounds preserved: {:?}", reopened_images[0].rect);
 
     // 3. Render reopened document and assert non-overlapping pixels remain unchanged
     let pdf_bytes_after = write_incremental(&reopened_doc, &SaveOptions::default()).unwrap();
@@ -2275,7 +2267,6 @@ fn non_identity_cm_before_gs_preserves_mask_coordinates_and_rendering() {
     assert_eq!(px_after(5, 5), vec![255, 255, 255, 255]);
     assert_eq!(px_after(5, 5), px_before(5, 5));
 }
-
 
 #[test]
 fn form_artwork_edits_only_the_selected_placement() {

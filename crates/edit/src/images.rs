@@ -691,10 +691,7 @@ fn extract_scope_state(ops: &[Op], start: usize, target: usize) -> Result<Option
         return Ok(None);
     }
     if start == target {
-        return Ok(Some(ExtractedScopeState {
-            clip_ops: Vec::new(),
-            state_ops: Vec::new(),
-        }));
+        return Ok(Some(ExtractedScopeState { clip_ops: Vec::new(), state_ops: Vec::new() }));
     }
     let mut clip_ops = Vec::new();
     let mut state_ops = Vec::new();
@@ -705,14 +702,12 @@ fn extract_scope_state(ops: &[Op], start: usize, target: usize) -> Result<Option
     let mut matrix = Matrix::IDENTITY;
     let mut matrix_at_clip = None;
 
-    let scan_start = if ops.get(start).is_some_and(|o| o.is("q")) {
-        start.saturating_add(1)
-    } else {
-        start
-    };
+    let scan_start = if ops.get(start).is_some_and(|o| o.is("q")) { start.saturating_add(1) } else { start };
 
     for i in scan_start..target {
-        let Some(op) = ops.get(i) else { return Ok(None); };
+        let Some(op) = ops.get(i) else {
+            return Ok(None);
+        };
         match op.op.as_slice() {
             b"q" => {
                 if depth >= 4096 {
@@ -1235,12 +1230,7 @@ pub fn crop_image(doc: &mut Document, page: usize, index: usize, crop_rect: [f64
     {
         unit_ops.push(Op::new("cm", inv.0.map(pdfcraft_content::num).to_vec()));
     }
-    unit_ops.push(Op::new("re", vec![
-        pdfcraft_content::num(x0),
-        pdfcraft_content::num(y0),
-        pdfcraft_content::num(w),
-        pdfcraft_content::num(h),
-    ]));
+    unit_ops.push(Op::new("re", vec![pdfcraft_content::num(x0), pdfcraft_content::num(y0), pdfcraft_content::num(w), pdfcraft_content::num(h)]));
     unit_ops.push(Op::new("W", vec![]));
     unit_ops.push(Op::new("n", vec![]));
     if scope_matrix != Matrix::IDENTITY {
