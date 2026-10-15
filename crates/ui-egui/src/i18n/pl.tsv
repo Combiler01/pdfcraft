@@ -26,6 +26,7 @@
 	Interface language	Język interfejsu
 	Identity	Tożsamość
 	Name on new comments	Autor nowych komentarzy
+	Hide hover previews for highlights without comment text	Ukryj podglądy po najechaniu dla wyróżnień bez tekstu komentarza
 	Open…	Otwórz…
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
@@ -365,6 +366,7 @@
 	Split	Podziel
 	More	Więcej
 	Set page boxes	Ustaw obszary strony
+	Set page transitions	Ustaw przejścia stron
 	Page labels	Etykiety stron
 	Page transitions	Przejścia stron
 	Add comments	Dodaj komentarze
@@ -577,6 +579,7 @@
 	Remove unused objects and merge identical ones	Usuń nieużywane obiekty i scal identyczne
 	Audit space usage…	Analiza wykorzystania miejsca…
 	Space Audit	Analiza miejsca
+	What takes up the space in this file, by kind of content.	Co zajmuje miejsce w tym pliku, według rodzaju zawartości.
 	Bytes	Bajty
 	Content Streams	Strumienie zawartości
 	X Object Forms	Obiekty Form XObject
@@ -847,6 +850,12 @@
 	Windows store  ·  	Magazyn Windows  ·  
 	Issued by: 	Wystawca: 
 	, Expires: 	, Wygasa: 
+	Digitally signed by	Podpisany cyfrowo przez
+	DN: 	DN: 
+	Reason: 	Powód: 
+	Location: 	Lokalizacja: 
+	Date: 	Data: 
+	The labels are in English: the signature's font can't draw them in this language.	Etykiety są po angielsku: czcionka podpisu nie potrafi ich wyświetlić w tym języku.
 	No digital IDs yet.	Brak identyfikatorów cyfrowych.
 	Configure New Digital ID	Skonfiguruj nowy identyfikator cyfrowy
 	Remove "{name}" from this list? The file itself is not deleted.	Usunąć „{name}” z tej listy? Sam plik nie zostanie usunięty.
@@ -1130,6 +1139,7 @@
 	Custom text:	Własny tekst:
 	Font:	Czcionka:
 	Font size:	Rozmiar czcionki:
+	Font size	Rozmiar czcionki
 	Auto-size text to fit redaction region	Dopasuj rozmiar tekstu do utajnianego obszaru
 	Font colour:	Kolor czcionki:
 	Repeat overlay text	Powtarzaj tekst nakładany
@@ -1270,6 +1280,7 @@
 	Copy text	Kopiuj tekst
 	Properties…	Właściwości…
 	Make Current Properties Default	Ustaw bieżące właściwości jako domyślne
+	Make Properties Default	Ustaw właściwości jako domyślne
 	More options	Więcej opcji
 	Sort by	Sortuj według
 	Author	Autor
@@ -1299,6 +1310,8 @@
 	Expand all bookmarks	Rozwiń wszystkie zakładki
 	Expand top-level bookmarks	Rozwiń zakładki najwyższego poziomu
 	Collapse all bookmarks	Zwiń wszystkie zakładki
+	Collapse all pages	Zwiń wszystkie strony
+	Expand all pages	Rozwiń wszystkie strony
 	New bookmark (⌘B)	Nowa zakładka (⌘B)
 	This document has no bookmarks.	Ten dokument nie zawiera zakładek.
 	This document has no layers.	Ten dokument nie zawiera warstw.
@@ -1391,6 +1404,9 @@
 	Sort comments by:	Sortuj komentarze według:
 	Create PDF Comment Summary	Utwórz podsumowanie komentarzy w PDF
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Przywrócić ostatnio zapisaną wersję „{name}”? Późniejszych zmian nie będzie można odzyskać.
+	Save over the changed file?	Zapisać na zmienionym pliku?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	Plik „{name}” zmienił się na dysku po otwarciu lub ostatnim zapisie. Zapisanie teraz zastąpi tę nowszą wersję bieżącą.
+	Save anyway	Zapisz mimo to
 	Number pages	Ponumeruj strony
 	Style	Styl
 	None (prefix only)	Brak (tylko prefiks)
@@ -1594,6 +1610,8 @@
 	Sent to {printer}	Wysłano do {printer}
 	Sent to {printer}: {msg}	Wysłano do {printer}: {msg}
 	Looking for printers…	Wyszukiwanie drukarek…
+	Sending sheet {s} of {n} to {printer}…	Wysyłanie arkusza {s} z {n} do {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nie znaleziono drukarek. Sprawdź, czy drukarka jest zainstalowana, a bufor wydruku działa, i ponownie otwórz Drukuj.
 	Sending to {printer}…	Wysyłanie do {printer}…
 	Choose a folder for the searchable files	Wybierz folder dla plików z możliwością wyszukiwania
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Pliki są łączone od góry do dołu. Pozostaw pole Strony puste, aby uwzględnić wszystkie strony.
@@ -2240,14 +2258,14 @@ key	Space	Spacja
 	These objects could not be moved. Select them again and try a smaller move.	Nie udało się przenieść tych obiektów. Zaznacz je ponownie i spróbuj mniejszego przesunięcia.
 	This page contains objects that cannot be selected together.	Ta strona zawiera obiekty, których nie można zaznaczyć razem.
 	Reload documents when their files change on disk	Wczytuj ponownie dokumenty, gdy ich pliki zmienią się na dysku
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ten plik zmienił się na dysku. Wczytaj go ponownie, aby zobaczyć nową wersję; niezapisane zmiany zostaną utracone.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ten plik zmienił się na dysku. Wczytaj ponownie pokazuje nową wersję i odrzuca niezapisane zmiany; Zapisz zastępuje ją tą wersją.
 	Reload	Wczytaj ponownie
 	Couldn't reload {name}: {e}	Nie można ponownie wczytać {name}: {e}
 	Select page {label}	Wybierz stronę {label}
 	Rotate page {label} counterclockwise	Obróć stronę {label} w lewo
 	Rotate page {label} clockwise	Obróć stronę {label} w prawo
 	Delete page {label}	Usuń stronę {label}
-	Mouse wheel scroll speed	Szybkość przewijania kółkiem myszy
+	Scroll speed (mouse wheel and arrow keys)	Szybkość przewijania (kółko myszy i klawisze strzałek)
 scroll speed	Slow	Wolna
 scroll speed	Normal	Normalna
 scroll speed	Fast	Szybka
@@ -2321,6 +2339,10 @@ animation effects	Off	Wyłączone
 	Local cross-PDF links require the desktop app	Lokalne łącza między plikami PDF wymagają aplikacji komputerowej
 	The existing action will be preserved.	Istniejąca akcja zostanie zachowana.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Skrypty tego formularza są wyłączone, ponieważ jeden z nich działał zbyt długo. Otwórz dokument ponownie, aby znów je uruchomić.
+	Cut Image	Wytnij obraz
+	Redact Image	Utajnij obraz
+	Create Link…	Utwórz łącze…
+	Recognize Text…	Rozpoznaj tekst…
 	Minimize	Zminimalizuj
 	Maximize	Zmaksymalizuj
 	Restore	Przywróć
@@ -2330,7 +2352,59 @@ animation effects	Off	Wyłączone
 # Absolute local GoToR confirmation (#1364).
 	Allow	Zezwól
 	Only allow this if you trust the source document.	Zezwól na to tylko wtedy, gdy ufasz dokumentowi źródłowemu.
+	Open in Full Screen mode?	Otworzyć w trybie pełnoekranowym?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Ten dokument prosi o otwarcie w trybie pełnoekranowym: strona wypełnia ekran i nic innego nie jest widoczne. Naciśnij Esc w dowolnej chwili, aby go opuścić.
+	Full Screen	Pełny ekran
+	Not now	Nie teraz
 	Open this local PDF?	Otworzyć ten lokalny plik PDF?
 	This document is trying to open a local file:	Ten dokument próbuje otworzyć plik lokalny:
 	Move tag earlier	Przenieś znacznik wcześniej
 	Move tag later	Przenieś znacznik później
+	Turn upside down (180°)	Obróć do góry nogami (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Etykieta 4 × 6 cali (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Przycina każdą stronę do zadrukowanego obszaru, obraca ją pionowo i dopasowuje do arkusza bez rozciągania. Jedna etykieta na arkusz.
+	Find untagged content	Znajdź nieoznaczoną zawartość
+	No untagged content was found.	Nie znaleziono nieoznaczonej zawartości.
+	Found {n} untagged content problems.	Znaleziono problemów z nieoznaczoną zawartością: {n}.
+	Tag form fields	Oznacz pola formularza
+	Mark as artifact	Oznacz jako artefakt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Usuń ten znacznik liścia z kolejności odczytu i oznacz jego bezpośrednią zawartość jako artefakt
+	Mark content as artifact	Oznacz zawartość jako artefakt
+	Word count	Liczba słów
+	Current page only	Tylko bieżąca strona
+	Exclude tagged tables	Wyklucz oznaczone tabele
+	Exclude tagged code blocks	Wyklucz oznaczone bloki kodu
+	Exclude image/OCR text	Wyklucz tekst obrazów/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Wykluczenia używają znaczników PDF. Nieoznaczone tabele i kod nadal są uwzględniane. Wykluczenie obrazów usuwa również niewidoczny tekst.
+	Words	Słowa
+	Characters	Znaki
+	Characters without spaces	Znaki bez spacji
+	Pages counted	Policzone strony
+	Some pages contain no countable text. Scanned images need OCR first.	Niektóre strony nie zawierają tekstu do policzenia. Zeskanowane obrazy wymagają najpierw OCR.
+	Some content could not be classified safely and was kept in the count.	Części treści nie udało się wiarygodnie sklasyfikować, więc pozostała uwzględniona w liczbie.
+	Counting words… {n} pages read	Liczenie słów… odczytane strony: {n}
+	Word counting stopped unexpectedly.	Liczenie słów zostało nieoczekiwanie przerwane.
+	Word count…	Liczba słów…
+@id	file.word_count	Liczba słów…
+	Standard	Standardowe
+	Mobile	Urządzenie mobilne
+	Merge image fragments	Scal fragmenty obrazów
+	Optimizing… merging image fragments	Optymalizacja… scalanie fragmentów obrazów
+	Side by side	Obok siebie
+	New file only	Tylko nowy plik
+	Old file: {name}	Stary plik: {name}
+	New file: {name}	Nowy plik: {name}
+	Print as image	Drukuj jako obraz
+	Resolution:	Rozdzielczość:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Użyj, gdy drukarka pomija tekst, cieniowanie lub przezroczystość. Wydruk nie jest już tekstem do przeszukiwania; przy druku w skali szarości obrazy są szare.
+	Crop Image	Przytnij obraz
+	Remove Crop	Usuń przycięcie
+	Trim the picture with its handles; Enter or Done applies	Przytnij obraz uchwytami; Enter lub Gotowe stosuje
+	Redaction mark appearance	Wygląd znacznika redakcji
+	Outline colour:	Kolor obrysu:
+	Fill colour:	Kolor wypełnienia:
+	Shown while the pointer is over a mark.	Widoczny, gdy wskaźnik jest nad znacznikiem.
+	Opacity:	Krycie:
+	Make properties default	Ustaw właściwości jako domyślne
+	Pages selected	Zaznaczone strony
+	Page properties	Właściwości strony

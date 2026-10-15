@@ -97,6 +97,78 @@ fn autotag_text_refuses_paint_and_does_not_modify_the_document() {
 }
 
 #[test]
+fn autotag_form_fields_writes_widget_structure_and_parent_tree() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R 6 0 R] >>".into(),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+            "<< /FT /Tx /T (name) /Kids [6 0 R] >>".into(),
+            "<< /Type /Annot /Subtype /Widget /Parent 5 0 R /Rect [20 60 120 80] >>".into(),
+        ],
+        "",
+    );
+    assert_eq!(tag_form_fields(&mut doc).unwrap(), 1);
+    let report = check(&doc, &Options { rules: [Rule::TaggedPdf, Rule::TaggedFormFields].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedPdf), Status::Passed);
+    assert_eq!(status(&report, Rule::TaggedFormFields), Status::Passed);
+    let tree = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
+    assert!(doc.get(tree).as_dict().unwrap().contains(b"ParentTree"));
+    let widget = pdfcraft_model::pages(&doc)[0].dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap()[1].as_ref().unwrap();
+    assert_eq!(doc.get(widget).as_dict().unwrap().get(b"StructParent").and_then(Object::as_int), Some(0));
+    let written = pdfcraft_cos::write_full(&doc, &pdfcraft_cos::SaveOptions::default()).unwrap();
+    let reopened = Document::open(Arc::new(written)).unwrap();
+    assert_eq!(status(&check(&reopened, &Options { rules: [Rule::TaggedFormFields].into(), pages: None }), Rule::TaggedFormFields), Status::Passed);
+}
+
+#[test]
+fn autotag_form_fields_tags_a_widget_listed_on_two_pages_once() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >>".into(),
+            "<< /Type /Pages /Kids [3 0 R 6 0 R] /Count 2 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >>".into(),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] >>".into(),
+        ],
+        "",
+    );
+    assert_eq!(tag_form_fields(&mut doc).unwrap(), 1);
+    let tree = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"StructTreeRoot").unwrap();
+    let parent_tree = doc.get(tree).as_dict().unwrap().reference(b"ParentTree").unwrap();
+    let nums = doc.get(parent_tree).as_dict().unwrap().get(b"Nums").and_then(|n| n.as_array().cloned()).unwrap();
+    assert_eq!(nums.len(), 2, "one key and one /Form element for the shared widget");
+}
+
+#[test]
+fn autotag_form_fields_extends_a_direct_existing_structure_tree() {
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> /MarkInfo << /Marked true >> /StructTreeRoot 6 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [5 0 R] /StructParents 0 >>".into(),
+            "<< /Length 0 >>\nstream\n\nendstream".into(),
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T (name) /Rect [20 60 120 80] >>".into(),
+            "<< /Type /StructTreeRoot /K 7 0 R /ParentTree 8 0 R >>".into(),
+            "<< /S /Document /P 6 0 R /K 9 0 R >>".into(),
+            "<< /Nums [0 [9 0 R]] >>".into(),
+            "<< /S /P /P 7 0 R /Pg 3 0 R /K 0 >>".into(),
+        ],
+        "",
+    );
+    assert_eq!(tag_form_fields(&mut doc).unwrap(), 1);
+    let widget = pdfcraft_model::pages(&doc)[0].dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap()[0].as_ref().unwrap();
+    assert_eq!(doc.get(widget).as_dict().unwrap().get(b"StructParent").and_then(Object::as_int), Some(1));
+    let report = check(&doc, &Options { rules: [Rule::TaggedFormFields].into(), pages: None });
+    assert_eq!(status(&report, Rule::TaggedFormFields), Status::Passed);
+    let document_object = doc.get(pdfcraft_cos::ObjRef::new(7, 0));
+    let document = document_object.as_dict().unwrap();
+    assert_eq!(document.get(b"K").and_then(Object::as_array).unwrap().len(), 2, "the existing paragraph and new form remain siblings");
+}
+
+#[test]
 fn an_untagged_document_fails_the_document_rules() {
     let doc = pdf(
         &[
@@ -527,6 +599,16 @@ fn figures_are_listed_with_their_alt_text_and_place() {
 }
 
 #[test]
+fn tag_content_lists_direct_marked_content() {
+    let doc = figures_doc();
+    let tags = tags(&doc);
+    let first = tag_content(&doc, tags[1].object).unwrap();
+    let second = tag_content(&doc, tags[2].object).unwrap();
+    assert_eq!((first[0].page, first[0].mcid, first[0].text.as_str()), (Some(0), 0, ""));
+    assert_eq!((second[0].page, second[0].mcid, second[0].text.as_str()), (Some(0), 1, ""));
+}
+
+#[test]
 fn sibling_tags_move_in_reading_order_without_changing_content() {
     let mut doc = figures_doc();
     let before: Vec<_> = tags(&doc).into_iter().map(|tag| tag.object.num).collect();
@@ -591,6 +673,95 @@ fn setting_alt_text_and_marking_decorative() {
     assert!(text.contains("/Artifact BMC") && !text.contains("/MCID 0"), "{text}");
 }
 
+#[test]
+fn marking_a_leaf_tag_as_an_artifact_preserves_appearance_and_structure_integrity() {
+    let mut doc = figures_doc();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)).unwrap();
+    assert_eq!(tags(&doc).into_iter().map(|tag| tag.object.num).collect::<Vec<_>>(), [6, 8]);
+    let c = doc.resolve(doc.get(page).as_dict().unwrap().get(b"Contents").unwrap());
+    let pdfcraft_cos::Object::Stream(c) = &*c else { panic!("one content stream") };
+    let text = String::from_utf8(c.decoded().unwrap()).unwrap();
+    assert!(text.contains("/Artifact BMC") && !text.contains("/MCID 0"), "{text}");
+    let report = check(&doc, &Options { rules: [Rule::TaggedContent, Rule::FiguresAltText].into(), pages: None });
+    assert_eq!(failed(&report), Vec::<Rule>::new(), "{:?}", report.results);
+    assert_eq!(mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(6, 0)), Err(ArtifactError::HasChildren));
+    assert_eq!(mark_tag_artifact(&mut doc, pdfcraft_cos::ObjRef::new(7, 0)), Err(ArtifactError::NotATag(7)));
+}
+
+#[test]
+fn marking_decorative_survives_a_parent_tree_with_an_unpaired_key() {
+    // A trailing key without a value, matching the page's StructParents (#1809), and the same
+    // with no valid pair at all.
+    let tree = |nums: &str| pdf(&[format!("<< /Nums {nums} >>")], "").get(pdfcraft_cos::ObjRef::new(1, 0)).as_ref().clone();
+    for (nums, cleared) in [("[0 [7 0 R 8 0 R] 0]", "[0 [null 8 0 R] 0]"), ("[0]", "[0]")] {
+        let mut doc = figures_doc();
+        let pt = pdfcraft_cos::ObjRef::new(9, 0);
+        doc.set(pt, tree(nums));
+        let f = figures(&doc);
+        mark_decorative(&mut doc, f[0].obj).unwrap();
+        assert_eq!(figures(&doc).len(), 1, "{nums}");
+        // The pair is cleared and the unpaired key is kept as it was.
+        assert_eq!(*doc.get(pt), tree(cleared), "{nums}");
+    }
+}
+
+/// `figures_doc` with its property lists named in the page resources (one inline, one indirect)
+/// instead of written inline in the content.
+fn named_figures_doc() -> Document {
+    pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R /MarkInfo << /Marked true >> /StructTreeRoot 5 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /StructParents 0 \
+             /Resources << /XObject << /Im 10 0 R >> /Properties << /P0 << /MCID 0 >> /P1 11 0 R /Other << /Note (kept) >> >> >> >>"
+                .into(),
+            stream(
+                "/Figure /P0 BDC q 40 0 0 20 10 150 cm /Im Do Q EMC \
+                 /Photo /P1 BDC 100 100 50 30 re f EMC",
+            ),
+            "<< /Type /StructTreeRoot /K 6 0 R /ParentTree 9 0 R /RoleMap << /Photo /Figure >> >>".into(),
+            "<< /S /Document /P 5 0 R /K [7 0 R 8 0 R] >>".into(),
+            "<< /S /Figure /P 6 0 R /Pg 3 0 R /K 0 >>".into(),
+            "<< /S /Photo /P 6 0 R /Pg 3 0 R /Alt (A bar) /K 1 >>".into(),
+            "<< /Nums [0 [7 0 R 8 0 R]] >>".into(),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+                .into(),
+            "<< /MCID 1 >>".into(),
+        ],
+        "",
+    )
+}
+
+#[test]
+fn named_property_lists_are_found_and_marked_decorative_like_inline_ones() {
+    let (mut inline, mut named) = (figures_doc(), named_figures_doc());
+    let place = |doc: &Document| figures(doc).into_iter().map(|f| (f.obj, f.page, f.alt, f.bbox)).collect::<Vec<_>>();
+    assert_eq!(place(&named), place(&inline), "both figures, placed where their content is drawn");
+    for doc in [&mut inline, &mut named] {
+        mark_decorative(doc, pdfcraft_cos::ObjRef::new(8, 0)).unwrap();
+        let left = figures(doc);
+        assert_eq!((left.len(), left[0].obj.num, left[0].bbox), (1, 7, Some([10.0, 150.0, 50.0, 170.0])));
+        let pages = pdfcraft_model::pages(doc);
+        let c = doc.resolve(pages[0].dict.get(b"Contents").unwrap());
+        let Object::Stream(c) = &*c else { panic!("one content stream") };
+        let text = String::from_utf8(c.decoded().unwrap()).unwrap();
+        assert!(text.contains("/Artifact BMC") && !text.contains("/P1") && !text.contains("/MCID 1"), "{text}");
+        assert!(text.contains("/Im Do"), "the drawing itself stays: {text}");
+        let nums = doc.get(pdfcraft_cos::ObjRef::new(9, 0)).as_dict().and_then(|d| d.get(b"Nums").cloned());
+        assert_eq!(
+            nums,
+            Some(Object::Array(vec![Object::Int(0), Object::Array(vec![Object::Ref(pdfcraft_cos::ObjRef::new(7, 0)), Object::Null])])),
+            "the parent tree no longer points MCID 1 at the removed figure"
+        );
+        let r = check(doc, &Options { rules: [Rule::FiguresAltText, Rule::TaggedContent].into(), pages: None });
+        assert_eq!(r.result(Rule::TaggedContent).unwrap().status, Status::Passed, "{:?}", r.results);
+    }
+    let props = pdfcraft_model::pages(&named)[0].dict.get(b"Resources").and_then(|r| named.resolve(r).as_dict().cloned());
+    let props = props.and_then(|r| r.get(b"Properties").and_then(|p| named.resolve(p).as_dict().cloned())).unwrap();
+    assert!(props.contains(b"P0") && props.contains(b"P1") && props.contains(b"Other"), "resources are left as they were");
+}
+
 fn ref_(n: u32) -> Option<pdfcraft_cos::ObjRef> {
     Some(pdfcraft_cos::ObjRef::new(n, 0))
 }
@@ -636,6 +807,114 @@ fn headings_are_found_with_their_levels_titles_and_pages() {
             ("Sec A".to_string(), 2, 0, ref_(13)),
             ("Override".to_string(), 2, 1, ref_(14)),
             ("AB".to_string(), 3, 1, ref_(15)),
+        ]
+    );
+}
+
+#[test]
+fn tag_content_reads_the_text_of_each_marked_content_reference() {
+    let doc = pdf(&headings_doc(), "");
+    let items = |n| tag_content(&doc, ref_(n).unwrap()).unwrap().into_iter().map(|i| (i.page, i.mcid, i.text)).collect::<Vec<_>>();
+    assert_eq!(items(12), [(Some(0), 0, "Chapter One".to_string())]);
+    assert_eq!(items(13), [(Some(0), 2, "Sec A".to_string())]);
+    assert_eq!(items(15), [(Some(1), 1, "AB".to_string())]);
+}
+
+/// Helvetica advances (standard 14 metrics, per 1000 em) of the characters the tests below draw.
+fn helvetica_width(c: char) -> f64 {
+    match c {
+        'C' | 'w' => 722.0,
+        'P' => 667.0,
+        'T' | 'F' => 611.0,
+        'v' => 500.0,
+        'r' => 333.0,
+        't' | ' ' => 278.0,
+        'i' => 222.0,
+        _ => 556.0, // a e h o p
+    }
+}
+
+/// `text` drawn one glyph at a time from (72, y), each glyph moved into place with its own `Td`,
+/// as Chromium writes text. With `spaces`, the space is drawn too; without, the next glyph is
+/// just moved past it.
+fn glyph_by_glyph(text: &str, size: f64, y: f64, spaces: bool) -> String {
+    let mut ops = format!("BT /F1 {size} Tf 72 {y} Td");
+    let mut step = 0.0;
+    for c in text.chars() {
+        if c == ' ' && !spaces {
+            step += helvetica_width(c) / 1000.0 * size;
+            continue;
+        }
+        ops.push_str(&format!(" {step:.3} 0 Td ({c}) Tj"));
+        step = helvetica_width(c) / 1000.0 * size;
+    }
+    ops + " ET"
+}
+
+/// `text` drawn one glyph at a time with `/F1 1 Tf` and a `Tm` per glyph scaled to `size`; the
+/// space is skipped over, not drawn.
+fn glyph_by_tm(text: &str, size: f64, y: f64) -> String {
+    let mut ops = "BT /F1 1 Tf".to_string();
+    let mut x = 72.0;
+    for c in text.chars() {
+        if c != ' ' {
+            ops.push_str(&format!(" {size} 0 0 {size} {x:.3} {y} Tm ({c}) Tj"));
+        }
+        x += helvetica_width(c) / 1000.0 * size;
+    }
+    ops + " ET"
+}
+
+/// One tagged page whose H1 headings show `contents` (one marked-content sequence each).
+fn heading_page(contents: &[String]) -> Document {
+    let marked: Vec<String> = contents.iter().enumerate().map(|(i, c)| format!("/H1 << /MCID {i} >> BDC {c} EMC")).collect();
+    let kids: Vec<String> = (0..contents.len()).map(|i| format!("{} 0 R", 7 + i)).collect();
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /StructTreeRoot 5 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 6 0 R >> >> >>".into(),
+        stream(&marked.join("\n")),
+        format!("<< /Type /StructTreeRoot /K [{}] >>", kids.join(" ")),
+        FONT.into(),
+    ];
+    objs.extend((0..contents.len()).map(|i| format!("<< /S /H1 /Pg 3 0 R /K {i} >>")));
+    pdf(&objs, "")
+}
+
+/// Chromium (Skia) places each glyph with its own `Td`: a heading must read as its words, not as
+/// "C h a p t e r T w o", whether the space is drawn or only skipped over. A heading set with a
+/// negative font size or `Tz` keeps its words too.
+#[test]
+fn headings_drawn_glyph_by_glyph_keep_their_words() {
+    let doc = heading_page(&[
+        "BT /F1 20 Tf 72 700 Td (Chapter One) Tj ET".into(),
+        glyph_by_glyph("Chapter Two", 20.0, 650.0, true),
+        glyph_by_glyph("Chapter Three", 20.0, 600.0, false),
+        // Each glyph placed with its own Tm, at font size 1 scaled by the matrix.
+        glyph_by_tm("Part Five", 18.0, 550.0),
+        // Kerning inside a word, then a word space as a TJ adjustment, then a wrapped line.
+        "BT /F1 16 Tf 72 450 Td [(Ch) 40 (apter) -350 (Four)] TJ 0 -20 Td (continued) Tj ET".into(),
+        // A negative font size runs the glyphs backwards in text space: alone, in a mirrored
+        // text matrix (upright on the page), with a word space as a TJ adjustment, and the same
+        // with a negative horizontal scale instead (reset after, as Tz outlives the text object).
+        "BT /F1 -20 Tf 72 380 Td (Chapter Six) Tj ET".into(),
+        "BT /F1 -20 Tf -1 0 0 -1 300 330 Tm (Chapter Seven) Tj ET".into(),
+        "BT /F1 -20 Tf 72 280 Td [(Chapter) -300 (Eight)] TJ ET".into(),
+        "BT /F1 20 Tf -100 Tz 300 230 Td [(Chapter) -300 (Nine)] TJ ET 100 Tz".into(),
+    ]);
+    let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
+    assert_eq!(
+        titles,
+        [
+            "Chapter One",
+            "Chapter Two",
+            "Chapter Three",
+            "Part Five",
+            "Chapter Four continued",
+            "Chapter Six",
+            "Chapter Seven",
+            "Chapter Eight",
+            "Chapter Nine"
         ]
     );
 }
@@ -735,4 +1014,12 @@ fn a_nested_finding_says_itself() {
     assert_eq!(f.said(&in_english), f.message, "saying it in English is the message");
     // Both wordings are translated, each on its own, and the document's words are left alone.
     assert_eq!(f.said(&|w: &str| format!("«{w}»")), "«Table element on page 3: «rows have between 1 and 2 columns»»");
+}
+
+/// Horizontal stretching must not raise the vertical line-break threshold.
+#[test]
+fn horizontally_scaled_wrapped_heading_keeps_a_space_between_lines() {
+    let doc = heading_page(&["BT /F1 20 Tf 400 Tz 72 700 Td (I) Tj 0 -30 Td (Overview) Tj ET".into()]);
+    let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
+    assert_eq!(titles, ["I Overview"]);
 }

@@ -27,7 +27,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
 
 fn marks(h: &Harness<'static, PdfCraftApp>) -> Vec<MarkKind> {
     let s = h.state();
-    s.session.get(s.views[0].id).unwrap().marks.clone()
+    s.session.get(s.views[0].id).unwrap().marks().to_vec()
 }
 
 #[test]

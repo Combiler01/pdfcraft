@@ -32,6 +32,7 @@
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Автоматичний режим використовує розмір тексту із системних налаштувань. Сторінки завжди відображаються в повній роздільній здатності екрана.
 	Identity	Особисті дані
 	Name on new comments	Ім’я в нових коментарях
+	Hide hover previews for highlights without comment text	Приховувати спливний перегляд для виділень без тексту коментаря
 	Open…	Відкрити…
 	Open Recent	Відкрити нещодавні
 	Pin folder to Home…	Закріпити теку на головній…
@@ -368,6 +369,7 @@
 	Split	Розділити
 	More	Більше
 	Set page boxes	Задати межі сторінок
+	Set page transitions	Задати переходи між сторінками
 	Page labels	Позначки сторінок
 	Page transitions	Переходи між сторінками
 	Add comments	Додати коментарі
@@ -580,6 +582,7 @@
 	Remove unused objects and merge identical ones	Видалити невикористані об’єкти й об’єднати однакові
 	Audit space usage…	Аналіз використання місця…
 	Space Audit	Аналіз місця
+	What takes up the space in this file, by kind of content.	Що займає місце в цьому файлі, за типом вмісту.
 	Bytes	Байти
 	Content Streams	Потоки вмісту
 	X Object Forms	Форми XObject
@@ -853,6 +856,12 @@
 	Windows store  ·  	Сховище Windows  ·  
 	Issued by: 	Видавець: 
 	, Expires: 	, Дійсний до: 
+	Digitally signed by	Цифровий підпис
+	DN: 	DN: 
+	Reason: 	Причина: 
+	Location: 	Місце: 
+	Date: 	Дата: 
+	The labels are in English: the signature's font can't draw them in this language.	Мітки англійською: шрифт підпису не може відобразити їх цією мовою.
 	No digital IDs yet.	Ще немає цифрових посвідчень.
 	Configure New Digital ID	Налаштувати нове цифрове посвідчення
 	Remove "{name}" from this list? The file itself is not deleted.	Прибрати «{name}» з цього списку? Сам файл не видаляється.
@@ -1144,6 +1153,7 @@
 	Redaction code:	Код вилучення:
 	Font:	Шрифт:
 	Font size:	Розмір шрифту:
+	Font size	Розмір шрифту
 	Auto-size text to fit redaction region	Автоматично добирати розмір тексту до області вилучення
 	Font colour:	Колір шрифту:
 	Repeat overlay text	Повторювати накладений текст
@@ -1284,6 +1294,7 @@
 	Copy text	Копіювати текст
 	Properties…	Властивості…
 	Make Current Properties Default	Зробити поточні властивості типовими
+	Make Properties Default	Зробити властивості типовими
 	More options	Додаткові параметри
 	Sort by	Сортувати за
 	Author	Автор
@@ -1405,6 +1416,9 @@
 	Sort comments by:	Сортувати коментарі за:
 	Create PDF Comment Summary	Створити PDF зі зведенням коментарів
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Повернутися до попередньої збереженої версії «{name}»? Після цього зміни, внесені відтоді, неможливо буде повернути.
+	Save over the changed file?	Зберегти поверх зміненого файлу?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	«{name}» змінено на диску після відкриття або останнього збереження. Збереження зараз замінить ту новішу версію цією.
+	Save anyway	Усе одно зберегти
 	Number pages	Пронумерувати сторінки
 	Style	Стиль
 	None (prefix only)	Немає (лише префікс)
@@ -1601,6 +1615,8 @@
 	Sent to {printer}	Надіслано на {printer}
 	Sent to {printer}: {msg}	Надіслано на {printer}: {msg}
 	Looking for printers…	Пошук принтерів…
+	Sending sheet {s} of {n} to {printer}…	Надсилання аркуша {s} із {n} на {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Принтери не знайдено. Перевірте, що принтер установлено, а диспетчер друку працює, і знову відкрийте «Друк».
 	Sending to {printer}…	Надсилання на {printer}…
 	Choose a folder for the searchable files	Виберіть теку для файлів із пошуком
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файли об’єднуються згори донизу. Залиште «Сторінки» порожнім, щоб узяти всі сторінки.
@@ -2264,6 +2280,8 @@ key	Space	Пробіл
 	Switch to List view to change the pages it takes.	Перейдіть до вигляду списком, щоб змінити, які сторінки взяти.
 	Expand all	Розгорнути всі
 	Collapse all	Згорнути всі
+	Collapse all pages	Згорнути всі сторінки
+	Expand all pages	Розгорнути всі сторінки
 	Remove page	Видалити сторінку
 	Remove {n} pages	Видалити сторінки: {n}
 
@@ -2282,14 +2300,14 @@ key	Space	Пробіл
 	Printer paper and scaling may differ. Check driver settings.	Папір і масштаб принтера можуть відрізнятися. Перевірте налаштування драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Масштаб креслення змінюється. Для друку в початковому масштабі виберіть Фактичний розмір.
 	Reload documents when their files change on disk	Перезавантажувати документи, коли їхні файли змінюються на диску
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Цей файл змінено на диску. Перезавантажте його, щоб побачити нову версію; незбережені зміни буде втрачено.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Цей файл змінено на диску. «Перезавантажити» покаже нову версію й відкине незбережені зміни; «Зберегти» замінить її цією версією.
 	Reload	Перезавантажити
 	Couldn't reload {name}: {e}	Не вдалося перезавантажити {name}: {e}
 	Select page {label}	Вибрати сторінку {label}
 	Rotate page {label} counterclockwise	Повернути сторінку {label} проти годинникової стрілки
 	Rotate page {label} clockwise	Повернути сторінку {label} за годинниковою стрілкою
 	Delete page {label}	Видалити сторінку {label}
-	Mouse wheel scroll speed	Швидкість прокручування коліщатком миші
+	Scroll speed (mouse wheel and arrow keys)	Швидкість прокручування (коліщатко миші та клавіші зі стрілками)
 scroll speed	Slow	Повільна
 scroll speed	Normal	Звичайна
 scroll speed	Fast	Швидка
@@ -2363,6 +2381,10 @@ animation effects	Off	Вимкнено
 	The linked PDF opened, but its named destination was not applied.	Пов’язаний PDF відкрито, але його іменоване призначення не застосовано.
 	The linked PDF opened, but its page destination was out of range.	Пов’язаний PDF відкрито, але сторінка призначення поза межами діапазону.
 	Local cross-PDF links require the desktop app	Локальні посилання між PDF працюють лише в настільному застосунку
+	Cut Image	Вирізати зображення
+	Redact Image	Вилучити вміст зображення
+	Create Link…	Створити посилання…
+	Recognize Text…	Розпізнати текст…
 	Minimize	Згорнути
 	Maximize	Розгорнути
 	Restore	Відновити
@@ -2372,7 +2394,59 @@ animation effects	Off	Вимкнено
 # Absolute local GoToR confirmation (#1364).
 	Allow	Дозволити
 	Only allow this if you trust the source document.	Дозволяйте це лише тоді, коли довіряєте вихідному документу.
+	Open in Full Screen mode?	Відкрити в повноекранному режимі?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Цей документ просить відкрити його в повноекранному режимі: сторінка заповнює екран, і більше нічого не показано. Натисніть Esc будь-коли, щоб вийти.
+	Full Screen	Повний екран
+	Not now	Не зараз
 	Open this local PDF?	Відкрити цей локальний PDF?
 	This document is trying to open a local file:	Цей документ намагається відкрити локальний файл:
 	Move tag earlier	Перемістити тег раніше
 	Move tag later	Перемістити тег пізніше
+	Turn upside down (180°)	Перевернути (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Етикетка 4 × 6 дюйма (101,6 × 152,4 мм)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Обрізає кожну сторінку за надрукованою областю, розвертає її прямо та вписує в аркуш без спотворень. Одна етикетка на аркуш.
+	Find untagged content	Знайти нетегований вміст
+	No untagged content was found.	Нетегованого вмісту не знайдено.
+	Found {n} untagged content problems.	Знайдено проблем із нетегованим вмістом: {n}.
+	Tag form fields	Позначити поля форми
+	Mark as artifact	Позначити як артефакт
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Вилучіть цей кінцевий тег із порядку читання та позначте його безпосередній вміст як артефакт
+	Mark content as artifact	Позначити вміст як артефакт
+	Word count	Кількість слів
+	Current page only	Лише поточна сторінка
+	Exclude tagged tables	Виключити таблиці з тегами
+	Exclude tagged code blocks	Виключити блоки коду з тегами
+	Exclude image/OCR text	Виключити текст зображень та OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Виключення використовують теги PDF. Таблиці й код без тегів залишаються в підрахунку. Виключення зображень також видаляє невидимий текст.
+	Words	Слова
+	Characters	Символи
+	Characters without spaces	Символи без пробілів
+	Pages counted	Пораховані сторінки
+	Some pages contain no countable text. Scanned images need OCR first.	Деякі сторінки не містять тексту для підрахунку. Для відсканованих зображень спочатку потрібне OCR.
+	Some content could not be classified safely and was kept in the count.	Частину вмісту не вдалося надійно класифікувати, тому вона залишилася в підрахунку.
+	Counting words… {n} pages read	Підрахунок слів… прочитано сторінок: {n}
+	Word counting stopped unexpectedly.	Підрахунок слів несподівано зупинився.
+	Word count…	Кількість слів…
+@id	file.word_count	Кількість слів…
+	Standard	Стандартні
+	Mobile	Мобільні пристрої
+	Merge image fragments	Об’єднувати фрагменти зображень
+	Optimizing… merging image fragments	Оптимізація… об’єднання фрагментів зображень
+	Side by side	Поруч
+	New file only	Лише новий файл
+	Old file: {name}	Старий файл: {name}
+	New file: {name}	Новий файл: {name}
+	Print as image	Друкувати як зображення
+	Resolution:	Роздільність:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Використовуйте, коли принтер пропускає текст, заливки або прозорість. Відбиток більше не текст із пошуком; під час друку у відтінках сірого зображення сірі.
+	Crop Image	Обрізати зображення
+	Remove Crop	Прибрати обрізання
+	Trim the picture with its handles; Enter or Done applies	Обріжте зображення за маркери; Enter або «Готово» застосовує
+	Redaction mark appearance	Вигляд позначки приховування
+	Outline colour:	Колір контуру:
+	Fill colour:	Колір заливки:
+	Shown while the pointer is over a mark.	Показується, поки вказівник над позначкою.
+	Opacity:	Непрозорість:
+	Make properties default	Зробити властивості типовими
+	Pages selected	Вибрані сторінки
+	Page properties	Властивості сторінки

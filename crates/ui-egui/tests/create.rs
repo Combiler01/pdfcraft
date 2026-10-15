@@ -69,12 +69,36 @@ fn opening_images_and_text_converts_them_to_new_pdfs() {
     assert!(app.open_bytes("junk.png", None, b"\x89PNG\r\n\x1a\nnot really".to_vec()).is_err());
 }
 
+struct ReduceDir(std::path::PathBuf);
+impl ReduceDir {
+    fn new() -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        for _ in 0..128 {
+            let path = std::env::temp_dir().join(format!("pdfcraft-reduce-test-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Self(path),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("creating Reduce test directory: {error}"),
+            }
+        }
+        panic!("no unused Reduce test directory after 128 attempts");
+    }
+}
+impl Drop for ReduceDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// Open `name` and run Reduce File Size on it, saving to `out` without a dialog.
 fn reduce(name: &'static str, bytes: Vec<u8>, out: &std::path::Path) -> egui_kittest::Harness<'static, PdfCraftApp> {
     let out2 = out.to_path_buf();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        // Keep metadata identical: changing ModDate can make a compact PDF one byte smaller.
+        app.session = std::mem::take(&mut app.session).with_clock(|| 1_700_000_000);
         app.open_bytes(name, None, bytes).unwrap();
         app.save_override = Some(out2.to_string_lossy().into_owned());
         app
@@ -105,9 +129,8 @@ fn reduce_file_size_writes_a_compact_copy() {
         enc.set_depth(png::BitDepth::Eight);
         enc.write_header().unwrap().write_image_data(&px).unwrap();
     }
-    let dir = std::env::temp_dir().join(format!("pdfcraft-reduce-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let out = dir.join("reduced.pdf");
+    let dir = ReduceDir::new();
+    let out = dir.0.join("reduced.pdf");
     let h = reduce("photo.png", photo, &out);
     let bytes = std::fs::read(&out).unwrap();
     assert!(bytes.starts_with(b"%PDF-"));
@@ -119,9 +142,8 @@ fn reduce_file_size_writes_a_compact_copy() {
 #[test]
 fn reduce_file_size_saves_nothing_when_the_file_is_already_small() {
     use egui_kittest::kittest::Queryable;
-    let dir = std::env::temp_dir().join(format!("pdfcraft-reduce-small-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let out = dir.join("reduced.pdf");
+    let dir = ReduceDir::new();
+    let out = dir.0.join("reduced.pdf");
     // A new text PDF is already compact: a copy would be no smaller (#490).
     let h = reduce("notes.txt", "lorem ipsum ".repeat(500).into_bytes(), &out);
     assert!(!out.exists(), "no copy was written");
@@ -188,6 +210,34 @@ fn the_pdf_optimizer_dialog_saves_an_optimized_copy() {
     assert!(h.state().progress_notice.is_none(), "the progress card is gone");
     assert!(std::fs::read(&out).unwrap().starts_with(b"%PDF-"));
     assert_eq!(h.state().dialog, None);
+}
+
+#[test]
+fn the_pdf_optimizer_dialog_picks_a_preset() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use pdfcraft_engine::optimize::Preset;
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("notes.txt", None, b"lorem ipsum".to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("optimize.advanced"));
+    h.run_steps(2);
+    assert_eq!(Preset::of(&h.state().optimize_draft.settings), Some(Preset::Standard));
+    h.get_by_label("Merge image fragments");
+    h.get_by_value("Standard").click();
+    h.run_steps(4);
+    h.get_by_label("Mobile").click();
+    h.run_steps(2);
+    assert_eq!(h.state().optimize_draft.settings, Preset::Mobile.settings(), "Mobile chosen");
+    // Changing an option makes the settings custom.
+    h.get_by_label("Merge image fragments").click();
+    h.run_steps(2);
+    assert!(!h.state().optimize_draft.settings.merge_fragments);
+    h.get_by_value("Custom");
 }
 
 fn mixed_files(app: &PdfCraftApp) -> Vec<(String, Vec<u8>)> {

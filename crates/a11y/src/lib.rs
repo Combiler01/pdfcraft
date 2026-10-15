@@ -14,17 +14,19 @@ use pdfcraft_cos::Document;
 
 mod alt;
 mod autotag;
+mod autotag_fields;
 mod content;
 mod headings;
 mod report;
 mod structure;
 mod tags;
 
-pub use alt::{AltError, Figure, figures, mark_decorative, set_alt};
+pub use alt::{AltError, ArtifactError, Figure, figures, mark_decorative, mark_tag_artifact, set_alt};
 pub use autotag::{AutoTagError, AutoTagResult, autotag_text};
+pub use autotag_fields::tag_form_fields;
 pub use headings::{Heading, headings};
 pub use report::{REPORT_WORDS, report_html};
-pub use tags::{TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tags};
+pub use tags::{TagContentItem, TagError, TagInfo, TagPlacement, TagProperty, move_tag, set_tag_property, tag_content, tags};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Category {

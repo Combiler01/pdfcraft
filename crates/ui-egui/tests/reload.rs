@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{By, Queryable};
 use pdfcraft_ui_egui::{PdfCraftApp, SaveTarget};
 
 /// An `n`-page document with a proper xref table; page `i` shows "Page i+1", and with `notes`
@@ -77,6 +77,11 @@ fn harness(path: &str) -> Harness<'static, PdfCraftApp> {
     let path = path.to_owned();
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        // The labels looked for are English, whatever the machine's language.
+        app.set_option("language", "en").unwrap();
+        // The labels below are English whatever the developer's system language is.
+        app.set_option("language", "en").unwrap();
         app.run_inline = true;
         app.open_path(&path);
         app
@@ -116,6 +121,92 @@ fn a_rebuilt_file_reloads_in_place_keeping_the_page_and_zoom() {
     assert_eq!(pages(&h), 4, "the new version shows");
     assert_eq!((app.views.len(), app.views[0].id), (1, id), "in the same tab");
     assert_eq!((app.views[0].current, app.views[0].zoom), (2, 1.5), "at the same page and zoom");
+}
+
+#[test]
+fn a_watched_label_replacement_keeps_the_display_mode_and_focused_page() {
+    use pdfcraft_engine::{Edit, LabelStyle, Session};
+    use pdfcraft_ui_egui::canvas::display_token;
+    use std::sync::Arc;
+
+    let labelled = |ranges: &[(usize, usize, LabelStyle)]| {
+        let mut source = Session::new().with_clock(|| 1_700_000_000);
+        let id = source.open("labels.pdf", None, Arc::new(fixture(5)), None).unwrap();
+        for &(from, to, style) in ranges {
+            source.apply(id, Edit::NumberPages { from, to, style, prefix: String::new(), first: 1 }).unwrap();
+        }
+        source.save_bytes(id).unwrap()
+    };
+    let original = labelled(&[(0, 1, LabelStyle::LowerRoman), (2, 4, LabelStyle::Decimal)]);
+    let replacement = labelled(&[(0, 4, LabelStyle::LowerRoman)]);
+    for display in ["single", "continuous"] {
+        let file = TempPdf::new(&format!("focused-label-{display}"), &original);
+        let mut h = harness(&file.path);
+        let id = h.state().views[0].id;
+        h.state_mut().set_option("layout", display).unwrap();
+        h.state_mut().set_option("zoom", "100").unwrap();
+        h.state_mut().set_option("page", "4").unwrap();
+        h.run_steps(3);
+        let view = &h.state().views[0];
+        assert_eq!((view.current, display_token(view.layout, view.continuous())), (3, display));
+        let doc = h.state().session.get(id).unwrap();
+        assert_eq!(doc.bytes, original);
+        assert!(!doc.dirty);
+        assert_eq!((doc.can_undo(), doc.can_redo()), (None, None));
+        assert!(h.state_mut().execute("view.focus_page_input"));
+        h.run_steps(3);
+        h.get(By::new().role(egui::accesskit::Role::TextInput).value("2"));
+        let editor = h.ctx.memory(|m| m.focused()).expect("the page editor is focused");
+
+        // A build atomically publishes a whole, clean PDF. The real watcher detects it.
+        let next = file.dir.join("next.pdf");
+        std::fs::write(&next, replacement.as_slice()).unwrap();
+        let published = std::fs::File::options().write(true).open(&next).unwrap();
+        published.set_modified(SystemTime::now() + Duration::from_secs(60)).unwrap();
+        drop(published);
+        std::fs::rename(next, &file.path).unwrap();
+        for _ in 0..8 {
+            h.run_steps(1);
+            if h.state().session.get(id).unwrap().bytes == replacement {
+                break;
+            }
+        }
+        h.run_steps(2);
+        let app = h.state();
+        let view = &app.views[0];
+        let doc = app.session.get(id).unwrap();
+        assert_eq!((app.views.len(), app.active, view.id), (1, Some(0), id));
+        assert_eq!(doc.bytes, replacement, "the watcher loaded the replacement before checking navigation");
+        assert_eq!((doc.info.pages.len(), doc.info.pages[3].label.as_str()), (5, "iv"));
+        // First causal negative: a single-page reader must not become a continuous reader.
+        assert_eq!((view.current, display_token(view.layout, view.continuous())), (3, display), "reload retains the physical page and display mode");
+        assert_eq!(view.zoom, 1.0);
+        assert_eq!(view.page_input, "iv");
+        assert_eq!(h.ctx.memory(|m| m.focused()), Some(editor));
+        h.get(By::new().role(egui::accesskit::Role::TextInput).value("iv"));
+
+        // Keep the replacement editor's selection and then its caret, without re-focusing it.
+        h.event(egui::Event::Text("2".into()));
+        h.run_steps(2);
+        assert_eq!((h.state().views[0].current, h.state().views[0].page_input.as_str()), (3, "2"));
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(1);
+        assert_eq!(h.state().views[0].page_input, "2x");
+        h.key_press(egui::Key::Backspace);
+        h.run_steps(1);
+        assert_eq!(h.state().views[0].page_input, "2");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        let app = h.state();
+        assert_eq!((app.views[0].id, app.views[0].current, app.views[0].page_input.as_str()), (id, 1, "ii"));
+        let doc = app.session.get(id).unwrap();
+        assert_eq!(doc.path.as_deref(), Some(file.path.as_str()));
+        assert!(!doc.dirty);
+        assert_eq!((doc.can_undo(), doc.can_redo()), (None, None));
+        assert_eq!(doc.bytes, replacement);
+        assert_eq!(app.session.save_bytes(id).unwrap(), replacement);
+        assert_eq!(std::fs::read(&file.path).unwrap(), replacement.as_ref().clone());
+    }
 }
 
 #[test]
@@ -203,4 +294,75 @@ fn a_shorter_new_version_drops_what_pointed_into_the_old_one() {
     assert_eq!(pages(&h), 1);
     assert_eq!(view.current, 0, "the page is clamped");
     assert!(view.selected.is_empty() && view.comments.selected.is_none(), "no selection points past the new version");
+}
+
+/// Save asks before writing over a version of the file the document did not come from (#2166):
+/// something else wrote it since the open or the last save. Cancel keeps the file on disk;
+/// Save anyway replaces it, and the next Save does not ask.
+#[test]
+fn saving_over_a_file_changed_by_something_else_asks_first() {
+    let file = TempPdf::new("overwrite", &fixture(2));
+    let mut h = harness(&file.path);
+    rotate_first_page(&mut h);
+    file.rebuild(&fixture(4));
+    h.run_steps(3);
+    h.get_by_label_contains("This file changed on disk");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace), "not written yet");
+    h.run_steps(2);
+    h.get_by_label("Save over the changed file?");
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(std::fs::read(&file.path).unwrap(), fixture(4), "Cancel keeps the newer file");
+    assert!(dirty(&h) && h.state().pending_overwrite.is_none());
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    h.run_steps(2);
+    h.get_by_label("Save anyway").click();
+    h.run_steps(3);
+    assert!(!dirty(&h), "written");
+    assert_ne!(std::fs::read(&file.path).unwrap(), fixture(4));
+    assert_eq!(pages(&h), 2, "the document, not the file, is what is shown");
+    // Our own write is the version the document came from now.
+    rotate_first_page(&mut h);
+    assert!(h.state_mut().save_active(SaveTarget::InPlace), "written at once");
+}
+
+/// With the watcher off nothing notices the change until Save looks at the file.
+#[test]
+fn saving_checks_the_file_with_the_watcher_off_too() {
+    let file = TempPdf::new("overwrite-unwatched", &fixture(2));
+    let path = file.path.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.run_inline = true;
+        app.reload_changed_files = false;
+        app.open_path(&path);
+        app
+    });
+    h.run_steps(4);
+    rotate_first_page(&mut h);
+    file.rebuild(&fixture(4));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("This file changed on disk").is_none(), "nothing watched");
+    assert!(!h.state_mut().save_active(SaveTarget::InPlace));
+    h.run_steps(2);
+    h.get_by_label("Save over the changed file?");
+}
+
+/// One file, one tab (#2166): opening a file that is open already brings its tab forward,
+/// however its path is spelled.
+#[test]
+fn opening_a_file_that_is_open_focuses_its_tab() {
+    let file = TempPdf::new("twice", &fixture(2));
+    let mut h = harness(&file.path);
+    let id = h.state().views[0].id;
+    h.state_mut().open_bytes("other.pdf", None, fixture(1)).unwrap();
+    h.run_steps(2);
+    assert_eq!((h.state().views.len(), h.state().active), (2, Some(1)));
+    let spelled = file.dir.join(".").join("thesis.pdf").to_string_lossy().into_owned();
+    assert_ne!(spelled, file.path);
+    h.state_mut().open_path(&spelled);
+    h.run_steps(2);
+    let app = h.state();
+    assert_eq!((app.views.len(), app.active, app.views[0].id), (2, Some(0), id), "focused, not opened again");
 }

@@ -1,5 +1,6 @@
 //! The Print dialog in the real shell (egui_kittest): settings, preview sheets, Save as PDF.
 
+use egui::accesskit::Role;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 use pdfcraft_ui_egui::{Dialog, PdfCraftApp};
@@ -277,6 +278,11 @@ fn printers_listed_in_the_background_preselect_the_default_unless_one_was_picked
     assert_eq!(h.state().dialog, Some(Dialog::Print), "the dialog doesn't wait for the printers");
     assert!(h.state().print_draft.printers_loading);
     assert_eq!(h.state().print_draft.printer, None);
+    // Nothing is known yet (#160): the dialog says it is looking, and Print waits instead of
+    // saving a PDF.
+    h.get_by_value("Looking for printers…");
+    assert!(h.get_by_role_and_label(Role::Button, "Print").accesskit_node().is_disabled(), "Print waits for the list");
+    assert!(h.query_by_label("Save as PDF").is_none(), "not offered as the choice while looking");
     drop(hold);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
@@ -372,4 +378,49 @@ fn a_printer_without_two_sided_printing_points_to_its_properties() {
     h.state_mut().print_draft.printer = Some("Office PS".into());
     h.run_steps(2);
     h.get_by_label_contains(note);
+}
+
+/// Print as image (Acrobat's Advanced Print Setup) is a choice in the Print dialog's Advanced
+/// section: the saved print-ready PDF carries the page as a picture, no text.
+#[test]
+fn print_as_image_is_an_advanced_choice_that_saves_pictures() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("print.dialog"));
+    h.run_steps(3);
+    h.get_by_label("Advanced".to_uppercase().as_str()).click();
+    h.run_steps(2);
+    h.get_by_label("Print as image").click();
+    h.run_steps(2);
+    assert!(h.state().print_draft.as_image);
+    let out = std::env::temp_dir().join(format!("pdfcraft-print-image-test-{}.pdf", std::process::id()));
+    h.state_mut().save_override = Some(out.to_string_lossy().into_owned());
+    h.state_mut().print_draft.printer = None;
+    h.run_steps(1);
+    h.get_by_label("Save as PDF").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog, None);
+    let bytes = std::fs::read(&out).expect("saved");
+    let doc = pdfcraft_cos::Document::open(std::sync::Arc::new(bytes)).unwrap();
+    assert_eq!(pdfcraft_model::pages(&doc).len(), 1);
+    let pictures =
+        doc.scan_objects().filter(|(_, o)| matches!(&**o, pdfcraft_cos::Object::Stream(st) if st.dict.name(b"Subtype") == Some(b"Image"))).count();
+    assert_eq!(pictures, 1, "the page is one picture");
+    let _ = std::fs::remove_file(out);
+}
+
+/// The spooler answering with no printers at all says so (#160), and Save as PDF still works.
+#[test]
+fn an_empty_printer_list_says_none_were_found() {
+    use std::sync::Arc;
+    let mut h = harness();
+    h.state_mut().printer_source = Some(Arc::new(Vec::new));
+    assert!(h.state_mut().execute("print.dialog"));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while h.state().print_draft.printers_loading && std::time::Instant::now() < deadline {
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    h.run_steps(2);
+    h.get_by_label_contains("No printers were found");
+    assert!(!h.get_by_role_and_label(Role::Button, "Save as PDF").accesskit_node().is_disabled());
 }

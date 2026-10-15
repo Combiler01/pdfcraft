@@ -23,6 +23,7 @@
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Automático segue o tamanho do texto do sistema. As páginas sempre são exibidas na resolução total da tela.
 	Identity	Identidade
 	Name on new comments	Nome nos novos comentários
+	Hide hover previews for highlights without comment text	Ocultar as prévias ao passar o ponteiro em destaques sem texto de comentário
 	Open…	Abrir…
 	Open Recent	Abrir recentes
 	Clear Recent Files	Limpar arquivos recentes
@@ -213,6 +214,7 @@
 	Remove unused objects and merge identical ones	Remover objetos não utilizados e mesclar os idênticos
 	Audit space usage…	Auditar uso de espaço…
 	Space Audit	Auditoria de espaço
+	What takes up the space in this file, by kind of content.	O que ocupa o espaço deste arquivo, por tipo de conteúdo.
 	Bytes	Bytes
 	Content Streams	Fluxos de conteúdo
 	X Object Forms	Formulários XObject
@@ -264,7 +266,7 @@
 	characters	caracteres
 	Field is used for file selection	O campo é usado para seleção de arquivo
 	Check spelling	Verificar ortografia
-	Comb of	Pente de
+	Comb of	Caixas para
 	Export Value: {on}	Valor de exportação: {on}
 	Check box is checked by default	A caixa de seleção fica marcada por padrão
 	Button is checked by default	O botão fica selecionado por padrão
@@ -484,6 +486,12 @@
 	Keychain  ·  	Chaveiro  ·  
 	Issued by: 	Emitido por: 
 	, Expires: 	, Expira em: 
+	Digitally signed by	Assinado digitalmente por
+	DN: 	DN: 
+	Reason: 	Motivo: 
+	Location: 	Local: 
+	Date: 	Data: 
+	The labels are in English: the signature's font can't draw them in this language.	Os rótulos estão em inglês: a fonte da assinatura não consegue desenhá-los neste idioma.
 	No digital IDs yet.	Nenhuma ID digital ainda.
 	Configure New Digital ID	Configurar nova ID digital
 	Remove "{name}" from this list? The file itself is not deleted.	Remover "{name}" desta lista? O arquivo em si não é excluído.
@@ -774,6 +782,7 @@
 	Redaction code:	Código de ocultação:
 	Font:	Fonte:
 	Font size:	Tamanho da fonte:
+	Font size	Tamanho da fonte
 	Auto-size text to fit redaction region	Ajustar tamanho do texto automaticamente à região de ocultação
 	Font colour:	Cor da fonte:
 	Repeat overlay text	Repetir texto de sobreposição
@@ -917,6 +926,7 @@
 	Replace	Substituir
 	Split	Dividir
 	Set page boxes	Definir limites da página
+	Set page transitions	Definir transições de página
 	Page labels	Rótulos de página
 	Page transitions	Transições de página
 	Sticky note	Nota adesiva
@@ -1171,6 +1181,7 @@
 	Copy text	Copiar texto
 	Properties…	Propriedades…
 	Make Current Properties Default	Tornar as propriedades atuais padrão
+	Make Properties Default	Tornar as propriedades padrão
 	More options	Mais opções
 	Sort by	Classificar por
 	Author	Autor
@@ -1192,7 +1203,7 @@
 	Pink	Rosa
 	Purple	Roxo
 	Blue	Azul
-	Light blue	Azul claro
+	Light blue	Azul-claro
 	Green	Verde
 	Gray	Cinza
 	Black	Preto
@@ -1302,6 +1313,9 @@
 	Sort comments by:	Classificar comentários por:
 	Create PDF Comment Summary	Criar resumo de comentários do PDF
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Reverter para a versão salva anteriormente de “{name}”? As alterações feitas desde então não poderão ser desfeitas depois.
+	Save over the changed file?	Salvar sobre o arquivo alterado?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” foi alterado no disco depois de ser aberto ou salvo pela última vez. Salvar agora substitui essa versão mais recente por esta.
+	Save anyway	Salvar mesmo assim
 	Number pages	Numerar páginas
 	Style	Estilo
 	None (prefix only)	Nenhum (apenas prefixo)
@@ -1498,6 +1512,8 @@
 	Sent to {printer}	Enviado para {printer}
 	Sent to {printer}: {msg}	Enviado para {printer}: {msg}
 	Looking for printers…	Procurando impressoras…
+	Sending sheet {s} of {n} to {printer}…	Enviando a folha {s} de {n} para {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Nenhuma impressora encontrada. Verifique se a impressora está instalada e se o spooler de impressão está em execução e abra Imprimir novamente.
 	Sending to {printer}…	Enviando para {printer}…
 	Choose a folder for the searchable files	Escolha uma pasta para os arquivos pesquisáveis
 	Files are combined in this order. Leave Pages empty to take every page.	Os arquivos são combinados nesta ordem. Deixe Páginas em branco para incluir todas as páginas.
@@ -1913,7 +1929,7 @@
 	the image is empty	a imagem está vazia
 	The operation failed.	A operação falhou.
 	the password is incorrect	a senha está incorreta
-	The title in the metadata and the document information differ	O título nos metadados e nas informações do documento são diferentes
+	The title in the metadata and the document information differ	Os títulos nos metadados e nas informações do documento são diferentes
 	the title must not be empty	o título não deve estar vazio
 	there are no pages to print	não há páginas para imprimir
 	this document is signed: rewriting it would invalidate its signatures (save it incrementally instead)	este documento está assinado: regravá-lo invalidaria suas assinaturas (salve de forma incremental)
@@ -2035,7 +2051,7 @@
 	{name} can't be combined: {why}	{name} não pode ser combinado: {why}
 	Selected pages	Páginas selecionadas
 	No pages selected	Nenhuma página selecionada
-	Created a PDF from {n} files; left out: {names}	Criado um PDF de {n} arquivos; deixando de fora: {names}
+	Created a PDF from {n} files; left out: {names}	PDF criado a partir de {n} arquivos; deixados de fora: {names}
 	Created a PDF from the first {n} files	Criado um PDF dos primeiros {n} arquivos
 	Created a PDF from {n} files	Criado um PDF de {n} arquivos
 	Folders	Pastas
@@ -2108,7 +2124,7 @@ action wizard	Start	Iniciar
 	Choose a folder on this computer to pin	Escolha uma pasta deste computador para fixar
 	Commits	Commits
 	Company	Empresa
-	Contributors	Colaboradores
+	Contributors	Contribuidores
 	Couldn't open the printer's preferences: {e}	Não foi possível abrir as preferências da impressora: {e}
 	Couldn't optimize the file	Não foi possível otimizar o arquivo
 	Couldn't show the file picker. Please try again.	Não foi possível mostrar o seletor de arquivos. Tente novamente.
@@ -2199,7 +2215,7 @@ comment menu	Edit	Editar
 	Character limit:	Limite de caracteres:
 	Character limit 0 means no limit. A comb of characters needs a limit.	O limite de caracteres 0 significa sem limite. As caixas de caracteres precisam de um limite.
 	To change locked fields, also set Locked to No.	Para alterar campos bloqueados, defina também “Bloqueado” como “Não”.
-	Comb of characters	Pente de caracteres
+	Comb of characters	Caixas de caracteres
 	The document changed while you were editing field properties.	O documento mudou enquanto você editava as propriedades dos campos.
 	The document is no longer open.	O documento não está mais aberto.
 	The field properties dialog is no longer open.	A caixa de propriedades dos campos não está mais aberta.
@@ -2242,6 +2258,8 @@ key	Space	Espaço
 	Switch to List view to change the pages it takes.	Mude para a exibição em lista para alterar as páginas incluídas.
 	Expand all	Expandir tudo
 	Collapse all	Recolher tudo
+	Collapse all pages	Recolher todas as páginas
+	Expand all pages	Expandir todas as páginas
 	Remove page	Remover página
 	Remove {n} pages	Remover {n} páginas
 
@@ -2262,7 +2280,7 @@ key	Space	Espaço
 	Printer paper and scaling may differ. Check driver settings.	O papel e a escala da impressora podem variar. Confira as configurações do driver.
 	Drawing scale changes. Use Actual size for full-scale plans.	A escala do desenho muda. Use Tamanho real para plantas em escala.
 	Reload documents when their files change on disk	Recarregar documentos quando os arquivos mudarem no disco
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Este arquivo foi alterado no disco. Recarregue-o para ver a nova versão; suas alterações não salvas serão perdidas.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Este arquivo foi alterado no disco. Recarregar mostra a nova versão e descarta suas alterações não salvas; Salvar a substitui por esta versão.
 	Reload	Recarregar
 	Couldn't reload {name}: {e}	Não foi possível recarregar {name}: {e}
 	Select page {label}	Selecionar página {label}
@@ -2281,7 +2299,7 @@ calendar date	September	setembro
 calendar date	October	outubro
 calendar date	November	novembro
 calendar date	December	dezembro
-	Mouse wheel scroll speed	Velocidade de rolagem da roda do mouse
+	Scroll speed (mouse wheel and arrow keys)	Velocidade de rolagem (roda do mouse e teclas de seta)
 scroll speed	Slow	Lenta
 scroll speed	Normal	Normal
 scroll speed	Fast	Rápida
@@ -2355,6 +2373,10 @@ animation effects	Off	Desativados
 	The linked PDF opened, but its named destination was not applied.	O PDF vinculado foi aberto, mas seu destino nomeado não foi aplicado.
 	The linked PDF opened, but its page destination was out of range.	O PDF vinculado foi aberto, mas sua página de destino está fora do intervalo.
 	Local cross-PDF links require the desktop app	Links locais entre PDFs exigem o aplicativo para desktop
+	Cut Image	Recortar imagem
+	Redact Image	Ocultar dados da imagem
+	Create Link…	Criar link…
+	Recognize Text…	Reconhecer texto…
 	Minimize	Minimizar
 	Maximize	Maximizar
 	Restore	Restaurar
@@ -2364,7 +2386,59 @@ animation effects	Off	Desativados
 # Absolute local GoToR confirmation (#1364).
 	Allow	Permitir
 	Only allow this if you trust the source document.	Permita esta ação somente se confiar no documento de origem.
+	Open in Full Screen mode?	Abrir no modo de tela cheia?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Este documento pede para abrir no modo de tela cheia: a página preenche a tela e nada mais é exibido. Pressione Esc a qualquer momento para sair.
+	Full Screen	Tela cheia
+	Not now	Agora não
 	Open this local PDF?	Abrir este PDF local?
 	This document is trying to open a local file:	Este documento está tentando abrir um arquivo local:
 	Move tag earlier	Mover tag para antes
 	Move tag later	Mover tag para depois
+	Turn upside down (180°)	Virar de cabeça para baixo (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Etiqueta 4 × 6 pol (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Recorta cada página na área impressa, deixa-a na vertical e ajusta-a à folha sem distorcer. Uma etiqueta por folha.
+	Find untagged content	Encontrar conteúdo sem marcação
+	No untagged content was found.	Nenhum conteúdo sem marcação foi encontrado.
+	Found {n} untagged content problems.	Foram encontrados {n} problemas de conteúdo sem marcação.
+	Tag form fields	Marcar campos de formulário
+	Mark as artifact	Marcar como artefato
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Remova esta tag folha da ordem de leitura e marque seu conteúdo direto como artefato
+	Mark content as artifact	Marcar conteúdo como artefato
+	Word count	Contagem de palavras
+	Current page only	Somente a página atual
+	Exclude tagged tables	Excluir tabelas com tags
+	Exclude tagged code blocks	Excluir blocos de código com tags
+	Exclude image/OCR text	Excluir texto de imagens/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	As exclusões usam tags de PDF. Tabelas e código sem tags continuam incluídos. A exclusão de imagens também remove o texto invisível.
+	Words	Palavras
+	Characters	Caracteres
+	Characters without spaces	Caracteres sem espaços
+	Pages counted	Páginas contadas
+	Some pages contain no countable text. Scanned images need OCR first.	Algumas páginas não contêm texto para contar. As imagens digitalizadas precisam primeiro de OCR.
+	Some content could not be classified safely and was kept in the count.	Parte do conteúdo não pôde ser classificada de forma confiável e foi mantida na contagem.
+	Counting words… {n} pages read	Contando palavras… {n} páginas lidas
+	Word counting stopped unexpectedly.	A contagem de palavras parou inesperadamente.
+	Word count…	Contagem de palavras…
+@id	file.word_count	Contagem de palavras…
+	Standard	Padrão
+	Mobile	Celular
+	Merge image fragments	Mesclar fragmentos de imagem
+	Optimizing… merging image fragments	Otimizando… mesclando fragmentos de imagem
+	Side by side	Lado a lado
+	New file only	Somente o arquivo novo
+	Old file: {name}	Arquivo antigo: {name}
+	New file: {name}	Arquivo novo: {name}
+	Print as image	Imprimir como imagem
+	Resolution:	Resolução:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Use quando uma impressora omite texto, sombreamento ou transparência. A impressão deixa de ser texto pesquisável; com Imprimir em tons de cinza, as imagens ficam cinza.
+	Crop Image	Cortar imagem
+	Remove Crop	Remover corte
+	Trim the picture with its handles; Enter or Done applies	Corte a imagem com as alças; Enter ou Concluído aplica
+	Redaction mark appearance	Aparência da marca de redação
+	Outline colour:	Cor do contorno:
+	Fill colour:	Cor de preenchimento:
+	Shown while the pointer is over a mark.	Mostrada enquanto o ponteiro está sobre uma marca.
+	Opacity:	Opacidade:
+	Make properties default	Tornar propriedades padrão
+	Pages selected	Páginas selecionadas
+	Page properties	Propriedades da página

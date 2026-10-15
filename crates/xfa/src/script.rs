@@ -156,12 +156,6 @@ pub fn set_overrides(doc: &mut Document, ov: &Overrides) -> Result<(), XfaError>
     Ok(())
 }
 
-/// Index of child `i` among the earlier siblings with the same name.
-fn sib_index(children: &[Node], i: usize) -> usize {
-    let name = children.get(i).and_then(|c| c.common().name.as_deref());
-    children.iter().take(i).filter(|c| c.common().name.as_deref() == name && name.is_some()).count()
-}
-
 fn child_som(parent: &str, name: Option<&str>, index: usize) -> String {
     match name {
         Some(n) if !parent.is_empty() => format!("{parent}.{n}[{index}]"),
@@ -285,11 +279,12 @@ impl Walker<'_> {
         if depth > MAX_DEPTH {
             return out;
         }
+        let sibs = SomIndices::of(nodes);
         for (i, n) in nodes.iter().enumerate() {
             if !self.take() {
                 break;
             }
-            let sib = sib_index(nodes, i);
+            let sib = sibs.at(i);
             match n {
                 Node::Subform(sf) => {
                     let from_data = match (&sf.common.name, self.data) {
@@ -360,12 +355,13 @@ impl Walker<'_> {
                         self.data.and_then(|d| d.text_at(&data_path(self.tpl, &som))).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
                     self.push_events(&som, &g.scripts, None, None, None);
                     let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                    let fsibs = SomIndices::of(&fields);
                     let mut children = Vec::new();
                     for (fi, f) in g.fields.iter().enumerate() {
                         if !self.take() {
                             break;
                         }
-                        children.push(self.field(f, &som, sib_index(&fields, fi), Some(selected.as_deref().unwrap_or(""))));
+                        children.push(self.field(f, &som, fsibs.at(fi), Some(selected.as_deref().unwrap_or(""))));
                     }
                     out.push(FormNode {
                         name: g.common.name.clone().unwrap_or_else(|| "group".into()),
@@ -451,9 +447,9 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
         if depth > MAX_DEPTH {
             return;
         }
-        let sibs: Vec<usize> = (0..nodes.len()).map(|i| sib_index(nodes, i)).collect();
+        let sibs = SomIndices::of(nodes);
         for (i, n) in nodes.iter_mut().enumerate() {
-            let sib = sibs.get(i).copied().unwrap_or(0);
+            let sib = sibs.at(i);
             let name_default = match n {
                 Node::Field(_) => Some("field"),
                 Node::ExclGroup(_) => Some("group"),
@@ -498,8 +494,9 @@ pub fn apply_overrides(tpl: &Template, ov: &Overrides) -> Template {
                         g.common.presence = p;
                     }
                     let fields: Vec<Node> = g.fields.iter().map(|f| Node::Field(Box::new(f.clone()))).collect();
+                    let fsibs = SomIndices::of(&fields);
                     for (fi, f) in g.fields.iter_mut().enumerate() {
-                        let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), sib_index(&fields, fi));
+                        let fsom = child_som(&som, f.common.name.as_deref().or(Some("field")), fsibs.at(fi));
                         if let Some(p) = ov.presence.get(&fsom) {
                             f.common.presence = Presence::parse(Some(p));
                         }

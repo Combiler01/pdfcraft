@@ -426,6 +426,61 @@ fn the_datasets_packet_is_written_from_the_fields_and_read_back() {
     assert!(!write_datasets(&mut plain, &[]).unwrap().written);
 }
 
+/// A radio item whose text contains a space keeps that text in the datasets. The appearance
+/// state is a PDF name (`New_York`); writing it back used to clear the selection on the next layout.
+#[test]
+fn spaced_radio_values_stay_in_the_datasets() {
+    for (value, state) in [("New York", "New_York"), ("Y", "Y")] {
+        let xdp = format!(
+            r#"<xdp:xdp xmlns:xdp="http://ns.adobe.com/xdp/">
+<template xmlns="http://www.xfa.org/schema/xfa-template/3.3/">
+<subform name="form" layout="tb">
+<pageSet><pageArea name="page"><contentArea x="36pt" y="36pt" w="540pt" h="720pt"/><medium short="612pt" long="792pt"/></pageArea></pageSet>
+<exclGroup name="city" layout="lr-tb">
+<field name="first" w="108pt" h="18pt"><ui><checkButton/></ui><items><text>{value}</text></items></field>
+<field name="second" w="108pt" h="18pt"><ui><checkButton/></ui><items><text>Boston</text></items></field>
+</exclGroup>
+<field name="note" w="108pt" h="18pt"><ui><textEdit/></ui></field>
+<field name="agree" w="108pt" h="18pt"><ui><checkButton/></ui><items><text>{value}</text><text>No</text></items></field>
+</subform>
+</template>
+<xfa:datasets xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/"><xfa:data><form><city>{value}</city><note>before</note><agree>{value}</agree></form></xfa:data></xfa:datasets>
+</xdp:xdp>"#
+        );
+        let mut doc = Document::open(Arc::new(shell(&xdp))).unwrap();
+        let report = render_into(&mut doc).unwrap();
+        assert!(report.warnings.is_empty(), "{value:?} {:?}", report.warnings);
+        let fields = field_data(&doc);
+        assert!(fields.iter().any(|f| f.name == "city" && f.data == FieldData::Radio(Some(state.into()))), "{value:?} {fields:?}");
+        let unchanged = write_datasets(&mut doc, &fields).unwrap();
+        assert!(!unchanged.written && unchanged.warnings.is_empty(), "{value:?} {unchanged:?}");
+        let mut fields = fields;
+        for f in &mut fields {
+            if f.name == "note" {
+                f.data = FieldData::Text("after".into());
+            }
+        }
+        let write = write_datasets(&mut doc, &fields).unwrap();
+        assert!(write.written && write.warnings.is_empty(), "{value:?} {write:?}");
+        let packets = read_packets(&doc).unwrap().unwrap();
+        let data = parse_datasets(&packets.xdp).unwrap();
+        assert_eq!(data.text_at(&som_to_path("form[0].city[0]")), Some(value));
+        assert_eq!(data.text_at(&som_to_path("form[0].agree[0]")), Some(value));
+        assert_eq!(data.text_at(&som_to_path("form[0].note[0]")), Some("after"));
+        let selected: Vec<(String, Option<String>)> = layout_xml(&packets.xdp)
+            .unwrap()
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|item| match item {
+                Item::Widget(w) if w.name == "first" || w.name == "second" => Some((w.name.clone(), w.value.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(selected, vec![("first".into(), Some(value.into())), ("second".into(), None)], "{value:?}");
+    }
+}
+
 #[test]
 fn static_forms_read_their_values_from_the_datasets() {
     let doc = Document::open(Arc::new(static_shell("<form1><page1><name>Ada</name><agree>1</agree></page1></form1>"))).unwrap();
@@ -1835,4 +1890,111 @@ fn an_anchor_type_places_the_named_point_of_the_box_at_its_x_and_y() {
     assert!(foot.baseline > 10.25 * 72.0 && foot.baseline < 10.5 * 72.0, "footer baseline {}", foot.baseline);
     let field = widgets(page).into_iter().find(|w| w.name == "ref").unwrap();
     assert!((field.rect.x - 6.0 * 72.0).abs() < 0.01 && (field.rect.y - 72.0).abs() < 0.01, "{:?}", field.rect);
+}
+
+#[test]
+fn stripping_takes_the_xfa_out_and_leaves_an_ordinary_document() {
+    use crate::pdf::strip;
+    let mut doc = Document::open(Arc::new(shell(&fields_template("<form><page1><country>JP</country></page1></form>")))).unwrap();
+    render_into(&mut doc).unwrap();
+    assert!(crate::read_packets(&doc).unwrap().is_some());
+    // Reader usage rights on the catalog go too (changing the form voids them).
+    let root = doc.root().unwrap();
+    let mut ur = pdfcraft_cos::Dict::new();
+    ur.set(b"UR3".to_vec(), Object::Dict(pdfcraft_cos::Dict::new()));
+    doc.update_dict(root, |d| d.set(b"Perms".to_vec(), Object::Dict(ur))).unwrap();
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r.packets, vec!["template".to_string(), "datasets".to_string()]);
+    assert_eq!(r.unbound_data, Some(0));
+    assert_eq!((r.script_buttons, r.image_fields), (0, 1), "{r:?}");
+    assert!(r.usage_rights);
+    assert!(r.field_keys >= 7, "{r:?}");
+    assert!(
+        r.notes().iter().any(|n| n.contains("template, datasets")) && r.notes().iter().any(|n| n.contains("extended features")),
+        "{:?}",
+        r.notes()
+    );
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let doc = Document::open(Arc::new(bytes)).unwrap();
+    assert!(crate::read_packets(&doc).unwrap().is_none(), "no XFA entry");
+    assert!(!is_dynamic(&doc));
+    assert!(crate::existing_layout(&doc).is_none(), "the layout mark is gone");
+    let root = doc.get(doc.root().unwrap());
+    let catalog = root.as_dict().unwrap();
+    assert!(!catalog.contains(b"NeedsRendering") && !catalog.contains(b"Perms"));
+    let acro = doc.resolve(catalog.get(b"AcroForm").unwrap());
+    let acro = acro.as_dict().unwrap();
+    assert!(!acro.contains(b"XFA") && !acro.contains(b"PCXfaLayout") && !acro.contains(b"PCXfaOverrides"));
+    // The fields stay, with their values, and without the private keys.
+    let fields = pdfcraft_forms_free_fields(&doc);
+    assert_eq!(fields.len(), 7);
+    let country = &fields.iter().find(|(n, _)| n == "country").unwrap().1;
+    assert_eq!(country.get(b"V").and_then(|v| v.as_string()).map(|s| s.to_text()).as_deref(), Some("JP"));
+    for (name, d) in &fields {
+        for k in [b"PCSom".as_slice(), b"PCXfaClick", b"PCXfaImage", b"PCItems"] {
+            assert!(!d.contains(k), "{name} still has {}", String::from_utf8_lossy(k));
+        }
+    }
+    // The pages are untouched.
+    let pages = doc.resolve(catalog.get(b"Pages").unwrap());
+    assert_eq!(pages.as_dict().unwrap().int(b"Count"), Some(1));
+    // Twice is nothing: a document without XFA is left as it is.
+    let mut doc = doc;
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r, crate::Stripped::default());
+    assert!(!doc.is_modified());
+    // Data no field holds is counted; a form whose click buttons ran scripts too; the shape
+    // check needs no packet decoded and tells a never-laid-out dynamic form from one to strip.
+    let mut doc = Document::open(Arc::new(shell(&scripted_template().replace("</template>", "</template><xfa:datasets xmlns:xfa=\"http://www.xfa.org/schema/xfa-data/1.0/\"><xfa:data><form><page1><qty>3</qty><extra>kept nowhere</extra><more2>x</more2></page1></form></xfa:data></xfa:datasets>")))).unwrap();
+    let before = crate::xfa_shape(&doc).unwrap();
+    assert_eq!(before, crate::XfaShape { needs_rendering: true, has_fields: false, laid_out: false });
+    assert!(!before.strippable(), "nothing laid out yet: stripping would leave the placeholder page");
+    render_into(&mut doc).unwrap();
+    assert!(crate::xfa_shape(&doc).unwrap().strippable());
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r.unbound_data, Some(2), "{r:?}");
+    assert_eq!(r.script_buttons, 4, "addRow, removeRow, hello, legacy: {r:?}");
+    assert!(crate::xfa_shape(&doc).is_none());
+    // A field tree whose dictionaries share one Kids array (every kid listing every other) is
+    // walked once per dictionary, not once per listing.
+    let mut doc = Document::open(Arc::new(shell(&fields_template("")))).unwrap();
+    render_into(&mut doc).unwrap();
+    let root = doc.root().unwrap();
+    let acro_ref = doc.get(root).as_dict().unwrap().get(b"AcroForm").and_then(Object::as_ref);
+    let fields: Vec<Object> = (0..2000).map(|_| Object::Ref(doc.add(Object::Dict(pdfcraft_cos::Dict::new())))).collect();
+    let kids = doc.add(Object::Array(fields.clone()));
+    for f in &fields {
+        if let Some(r) = f.as_ref() {
+            doc.update_dict(r, |d| {
+                d.set(b"Kids".to_vec(), Object::Ref(kids));
+                d.set(b"PCSom".to_vec(), Object::String(pdfcraft_cos::PdfString::text("x")));
+            })
+            .unwrap();
+        }
+    }
+    let update = |d: &mut pdfcraft_cos::Dict| d.set(b"Fields".to_vec(), Object::Array(fields.clone()));
+    match acro_ref {
+        Some(r) => doc.update_dict(r, update).unwrap(),
+        None => doc
+            .update_dict(root, |c| {
+                let mut a = c.get(b"AcroForm").and_then(|a| a.as_dict().cloned()).unwrap_or_default();
+                update(&mut a);
+                c.set(b"AcroForm".to_vec(), Object::Dict(a));
+            })
+            .unwrap(),
+    }
+    let started = std::time::Instant::now();
+    let r = strip(&mut doc).unwrap();
+    assert_eq!(r.field_keys, 2000);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "{:?}", started.elapsed());
+}
+
+#[test]
+fn som_indices_count_earlier_same_named_siblings() {
+    let draw = |name: Option<&str>| {
+        Node::Draw(Box::new(Draw { common: Common { name: name.map(str::to_string), ..Default::default() }, ..Default::default() }))
+    };
+    let children = [draw(Some("a")), draw(Some("b")), draw(Some("a")), draw(None), draw(Some("a")), draw(Some("b"))];
+    let sibs = SomIndices::of(&children);
+    assert_eq!((0..=children.len()).map(|i| sibs.at(i)).collect::<Vec<_>>(), [0, 0, 1, 0, 2, 1, 0]);
 }

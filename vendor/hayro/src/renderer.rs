@@ -432,6 +432,9 @@ pub(crate) struct Renderer {
     /// PdfCraft patch: when set, solid text and line-art paint colours are remapped
     /// while rendering (the "reading colours" view setting).
     color_replacement: Option<ColorReplacement>,
+    /// PdfCraft patch (17): while the page's annotations are being drawn, paints keep their
+    /// colours — reading colours replace document colours, never annotation colours.
+    in_annotations: bool,
     pub(crate) inside_pattern: bool,
     /// Soft masks drawn during this render. PdfCraft note: it belongs to one `Renderer` (one
     /// render, every nested renderer starting empty) and so to one `preview` setting: a mask
@@ -466,6 +469,7 @@ impl Renderer {
         Self {
             ctx: RenderContext::new_with(width, height, settings),
             color_replacement,
+            in_annotations: false,
             inside_pattern: false,
             soft_mask_cache: HashMap::default(),
             outline_cache: cache.outline_cache.clone(),
@@ -573,6 +577,7 @@ impl Renderer {
                 // PdfCraft patch: this renders an image's alpha mask, which must keep its
                 // original values, so it is never remapped by the reading-colours setting.
                 color_replacement: None,
+                in_annotations: false,
                 inside_pattern: false,
                 soft_mask_cache: HashMap::default(),
                 outline_cache: self.outline_cache.clone(),
@@ -1023,6 +1028,11 @@ impl Renderer {
         let Some(replacement) = self.color_replacement else {
             return paint.clone();
         };
+        // PdfCraft patch (17): annotations keep the colours they were given; reading colours
+        // replace document colours only (issue #1548).
+        if self.in_annotations {
+            return paint.clone();
+        }
         match paint {
             Paint::Color(c) => {
                 let mapped = replacement.map(c.to_rgba().to_rgba8(), is_text);
@@ -1075,8 +1085,13 @@ impl Renderer {
                         // become native gradients instead of a texture sampled pixel by pixel.
                         // Upstream also shifts by half a pixel for vello_cpu 0.3; 0.0.8 already
                         // evaluates gradients at pixel centres, like the texture below.
-                        if let Some(native) =
-                            encoded.as_svg_gradient(bbox, NATIVE_GRADIENT_TOLERANCE)
+                        // PdfCraft patch (#2128): vello_cpu 0.0.8 copies an opaque gradient
+                        // over fully covered tiles without applying the mask or blend mode, and
+                        // a gradient can't be flagged transparent like the texture below, so
+                        // under a soft mask or blend mode the shading is sampled instead.
+                        if !self.force_images_may_have_transparency()
+                            && let Some(native) =
+                                encoded.as_svg_gradient(bbox, NATIVE_GRADIENT_TOLERANCE)
                         {
                             self.ctx
                                 .set_paint_transform(path_transform.inverse() * native.transform);
@@ -1149,6 +1164,7 @@ impl Renderer {
                             // PdfCraft patch: a pattern cell is painted as one artwork, so its
                             // content is never remapped by the reading-colours setting.
                             color_replacement: None,
+                            in_annotations: false,
                             cur_mask: None,
                             inside_pattern: true,
                             soft_mask_cache: HashMap::default(),
@@ -1464,6 +1480,7 @@ impl<'a> Device<'a> for Renderer {
                                         // coverage values, so its content is never remapped by
                                         // the reading-colours setting.
                                         color_replacement: None,
+                                        in_annotations: false,
                                         inside_pattern: false,
                                         soft_mask_cache: HashMap::default(),
                                         outline_cache: self.outline_cache.clone(),
@@ -1608,6 +1625,16 @@ impl<'a> Device<'a> for Renderer {
         }
     }
 
+    /// PdfCraft patch (17): the reading-colours mapping is suspended for annotations.
+    fn begin_annotations(&mut self) {
+        self.in_annotations = true;
+    }
+
+    /// PdfCraft patch (17): back to document content; reading colours apply again.
+    fn end_annotations(&mut self) {
+        self.in_annotations = false;
+    }
+
     fn draw_rect(
         &mut self,
         rect: &Rect,
@@ -1749,6 +1776,7 @@ fn draw_soft_mask(mask: &SoftMask<'_>, settings: RenderSettings, width: u16, hei
         // PdfCraft patch: a soft mask must keep its original luminance values, so its
         // content is never remapped by the reading-colours setting.
         color_replacement: None,
+        in_annotations: false,
         inside_pattern: false,
         cur_mask: None,
         soft_mask_cache: HashMap::default(),

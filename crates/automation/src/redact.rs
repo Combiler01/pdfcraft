@@ -173,14 +173,16 @@ impl Automation {
     }
 
     pub(crate) fn doc_audit_redactions(&self, a: &Args) -> Result<Value> {
-        let findings = self.doc(a)?.audit_redactions().map_err(ToolError::Failed)?;
+        let d = self.doc(a)?;
+        let findings = d.audit_redactions().map_err(ToolError::Failed)?;
         let items: Vec<Value> = findings
             .into_iter()
             .map(|f| {
                 json!({
                     "page": f.page + 1,
                     "kind": f.kind.id(),
-                    "rect": f.rect,
+                    // Points from the top-left of the displayed page, like `comment_list` and `doc_info`.
+                    "rect": crate::view_rect(&d.info, f.page, f.rect.map(|v| v as f32)),
                     "covered_text": f.covered_text,
                 })
             })

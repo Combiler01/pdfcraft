@@ -4,34 +4,23 @@
 use std::sync::Arc;
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, SaveOptions, Stream, write_full, write_incremental};
+use pdfcraft_testkit::Pdf;
 
 /// Four pages, a shared font, document info with a non-ASCII title.
 fn fixture() -> Vec<u8> {
-    let mut objs: Vec<String> = vec!["<< /Type /Catalog /Pages 2 0 R >>".into()];
     let kids: Vec<String> = (0..4).map(|i| format!("{} 0 R", 4 + 2 * i)).collect();
-    objs.push(format!("<< /Type /Pages /Kids [{}] /Count 4 /MediaBox [0 0 200 300] >>", kids.join(" ")));
-    objs.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into());
+    let mut pdf = Pdf::new()
+        .version("1.4")
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj(format!("<< /Type /Pages /Kids [{}] /Count 4 /MediaBox [0 0 200 300] >>", kids.join(" ")))
+        .obj("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
     for i in 0..4 {
-        objs.push(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i));
-        let body = format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1);
-        objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+        pdf = pdf
+            .obj(format!("<< /Type /Page /Parent 2 0 R /Contents {} 0 R /Resources << /Font << /F1 3 0 R >> >> >>", 5 + 2 * i))
+            .stream("", format!("BT /F1 24 Tf 20 150 Td (Page {}) Tj ET", i + 1));
     }
-    objs.push("<< /Title (Caf\\351 \\(draft\\)) >>".into());
-    let mut out = b"%PDF-1.4\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objs.iter().enumerate() {
-        offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
-    for o in offsets {
-        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    out.extend_from_slice(
-        format!("trailer\n<< /Size {} /Root 1 0 R /Info {} 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1, objs.len()).as_bytes(),
-    );
-    out
+    let info = pdf.next_obj();
+    pdf.obj("<< /Title (Caf\\351 \\(draft\\)) >>").trailer_entry(&format!("/Info {info} 0 R")).build()
 }
 
 fn title(doc: &Document) -> Vec<u8> {
@@ -159,18 +148,14 @@ fn classic_table() -> Vec<u8> {
     bytes
 }
 
-fn qpdf_check(bytes: &[u8]) -> Option<std::process::Output> {
-    let Ok(version) = std::process::Command::new("qpdf").arg("--version").output() else {
-        return None;
-    };
-    assert!(version.status.success());
+fn qpdf_check(qpdf: &pdfcraft_oracle::Oracle, bytes: &[u8]) -> std::process::Output {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let path = std::env::temp_dir().join(format!("pdfcraft-xref-{}-{n}.pdf", std::process::id()));
     std::fs::write(&path, bytes).unwrap();
-    let check = std::process::Command::new("qpdf").arg("--check").arg(&path).output().unwrap();
+    let check = qpdf.command().arg("--check").arg(&path).output().unwrap();
     let _ = std::fs::remove_file(&path);
-    Some(check)
+    check
 }
 
 fn page(doc: &Document) -> Dict {
@@ -181,10 +166,8 @@ fn page(doc: &Document) -> Dict {
 }
 
 fn assert_qpdf_clean(bytes: &[u8]) {
-    let Some(check) = qpdf_check(bytes) else {
-        eprintln!("qpdf not installed: skipped");
-        return;
-    };
+    let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
+    let check = qpdf_check(&qpdf, bytes);
     let report = format!("{}{}", String::from_utf8_lossy(&check.stdout), String::from_utf8_lossy(&check.stderr));
     assert!(check.status.success() && !report.contains("WARNING"), "{report}");
 }
@@ -247,16 +230,12 @@ fn incremental_save_keeps_a_trailer_only_edit() {
 
 #[test]
 fn qpdf_accepts_object_stream_output() {
-    let Ok(out) = std::process::Command::new("qpdf").arg("--version").output() else {
-        eprintln!("qpdf not installed: skipped");
-        return;
-    };
-    assert!(out.status.success());
+    let qpdf = pdfcraft_oracle::or_skip!(pdfcraft_oracle::qpdf());
     let doc = Document::open(Arc::new(fixture())).unwrap();
     let packed = write_full(&doc, &SaveOptions::default()).unwrap();
     let path = std::env::temp_dir().join(format!("pdfcraft-objstm-{}.pdf", std::process::id()));
     std::fs::write(&path, &packed).unwrap();
-    let check = std::process::Command::new("qpdf").arg("--check").arg(&path).output().unwrap();
+    let check = qpdf.command().arg("--check").arg(&path).output().unwrap();
     let _ = std::fs::remove_file(&path);
     let report = String::from_utf8_lossy(&check.stdout);
     assert!(check.status.success() && report.contains("No syntax or stream encoding errors"), "{report}");
@@ -347,4 +326,69 @@ fn page_tree_loops_in_object_streams_do_not_crash_readers() {
     let packed = write_full(&doc, &SaveOptions::default()).unwrap();
     assert!(String::from_utf8_lossy(&packed).contains("/ObjStm"));
     assert_eq!(hayro_pages(&packed), 1);
+}
+
+/// Catalog, empty page tree, and trailer entries a reader must not invent: a direct name, a
+/// direct string, and a string object reachable only from the trailer.
+fn trailer_fixture() -> Vec<u8> {
+    let mut out = b"%PDF-1.4\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [] /Count 0 >>", "(only from the trailer)"].iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{body}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(b"xref\n0 4\n0000000000 65535 f \n");
+    for offset in offsets {
+        out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(
+        format!("trailer\n<< /Size 4 /Root 1 0 R /Version /1.7 /Custom (keep me) /Note 3 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes(),
+    );
+    out
+}
+
+fn trailer_custom(doc: &Document) -> Option<Vec<u8>> {
+    doc.trailer().get(b"Custom").and_then(Object::as_string).map(|s| s.bytes.clone())
+}
+
+fn trailer_note(doc: &Document) -> Option<Vec<u8>> {
+    doc.trailer().get(b"Note").map(|o| doc.resolve(o)).and_then(|o| o.as_string().map(|s| s.bytes.clone()))
+}
+
+#[test]
+fn full_save_preserves_unknown_trailer_data() {
+    let input = trailer_fixture();
+    let doc = Document::open(Arc::new(input)).unwrap();
+    assert_eq!(trailer_custom(&doc), Some(b"keep me".to_vec()));
+    assert_eq!(trailer_note(&doc).as_deref(), Some(b"only from the trailer".as_slice()));
+    assert_eq!(doc.trailer().get(b"Version").and_then(Object::as_name), Some(&b"1.7"[..]));
+    assert!(doc.repair_log().is_empty());
+    assert!(!doc.full_save_required());
+
+    let inc = Document::open(Arc::new(write_incremental(&doc, &SaveOptions::default()).unwrap())).unwrap();
+    assert_eq!(trailer_custom(&inc), trailer_custom(&doc));
+    assert_eq!(trailer_note(&inc), trailer_note(&doc));
+    assert_eq!(inc.trailer().get(b"Version"), doc.trailer().get(b"Version"));
+    assert!(inc.repair_log().is_empty());
+
+    for object_streams in [true, false] {
+        let opts = SaveOptions { object_streams, ..SaveOptions::default() };
+        let bytes = write_full(&doc, &opts).unwrap();
+        let back = Document::open(Arc::new(bytes)).unwrap();
+        assert!(back.root().is_some());
+        assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+        assert_eq!(trailer_custom(&back), trailer_custom(&doc));
+        assert_eq!(trailer_note(&back), trailer_note(&doc));
+        assert_eq!(back.trailer().get(b"Version"), doc.trailer().get(b"Version"));
+    }
+
+    let mut required = doc.clone();
+    required.require_full_save();
+    let back = Document::open(Arc::new(write_incremental(&required, &SaveOptions::default()).unwrap())).unwrap();
+    assert!(back.root().is_some());
+    assert!(back.repair_log().is_empty(), "{:?}", back.repair_log());
+    assert_eq!(trailer_custom(&back), trailer_custom(&doc));
+    assert_eq!(trailer_note(&back), trailer_note(&doc));
+    assert_eq!(back.trailer().get(b"Version"), doc.trailer().get(b"Version"));
 }

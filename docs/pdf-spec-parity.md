@@ -1,6 +1,6 @@
 # PDF specification and standards parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-11 · **Change:** minor (§7.6.4: written encrypted files open in Acrobat, #774) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (§12.4.4: page transitions and display times read) · **Target:** Adobe Acrobat Pro (Acrobat DC, continuous track 26.002.21931, macOS)
 
 How much of ISO 32000-2 (PDF 2.0) and the PDF subset standards PdfCraft implements, set against
 what Acrobat Pro implements. This is PdfCraft's equivalent of a "geometry" or "codec" checklist:
@@ -35,7 +35,7 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 | §10 | Rendering: transfer functions, halftones, overprint, smoothness | full | borrowed; no overprint preview | `print.overprint-preview` planned |
 | §11 | Transparency: blend modes, soft masks, groups, knockout | full | borrowed (knockout shipped) | `view.render-transparency` partial |
 | §12.1–12.3 | Viewer preferences, page layout, page labels, outlines, destinations | full | **own**: initial view, page labels, bookmarks edit and from structure, named destinations rewired on copy | named-destination editing panel planned |
-| §12.4 | Page transitions, thumbnails, articles, presentations | full | none (thumbnails discarded or kept) | `organize.page-transitions`, `view.articles-panel` planned |
+| §12.4 | Page transitions, thumbnails, articles, presentations | full | `/Trans` and `/Dur` read and listed by `doc_info`, not played; thumbnails discarded or kept | `organize.page-transitions` partial, `view.articles-panel` planned |
 | §12.5 | Annotations | 28 types | see table below | |
 | §12.6 | Actions | 19 types | see table below | |
 | §12.7 | Interactive forms (AcroForm): fields, appearances, calculation order, JavaScript actions | full | **own**: all field types, regenerated appearances, Acrobat's AF functions and event order, sandboxed JavaScript (boa) | `form.js-host` partial (object-model subset); submit planned |
@@ -130,5 +130,6 @@ are borrowed; PDF 2.0 additions and most subset standards are missing. **150–2
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §12.4.4: `/Trans` and `/Dur` read into `DocInfo::transitions` and reported by `doc_info` |
 | 2026-10-11 | minor | §7.6.4: encrypted files we write open in Acrobat (#774, fixed by #836) |
 | 2026-10-10 | major | Created from the code, `vendor/README.md` and `parity/acrobat-features.toml`, against ISO 32000-2 and Acrobat Pro 26.002.21931's documented capabilities |

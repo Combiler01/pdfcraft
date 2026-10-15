@@ -149,7 +149,7 @@ impl PdfCraftApp {
     /// Open Link Properties for a new link area or an existing link.
     pub(crate) fn open_link_props(&mut self, page: usize, rect: Option<[f64; 4]>, index: Option<usize>) {
         let Some((_, id)) = self.active_ids() else { return };
-        let existing = index.and_then(|i| self.session.get(id).and_then(|d| d.links.iter().find(|l| l.page == page && l.index == i).cloned()));
+        let existing = index.and_then(|i| self.session.get(id).and_then(|d| d.links().iter().find(|l| l.page == page && l.index == i).cloned()));
         let draft = match existing {
             Some(l) => LinkDraft {
                 page,
@@ -203,7 +203,7 @@ impl PdfCraftApp {
     /// Remove every link in the active document.
     pub fn remove_all_links(&mut self) {
         let Some((_, id)) = self.active_ids() else { return };
-        let count = self.session.get(id).map_or(0, |d| d.links.len());
+        let count = self.session.get(id).map_or(0, |d| d.links().len());
         if count == 0 {
             self.notify_tr("No links to remove");
             return;

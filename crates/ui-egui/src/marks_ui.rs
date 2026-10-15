@@ -384,20 +384,29 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
             }
         });
     });
+    // Text the standard fonts can't draw is refused on apply (#125), so it's refused here, with the
+    // preview (drawn in the interface font, which can draw it) no longer the only answer (#2013).
+    let undrawable = undrawable(kind, d);
+    if let Some(c) = undrawable {
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(crate::content_ui::undrawable_message(c)).small().color(crate::content_ui::UNDRAWABLE));
+    }
     ui.add_space(10.0);
     let (mut apply, mut cancel) = (false, false);
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-        let ready = match kind {
-            MarkKind::HeaderFooter => d.hf.text.iter().any(|x| !x.trim().is_empty()),
-            MarkKind::Watermark => {
-                if d.use_file {
-                    d.file.is_some()
-                } else {
-                    !d.wm.text.trim().is_empty()
+        let ready = undrawable.is_none()
+            && match kind {
+                MarkKind::HeaderFooter => d.hf.text.iter().any(|x| !x.trim().is_empty()),
+                MarkKind::Watermark => {
+                    if d.use_file {
+                        d.file.is_some()
+                    } else {
+                        !d.wm.text.trim().is_empty()
+                    }
                 }
+                MarkKind::Background => !d.use_file || d.file.is_some(),
             }
-            MarkKind::Background => !d.use_file || d.file.is_some(),
-        } && !d.range.pages(count).is_empty();
+            && !d.range.pages(count).is_empty();
         if ui.add_enabled_ui(ready, |ui| widgets::pill_button(ui, tl!("OK"), true)).inner.clicked() {
             apply = true;
         }
@@ -423,6 +432,16 @@ pub(crate) fn body(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens, kind: M
     #[cfg(target_arch = "wasm32")]
     let _ = browse;
     (apply, cancel)
+}
+
+/// The first character of the dialog's text that applying would refuse (the standard fonts can't
+/// draw it), as the engine decides it. Pictures draw no text.
+fn undrawable(kind: MarkKind, d: &MarksDraft) -> Option<char> {
+    match kind {
+        MarkKind::HeaderFooter => d.hf.first_undrawable(),
+        MarkKind::Watermark if !d.use_file => d.wm.first_undrawable(),
+        MarkKind::Watermark | MarkKind::Background => None,
+    }
 }
 
 fn mark_file(d: &MarksDraft) -> Option<pdfcraft_engine::MarkFile> {
@@ -477,6 +496,20 @@ pub fn edit(d: &MarksDraft, kind: MarkKind, count: usize) -> Edit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_applying_would_refuse_is_caught_in_the_dialog() {
+        let mut d = MarksDraft::default();
+        d.hf.text[5] = "Страница <<1>> из <<n>> / Page <<1>> of <<n>>".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), Some('С'), "#2013: refused before OK, not after");
+        d.hf.text[5] = "Page <<1>> of <<n>> — café".into();
+        assert_eq!(undrawable(MarkKind::HeaderFooter, &d), None);
+        d.wm.text = "ΑΠΟΡΡΗΤΟ".into();
+        assert_eq!(undrawable(MarkKind::Watermark, &d), Some('Α'));
+        d.use_file = true;
+        assert_eq!(undrawable(MarkKind::Watermark, &d), None, "a picture watermark draws no text");
+        assert_eq!(undrawable(MarkKind::Background, &d), None);
+    }
 
     #[test]
     fn page_ranges_with_subsets() {

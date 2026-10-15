@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Check the compiled MSI's install scope, publisher, shortcuts, native UI and OCR models, without installing it.
 .EXAMPLE
@@ -88,33 +88,50 @@ foreach ($entry in @(@('StartMenuShortcut', 'ProgramMenuFolder', 'PdfcraftStartM
   Assert-Equal $component[0] $entry[1] "$($entry[2]) directory"
   Assert-Equal $component[1] $entry[3] "$($entry[2]) condition"
 }
-# No static default (#1058): a SetProperty after AppSearch turns it on for a first install, and for an
-# update only while the old shortcut is still on the desktop; a command-line value is left alone.
-Assert-NoRow 'SELECT `Value` FROM `Property` WHERE `Property` = ''INSTALLDESKTOPSHORTCUT''' 'desktop shortcut static default'
-$setDesktop = Read-Row 'SELECT `Action`, `Target` FROM `CustomAction` WHERE `Source` = ''INSTALLDESKTOPSHORTCUT''' 2
-Assert-Equal $setDesktop[1] '1' 'Desktop shortcut default value'
-foreach ($sequence in @('InstallUISequence', 'InstallExecuteSequence')) {
-  $search = Read-Row ('SELECT `Sequence` FROM `' + $sequence + '` WHERE `Action` = ''AppSearch''') 1
-  $set = Read-Row ('SELECT `Sequence`, `Condition` FROM `' + $sequence + '` WHERE `Action` = ''' + $setDesktop[0] + '''') 2
-  if ([int] $set[0] -le [int] $search[0]) { throw "$sequence must set the desktop shortcut default after AppSearch" }
-}
-$session = $null
-try {
-  $session = $Installer.OpenPackage((Resolve-Path -LiteralPath $Path).Path, 1)
-  foreach ($case in @(
-      @('first install', '', '', '', 1),
-      @('first install, INSTALLDESKTOPSHORTCUT=0', '0', '', '', 0),
-      @('update, shortcut still there', '', '{00000000-0000-0000-0000-000000000000}', 'C:\Users\Public\Desktop\PdfCraft.lnk', 1),
-      @('update, shortcut deleted', '', '{00000000-0000-0000-0000-000000000000}', '', 0),
-      @('update, INSTALLDESKTOPSHORTCUT=0', '0', '{00000000-0000-0000-0000-000000000000}', 'C:\Users\Public\Desktop\PdfCraft.lnk', 0))) {
-    $session.Property('INSTALLDESKTOPSHORTCUT') = $case[1]
-    $session.Property('WIX_UPGRADE_DETECTED') = $case[2]
-    $session.Property('EXISTINGDESKTOPSHORTCUT') = $case[3]
-    Assert-Equal ($session.EvaluateCondition($set[1])) $case[4] "Desktop shortcut default: $($case[0])"
+# Defaults an update keeps (#1058, #305). No static default: a SetProperty after AppSearch turns it on
+# for a first install and, for an update from a release that offered it ($Release set), only while what
+# it installed is still there ($Found, from AppSearch). A command-line value is left alone. Windows
+# Installer's evaluator runs the SetProperty condition and then $Component's own condition.
+function Assert-KeptOnUpdate([string] $Property, [string] $Release, [string] $Found, [string] $FoundValue, [string] $Component, [string] $What) {
+  Assert-NoRow ('SELECT `Value` FROM `Property` WHERE `Property` = ''' + $Property + '''') "$What static default"
+  $action = Read-Row ('SELECT `Action`, `Target` FROM `CustomAction` WHERE `Source` = ''' + $Property + '''') 2
+  Assert-Equal $action[1] '1' "$What default value"
+  $condition = $null
+  foreach ($sequence in @('InstallUISequence', 'InstallExecuteSequence')) {
+    $search = Read-Row ('SELECT `Sequence` FROM `' + $sequence + '` WHERE `Action` = ''AppSearch''') 1
+    $set = Read-Row ('SELECT `Sequence`, `Condition` FROM `' + $sequence + '` WHERE `Action` = ''' + $action[0] + '''') 2
+    if ([int] $set[0] -le [int] $search[0]) { throw "$sequence must set the $What default after AppSearch" }
+    $condition = $set[1]
   }
-} finally {
-  if ($session) { [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($session) }
+  $installed = Read-Row ('SELECT `Condition` FROM `Component` WHERE `Component` = ''' + $Component + '''') 1
+  Assert-Equal $installed[0] "$Property = 1" "$Component condition"
+  $old = '{00000000-0000-0000-0000-000000000000}'
+  # Name, command-line value, WIX_UPGRADE_DETECTED, $Release, $Found, installed (1) or not (0).
+  $cases = @(
+    @('first install', '', '', '', '', 1),
+    @("first install, $Property=0", '0', '', '', '', 0),
+    @('update, still there', '', $old, $old, $FoundValue, 1),
+    @('update, removed', '', $old, $old, '', 0),
+    @("update, $Property=0", '0', $old, $old, $FoundValue, 0),
+    @("update, removed, $Property=1", '1', $old, $old, '', 1))
+  # An update from a release from before it existed (WIX_UPGRADE_DETECTED alone) is a first install.
+  if ($Release -ne 'WIX_UPGRADE_DETECTED') { $cases += , @('update from a release without it', '', $old, '', '', 1) }
+  $session = $null
+  try {
+    $session = $Installer.OpenPackage((Resolve-Path -LiteralPath $Path).Path, 1)
+    foreach ($case in $cases) {
+      $session.Property($Property) = $case[1]
+      $session.Property('WIX_UPGRADE_DETECTED') = $case[2]
+      $session.Property($Release) = $case[3]
+      $session.Property($Found) = $case[4]
+      if ($session.EvaluateCondition($condition) -eq 1) { $session.Property($Property) = $action[1] }
+      Assert-Equal ($session.EvaluateCondition($installed[0])) $case[5] "$What`: $($case[0])"
+    }
+  } finally {
+    if ($session) { [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($session) }
+  }
 }
+Assert-KeptOnUpdate 'INSTALLDESKTOPSHORTCUT' 'WIX_UPGRADE_DETECTED' 'EXISTINGDESKTOPSHORTCUT' 'C:\Users\Public\Desktop\PdfCraft.lnk' 'PdfcraftDesktopShortcut' 'Desktop shortcut'
 $secure = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''SecureCustomProperties''' 1
 if (($secure[0] -split ';') -notcontains 'INSTALLDESKTOPSHORTCUT') { throw "INSTALLDESKTOPSHORTCUT is not secure: '$($secure[0])'" }
 $checkbox = Read-Row 'SELECT `Type`, `Property`, `Text` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''DesktopShortcut''' 3
@@ -128,23 +145,71 @@ Assert-Equal $app[0] 'PdfcraftExe' 'Shortcut executable key path'
 $scope = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''ALLUSERS''' 1
 Assert-Equal $scope[0] '1' 'Per-machine shortcut scope'
 
-# Image context menu opens the DPI chooser; the app component owns every registry row so
-# uninstall removes it. No image default association is changed.
+# Each File Explorer menu remembers whether it was installed by finding its key path in HKLM, in the
+# package's own registry view (64-bit for x64 and arm64). Only a release that offered the menu can
+# leave it out, so the OnlyDetect Upgrade rows start at the first release with that menu.
+$upgradeCode = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''UpgradeCode''' 1
+$view64 = $Database.SummaryInformation(0).Property(7) -notmatch '^Intel;'
+function Assert-MenuSearch([string] $Found, [string] $Key, [string] $Release, [string] $Since, [string] $What) {
+  $search = Read-Row ('SELECT `Root`, `Key`, `Name`, `Type` FROM `RegLocator`, `AppSearch` WHERE `AppSearch`.`Signature_` = `RegLocator`.`Signature_` AND `AppSearch`.`Property` = ''' + $Found + '''') 4
+  Assert-Equal $search[0] '2' "$What search HKLM root"
+  Assert-Equal $search[1] $Key "$What search key"
+  Assert-Equal $search[2] '' "$What search reads the default value"
+  # msidbLocatorTypeRawValue (2), plus msidbLocatorType64bit (16) in a 64-bit package.
+  Assert-Equal ([int] $search[3]) $(if ($view64) { 18 } else { 2 }) "$What search type"
+  $upgrade = Read-Row ('SELECT `UpgradeCode`, `VersionMin`, `VersionMax`, `Attributes` FROM `Upgrade` WHERE `ActionProperty` = ''' + $Release + '''') 4
+  Assert-Equal $upgrade[0] $upgradeCode[0] "$What release detection upgrade code"
+  Assert-Equal $upgrade[1] $Since "$What release detection minimum"
+  Assert-Equal $upgrade[2] '' "$What release detection maximum"
+  # msidbUpgradeAttributesOnlyDetect (2) + VersionMinInclusive (256): never removes anything itself.
+  Assert-Equal ([int] $upgrade[3]) 258 "$What release detection attributes"
+  if (($secure[0] -split ';') -notcontains $Release) { throw "$Release is not secure: '$($secure[0])'" }
+}
+# The old version is removed before the new one is installed, so rows that moved between components
+# (the image menu left PdfcraftApp after 0.7.1) are removed with it rather than orphaned.
+$validate = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallValidate''' 1
+$remove = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''RemoveExistingProducts''' 1
+$initialize = Read-Row 'SELECT `Sequence` FROM `InstallExecuteSequence` WHERE `Action` = ''InstallInitialize''' 1
+if ([int] $remove[0] -le [int] $validate[0] -or [int] $remove[0] -ge [int] $initialize[0]) {
+  throw "RemoveExistingProducts ($($remove[0])) must run between InstallValidate and InstallInitialize"
+}
+
+# Image context menu (#190) opens the DPI chooser. Its own component, gated by INSTALLIMAGECONTEXTMENU
+# (on for a first install, kept on update only while present, secure), with the .png label as key
+# path so uninstall removes every row. No image default association is changed.
+$imageKey = 'Software\Classes\SystemFileAssociations\.png\shell\PdfCraft.CreatePdf'
 foreach ($ext in @('png', 'jpg', 'jpeg', 'tif', 'tiff', 'gif', 'bmp', 'jp2', 'j2k', 'jpx')) {
   $key = 'Software\Classes\SystemFileAssociations\.' + $ext + '\shell\PdfCraft.CreatePdf'
   $menu = Read-Row ('SELECT `Value`, `Component_`, `Root` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` IS NULL') 3
   Assert-Equal $menu[0] 'Create PDF with PdfCraft…' "$ext context menu label"
-  Assert-Equal $menu[1] 'PdfcraftApp' "$ext context menu component"
+  Assert-Equal $menu[1] 'PdfcraftImageContextMenu' "$ext context menu component"
   Assert-Equal $menu[2] '2' "$ext context menu HKLM root"
-  $command = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 1
+  $command = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''' + $key + '\command''') 2
   Assert-Equal $command[0] '"[#PdfcraftExe]" --create-images "%1"' "$ext context menu command"
-  $selection = Read-Row ('SELECT `Value` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` = ''MultiSelectModel''') 1
+  Assert-Equal $command[1] 'PdfcraftImageContextMenu' "$ext context menu command component"
+  $selection = Read-Row ('SELECT `Value`, `Component_` FROM `Registry` WHERE `Key` = ''' + $key + ''' AND `Name` = ''MultiSelectModel''') 2
   Assert-Equal $selection[0] 'Single' "$ext context menu selection"
+  Assert-Equal $selection[1] 'PdfcraftImageContextMenu' "$ext context menu selection component"
 }
+$view = $Database.OpenView('SELECT `Key` FROM `Registry` WHERE `Component_` = ''PdfcraftApp''')
+try {
+  [void] $view.Execute()
+  while ($record = $view.Fetch()) {
+    if ($record.StringData(1) -match 'PdfCraft\.CreatePdf') { throw "image menu row left in PdfcraftApp: $($record.StringData(1))" }
+  }
+} finally { [void] $view.Close() }
+$imageKeyPath = Read-Row ('SELECT `Registry` FROM `Registry` WHERE `Key` = ''' + $imageKey + ''' AND `Name` IS NULL') 1
+$imageComponent = Read-Row 'SELECT `KeyPath`, `Attributes` FROM `Component` WHERE `Component` = ''PdfcraftImageContextMenu''' 2
+Assert-Equal $imageComponent[0] $imageKeyPath[0] 'Image context menu key path'
+# msidbComponentAttributesRegistryKeyPath (4).
+if (([int] $imageComponent[1] -band 4) -eq 0) { throw "Image context menu key path is not a registry value: attributes $($imageComponent[1])" }
+Assert-KeptOnUpdate 'INSTALLIMAGECONTEXTMENU' 'IMAGECONTEXTMENURELEASE' 'EXISTINGIMAGECONTEXTMENU' 'Create PDF with PdfCraft…' 'PdfcraftImageContextMenu' 'Image context menu'
+Assert-MenuSearch 'EXISTINGIMAGECONTEXTMENU' $imageKey 'IMAGECONTEXTMENURELEASE' '0.4.0' 'Image context menu'
+if (($secure[0] -split ';') -notcontains 'INSTALLIMAGECONTEXTMENU') { throw "INSTALLIMAGECONTEXTMENU is not secure: '$($secure[0])'" }
 
 # PDF context menu (#682): "Edit with PdfCraft" opens the file in PdfCraft. Its own component, gated
-# by INSTALLPDFCONTEXTMENU (default 1, secure, welcome checkbox), with its menu value as key path so
-# uninstall removes it. Several selected PDFs each start pdfcraft.exe "%1" (Document), which the
+# by INSTALLPDFCONTEXTMENU (on for a first install, kept on update only while present, secure, welcome
+# checkbox), with its menu value as key path so uninstall removes it. Several selected PDFs each start pdfcraft.exe "%1" (Document), which the
 # single-instance hand-off opens as tabs. The .pdf default is never set, so the user's default app
 # stays.
 $pdfKey = 'Software\Classes\SystemFileAssociations\.pdf\shell\PdfCraft.Edit'
@@ -163,8 +228,8 @@ Assert-Equal $pdfCommand[1] 'PdfcraftPdfContextMenu' 'PDF context menu command c
 $pdfComponent = Read-Row 'SELECT `Condition`, `KeyPath` FROM `Component` WHERE `Component` = ''PdfcraftPdfContextMenu''' 2
 Assert-Equal $pdfComponent[0] 'INSTALLPDFCONTEXTMENU = 1' 'PDF context menu condition'
 Assert-Equal $pdfComponent[1] $pdfMenu[0] 'PDF context menu key path'
-$pdfDefault = Read-Row 'SELECT `Value` FROM `Property` WHERE `Property` = ''INSTALLPDFCONTEXTMENU''' 1
-Assert-Equal $pdfDefault[0] '1' 'PDF context menu default'
+Assert-KeptOnUpdate 'INSTALLPDFCONTEXTMENU' 'PDFCONTEXTMENURELEASE' 'EXISTINGPDFCONTEXTMENU' 'Edit with PdfCraft' 'PdfcraftPdfContextMenu' 'PDF context menu'
+Assert-MenuSearch 'EXISTINGPDFCONTEXTMENU' $pdfKey 'PDFCONTEXTMENURELEASE' '0.7.1' 'PDF context menu'
 if (($secure[0] -split ';') -notcontains 'INSTALLPDFCONTEXTMENU') { throw "INSTALLPDFCONTEXTMENU is not secure: '$($secure[0])'" }
 $pdfCheckbox = Read-Row 'SELECT `Type`, `Property`, `Text` FROM `Control` WHERE `Dialog_` = ''InstallWelcome'' AND `Control` = ''PdfContextMenu''' 3
 Assert-Equal $pdfCheckbox[0] 'CheckBox' 'Welcome PDF context-menu control'
@@ -204,4 +269,4 @@ $rm = Read-Row 'SELECT `Dialog` FROM `Dialog` WHERE `Dialog` = ''MsiRMFilesInUse
 Assert-Equal $rm[0] 'MsiRMFilesInUse' 'Files-in-use dialog'
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Database)
 [void] [Runtime.InteropServices.Marshal]::FinalReleaseComObject($Installer)
-Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut (on for a first install, kept on update only while present, checkbox), optional PDF context menu (default on, checkbox), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'
+Write-Output 'ok MSI: per-machine scope guard, publisher, persistent progress text, Start Menu shortcut, optional desktop shortcut and PDF and image context menus (on for a first install, kept on update only while present; checkboxes for the first two), icon/key path, full-UI success/cancel/error and Finish controls, files-in-use dialog, OCR models'

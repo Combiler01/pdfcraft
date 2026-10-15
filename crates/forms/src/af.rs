@@ -446,7 +446,9 @@ pub fn calculate_js(c: &Calculate) -> Option<String> {
             js_str(op.code()),
             fields.iter().map(|f| js_str(f)).collect::<Vec<_>>().join(", ")
         )),
-        Calculate::Notation(expr) => Some(format!("/** BVCALC {expr} EVCALC **/ event.value = AFMakeNumber(0);")),
+        // Acrobat's own translation follows the comment, so a viewer that runs the script instead
+        // of reading the comment computes the same value (a placeholder here showed 0).
+        Calculate::Notation(expr) => Some(format!("/** BVCALC {expr} EVCALC **/ event.value = {};", notation_js(expr))),
     }
 }
 
@@ -624,10 +626,8 @@ pub fn parse_date(text: &str, fmt: &str) -> Option<DateTime> {
         match k {
             // Literal digits in the format may be typed or left out ("15.05.26" or "15.05"
             // for "dd.mm.26"); a different number there is left over and rejected below.
-            '#' => {
-                if it.peek() == Some(&literal) {
-                    it.next();
-                }
+            '#' if it.peek() == Some(&literal) => {
+                it.next();
             }
             'm' => {
                 dt.m = match month_name {
@@ -866,6 +866,41 @@ pub fn validate(v: &Validate, value: &str) -> Result<(), String> {
     })
 }
 
+/// Simplified field notation as the JavaScript Acrobat writes after its `BVCALC` comment:
+/// each field name becomes `AFMakeNumber(this.getField("name").value)`, the rest stays.
+pub fn notation_js(expr: &str) -> String {
+    let mut out = String::new();
+    let cs: Vec<char> = expr.chars().collect();
+    let mut i = 0;
+    while let Some(&c) = cs.get(i) {
+        if c.is_whitespace() || "+-*/()".contains(c) {
+            out.push(c);
+            i += 1;
+        } else if c.is_ascii_digit() || c == '.' {
+            while let Some(&d) = cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.') {
+                out.push(d);
+                i += 1;
+            }
+        } else {
+            let mut name = String::new();
+            while let Some(&n) = cs.get(i).filter(|n| !(n.is_whitespace() || "+-*/()".contains(**n))) {
+                // `\` escapes a space or an operator inside a name, as Acrobat writes them.
+                if n == '\\'
+                    && let Some(&next) = cs.get(i + 1)
+                {
+                    name.push(next);
+                    i += 2;
+                    continue;
+                }
+                name.push(n);
+                i += 1;
+            }
+            out.push_str(&format!("AFMakeNumber(this.getField({}).value)", js_str(&name)));
+        }
+    }
+    out
+}
+
 /// Evaluate simplified field notation: + - * / and parentheses over numbers and field names
 /// (`\` escapes spaces and operators in names, as Acrobat writes them).
 fn eval_notation(src: &str, value_of: &dyn Fn(&str) -> f64) -> Option<f64> {
@@ -1026,6 +1061,12 @@ mod tests {
         assert_eq!(parse_calculate(&calculate_js(&c).unwrap()), Some(c));
         let c = Calculate::Notation("a + b".into());
         assert_eq!(parse_calculate(&calculate_js(&c).unwrap()), Some(c));
+        // The JavaScript after the comment is Acrobat's translation, so viewers that run it
+        // instead of reading the comment compute the same value (not 0).
+        assert_eq!(
+            calculate_js(&Calculate::Notation("(Unit\\ Price * Qty) / 2".into())).unwrap(),
+            "/** BVCALC (Unit\\ Price * Qty) / 2 EVCALC **/ event.value = (AFMakeNumber(this.getField(\"Unit Price\").value) * AFMakeNumber(this.getField(\"Qty\").value)) / 2;"
+        );
     }
 
     #[test]

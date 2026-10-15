@@ -12,7 +12,7 @@ use crate::theme::Tokens;
 use crate::widgets;
 
 /// The colour of the warning under text the standard fonts can't draw.
-const UNDRAWABLE: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
+pub(crate) const UNDRAWABLE: Color32 = Color32::from_rgb(0xD7, 0x37, 0x3F);
 
 /// The first character of a draft that can't be drawn, as the engine decides it (it refuses
 /// such text, #125): outside the standard fonts and not shaped with the Arabic face.
@@ -86,9 +86,13 @@ pub struct ContentView {
     pub select_added: Option<(usize, usize)>,
     grab: Option<(usize, Grab, Pos2)>,
     undrawable: UndrawableMemo,
+    layout: Option<(AddedText, f32, f64, [f64; 4])>,
 }
 
 impl ContentView {
+    pub(crate) fn finish_draft(&mut self, added: &[Added]) -> Option<Edit> {
+        self.draft.take().and_then(|d| finish(self, d, added))
+    }
     /// The draft's first character the standard fonts can't draw. Such a draft is kept open, and
     /// counts as unsaved work, until it is corrected or discarded.
     pub(crate) fn blocked(&self) -> Option<char> {
@@ -134,7 +138,7 @@ impl MoveBackground {
             *self = Self { key, ..Default::default() };
             if let Some((_, page, index)) = key {
                 self.renderer = doc.added_content_preview(page, index).ok().map(|p| p.renderer());
-                self.from = on_page(&doc.added, page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
+                self.from = on_page(doc.added(), page).into_iter().find(|(i, _)| *i == index).map(|(_, a)| a.content.rect());
             }
         }
         if self.settling.is_some() {
@@ -248,6 +252,10 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
     added.iter().filter(|a| a.page == page).enumerate().collect()
 }
 
+pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], point: Pos2) -> bool {
+    on_page(added, page).iter().any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
+}
+
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
     [(r.left_top(), true, true), (r.right_top(), false, true), (r.left_bottom(), true, false), (r.right_bottom(), false, false)]
 }
@@ -279,6 +287,22 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
     }
 }
 
+/// Added text and images keep pointer ownership over a form field while editing content.
+pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
+    let cv = &view.content;
+    if cv.grab.is_some_and(|(grab_page, _, _)| grab_page == page) {
+        return true;
+    }
+    let Some(p) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos())).filter(|p| xf.rect.contains(*p)) else {
+        return false;
+    };
+    on_page(added, page).into_iter().any(|(index, item)| {
+        let rect = screen_rect(xf, info, page, item.content.rect());
+        rect.expand(2.0).contains(p)
+            || cv.selected == Some((page, index)) && handles(rect).into_iter().any(|(corner, _, _)| corner.distance(p) <= 6.0)
+    })
+}
+
 /// Pointer input on one page in Edit mode (`adding_text` with the Text tool). `true` when it
 /// used the input.
 #[allow(clippy::too_many_arguments)]
@@ -290,6 +314,7 @@ pub(crate) fn page_input(
     info: &DocInfo,
     added: &[Added],
     adding_text: bool,
+    edit_on_click: bool,
     style: &AddedText,
     view: &mut DocView,
 ) -> bool {
@@ -347,14 +372,10 @@ pub(crate) fn page_input(
             let at = to_display(xf, info, page, p);
             let mut style = style.clone();
             style.text.clear();
-            cv.draft = Some(TextDraft {
-                page,
-                index: None,
-                rect: [at[0], at[1] - style.size * 1.2, at[0] + 200.0, at[1]],
-                text: String::new(),
-                style,
-                focus: true,
-            });
+            let page_width = info.pages.get(page).map_or(f64::INFINITY, |p| p.width as f64);
+            let rect = [at[0], at[1] - style.size * 1.2, (at[0] + 200.0).min(page_width), at[1]];
+            style.rect = rect;
+            cv.draft = Some(TextDraft { page, index: None, rect, text: String::new(), style, focus: true });
             consumed = true;
             if typed.is_some() {
                 view.pending_edit = typed;
@@ -379,12 +400,18 @@ pub(crate) fn page_input(
         }
         return consumed;
     }
-    if resp.double_clicked()
+    if (resp.double_clicked() || edit_on_click && resp.clicked() && corner.is_none())
         && let Some((i, a)) = hit
         && let AddedContent::Text(t) = &a.content
     {
         if cv.hold_blocked() {
             return true;
+        }
+        if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
+            return true;
+        }
+        if let Some(edit) = cv.finish_draft(added) {
+            view.pending_edit = Some(edit);
         }
         cv.draft = Some(TextDraft { page, index: Some(i), rect: t.rect, text: t.text.clone(), style: t.clone(), focus: true });
         cv.selected = Some((page, i));
@@ -462,16 +489,46 @@ pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
 /// committed (a click away, or Done), and whether Done finished adding text. Discard or Escape
 /// throws the draft away.
 pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, added: &[Added]) -> (Option<Edit>, bool) {
-    let Some((page, rect)) = view.content.draft.as_ref().map(|d| (d.page, d.rect)) else { return (None, false) };
+    let Some(page) = view.content.draft.as_ref().map(|d| d.page) else { return (None, false) };
     let Some(xf) = view.page_xform(page) else { return (None, false) };
-    let r = screen_rect(&xf, info, page, rect);
     let zoom = xf.rect.width() / xf.pw.max(1.0);
+    let Some(draft) = view.content.draft.as_mut() else { return (None, false) };
+    let font = crate::edit_text_ui::editor_font(&draft.style, (draft.style.size as f32 * zoom).clamp(1.0, 300.0));
+    let text = AddedText { text: draft.text.clone(), ..draft.style.clone() };
+    let Some(page_width) = info.pages.get(page).map(|p| p.width as f64) else { return (None, false) };
+    if let Some((key, z, width, rect)) = &view.content.layout
+        && *key == text
+        && *z == zoom
+        && *width == page_width
+    {
+        draft.rect = *rect;
+    } else {
+        let source = draft.style.rect;
+        if draft.index.is_some() && draft.text == draft.style.text {
+            draft.rect = source;
+        } else {
+            let natural = ctx.fonts_mut(|f| f.layout_no_wrap(draft.text.clone(), font.clone(), Color32::BLACK).size().x) as f64 / zoom as f64;
+            let width = natural.max(pdfcraft_engine::added_text_width(&text)) + 2.0;
+            let available = page_width - source[0];
+            let width = width.max(source[2] - source[0]).min(available.max(1.0));
+            draft.rect = [source[0], source[1], source[0] + width, source[3]];
+            draft.rect = pdfcraft_engine::added_text_rect(&AddedText { rect: draft.rect, ..text.clone() });
+        }
+        view.content.layout = Some((text, zoom, page_width, draft.rect));
+    }
+    let r = screen_rect(&xf, info, page, draft.rect);
+    let source_rect = draft.index.map(|_| screen_rect(&xf, info, page, draft.style.rect));
+    let background_ready = draft.index.is_some_and(|index| view.text_background.ready_added(page, index));
     let tokens = Tokens::get(ctx);
     let (mut commit, mut cancel, mut done) = (false, false, false);
     let mut undrawable = None;
     let memo = &view.content.undrawable;
-    egui::Area::new(egui::Id::new(("added-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(r.min).show(ctx, |ui| {
+    egui::Area::new(egui::Id::new(("added-text", view.id.0))).order(egui::Order::Foreground).fixed_pos(r.min).constrain(false).show(ctx, |ui| {
         let Some(t) = view.content.draft.as_mut() else { return };
+        ui.set_width(r.width() + 64.0);
+        if let Some(source_rect) = source_rect.filter(|_| !background_ready) {
+            ui.painter().rect_filled(source_rect.union(r).expand(1.0), CornerRadius::ZERO, Color32::WHITE);
+        }
         // The box is white in every theme, so the caret must not follow the theme (pale in dark mode) (#655).
         ui.visuals_mut().text_cursor.stroke.color = crate::edit_text_ui::caret_color_on(Color32::WHITE);
         let [cr, cg, cb] = t.style.color.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
@@ -479,10 +536,10 @@ pub(crate) fn editor(ctx: &egui::Context, view: &mut DocView, info: &DocInfo, ad
             ui.spacing_mut().item_spacing.x = 4.0;
             let resp = ui.add(
                 egui::TextEdit::multiline(&mut t.text)
-                    .font(egui::FontId::proportional((t.style.size as f32 * zoom).max(8.0)))
+                    .font(font)
                     .desired_width(r.width().max(60.0))
                     .desired_rows(1)
-                    .background_color(Color32::from_rgba_unmultiplied(255, 255, 255, 235))
+                    .background_color(if background_ready { Color32::TRANSPARENT } else { Color32::WHITE })
                     .text_color(Color32::from_rgb(cr, cg, cb))
                     .hint_text(tl!("Type text"))
                     .id_salt("added-text-edit"),
@@ -542,7 +599,8 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
         Some(i) => {
             let (_, a) = on_page(added, d.page).into_iter().find(|(k, _)| *k == i)?;
             let AddedContent::Text(old) = &a.content else { return None };
-            (old.text != text).then(|| Edit::UpdateContent { page: d.page, index: i, content: AddedContent::Text(AddedText { text, ..old.clone() }) })
+            let updated = AddedText { text, rect: d.rect, ..d.style };
+            (*old != updated).then_some(Edit::UpdateContent { page: d.page, index: i, content: AddedContent::Text(updated) })
         }
     }
 }
@@ -715,10 +773,10 @@ impl crate::PdfCraftApp {
     }
 
     /// Copy Image: image `index` on `page`, at its own resolution, to the clipboard.
-    pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) {
-        let Some((_, id)) = self.active_ids() else { return };
+    pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
+        let Some((_, id)) = self.active_ids() else { return false };
         if !self.may_copy(id) {
-            return;
+            return false;
         }
         let img_rect = self.session.get(id).and_then(|d| d.page_images(page).into_iter().nth(index).map(|im| im.rect));
         self.last_copied_image_rect = img_rect;
@@ -729,7 +787,7 @@ impl crate::PdfCraftApp {
             let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
             self.last_copied_file = Some((name, bytes));
         }
-        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return };
+        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return false; };
         let copied = pixels.and_then(|(w, h, rgba)| {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
@@ -744,18 +802,60 @@ impl crate::PdfCraftApp {
             Ok((w, h))
         });
         match copied {
-            Ok((w, h)) => self.notify_fmt("The image has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())]),
-            Err(e) => self.notify_fmt("Couldn't copy the image: {e}", &[("e", &e)]),
+            Ok((w, h)) => {
+                self.notify_fmt("The image has been copied ({w} × {h} pixels)", &[("w", &w.to_string()), ("h", &h.to_string())]);
+                true
+            }
+            Err(e) => {
+                self.notify_fmt("Couldn't copy the image: {e}", &[("e", &e)]);
+                false
+            }
         }
     }
 
-    /// Cut Image: copy image `index` on `page` to the clipboard, then delete it.
-    pub(crate) fn cut_page_image(&mut self, view_idx: usize, page: usize, index: usize) {
-        self.copy_page_image(page, index);
-        if let Some(view) = self.views.get_mut(view_idx) {
-            view.pending_edit = Some(pdfcraft_engine::Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
-            view.image_selection = None;
+/// The picture's visible box on its page, in user space.
+    fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
+        let (_, id) = self.active_ids()?;
+        let image = self.session.get(id)?.page_images(page).into_iter().nth(index)?;
+        Some(image.visible_rect.unwrap_or(image.rect))
+    }
+
+    /// Cut: copy the picture, and only when that worked take it off the page (one undo step).
+    pub(crate) fn cut_page_image(&mut self, page: usize, index: usize) {
+        if self.copy_page_image(page, index) {
+            self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
+            for v in &mut self.views {
+                if let Some(sel) = &v.image_selection && sel.page == page && sel.index == index {
+                    v.image_selection = None;
+                }
+            }
         }
+    }
+
+    /// Redact image: a redaction mark over the whole picture. It is applied, like any mark, from
+    /// Redact a PDF.
+    pub(crate) fn redact_page_image(&mut self, page: usize, index: usize) {
+        let Some(rect) = self.page_image_box(page, index) else { return };
+        let author = self.comment_prefs.author.clone();
+        let mark = self.redact_prefs.mark(page, vec![pdfcraft_engine::rect_quad(rect)], &author);
+        if self.apply_edit(mark) {
+            self.notify_tr("The image is marked for redaction. Apply it with Redact a PDF");
+        }
+    }
+
+    /// Create link: the link properties for a new link over the picture.
+    pub(crate) fn link_page_image(&mut self, page: usize, index: usize) {
+        if let Some(rect) = self.page_image_box(page, index) {
+            self.open_link_props(page, Some(rect), None);
+        }
+    }
+
+    /// Recognize text: the Recognize Text dialog, set to this page.
+    pub fn recognize_text_on_page(&mut self, page: usize) {
+        self.ocr_draft.pages = crate::ocr_ui::OcrPages::Range;
+        self.ocr_draft.from = page + 1;
+        self.ocr_draft.to = page + 1;
+        self.dialog = Some(crate::Dialog::RecognizeText);
     }
 
     /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
@@ -853,7 +953,7 @@ impl crate::PdfCraftApp {
         if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
             if let Some(v) = self.views.get_mut(i) {
                 v.current = page;
-                v.image_selection = Some(crate::edit_text_ui::ImageSelection { page, index: before, crop_mode: false, crop_rect: None, drag: None });
+                v.image_selection = Some(crate::edit_text_ui::ImageSelection { page, index: before, crop_mode: false, crop_rect: None, drag: None, crop: None });
             }
             self.quick_tool = crate::QuickTool::EditText;
             self.notify_tr("Image pasted");
@@ -905,7 +1005,7 @@ impl crate::PdfCraftApp {
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
-        let before = self.session.get(id).map_or(0, |d| d.added.iter().filter(|a| a.page == page).count());
+        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
             self.views[i].content.select_added = Some((page, before));
             self.left = crate::LeftPanel::Tool("edit");
@@ -919,6 +1019,11 @@ pub(crate) enum ImageAction {
     Update(pdfcraft_engine::AddedContent),
     Replace,
 }
+
+// Lucide names a flip icon after the axis it draws, Acrobat names the flip after the direction the
+// picture moves: Flip horizontal (left and right swap) shows Lucide's vertical axis.
+const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
+const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
 /// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
 pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
@@ -941,11 +1046,11 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
             turn(&mut i, 3);
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-horizontal-2", 28.0, false, tl!("Flip horizontal")).clicked() {
+        if crate::icons::button(ui, FLIP_HORIZONTAL_ICON, 28.0, false, tl!("Flip horizontal")).clicked() {
             i.flip_h = !i.flip_h;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
-        if crate::icons::button(ui, "flip-vertical-2", 28.0, false, tl!("Flip vertical")).clicked() {
+        if crate::icons::button(ui, FLIP_VERTICAL_ICON, 28.0, false, tl!("Flip vertical")).clicked() {
             i.flip_v = !i.flip_v;
             out = Some(ImageAction::Update(AddedContent::Image(i.clone())));
         }
@@ -972,4 +1077,54 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    /// The image a flip button leaves behind, as the panel returns it.
+    fn flipped(tooltip: &str) -> pdfcraft_engine::AddedImage {
+        let img = pdfcraft_engine::AddedImage::new([0.0, 0.0, 100.0, 50.0], pdfcraft_cos::ObjRef::new(7, 0));
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::new_ui_state(
+            move |ui, out: &mut Option<pdfcraft_engine::AddedImage>| {
+                // The app's fonts (the semibold section title) take effect from the next frame.
+                if !fonts {
+                    ui.ctx().set_fonts(crate::theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                if let Some(ImageAction::Update(AddedContent::Image(i))) = image_panel(ui, &t, &img) {
+                    *out = Some(i);
+                }
+            },
+            None,
+        );
+        h.run();
+        h.get_by_label(tooltip).click();
+        h.run();
+        h.state().clone().expect("the button updates the image")
+    }
+
+    #[test]
+    fn flip_buttons_show_the_mirror_axis_of_the_flip_they_make() {
+        // #1834: Acrobat's Flip horizontal swaps left and right across a vertical axis. Lucide names
+        // its flip icons after the axis drawn, so that is its flip-vertical-2.
+        let svg = |name: &str| {
+            let (_, bytes) = crate::icon_data::ICONS.iter().find(|(n, _)| *n == name).expect("bundled icon");
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        let (h, v) = (svg(FLIP_HORIZONTAL_ICON), svg(FLIP_VERTICAL_ICON));
+        assert!(h.contains("M12 2v2") && !h.contains("M4 12H2"), "Flip horizontal draws a vertical axis:\n{h}");
+        assert!(v.contains("M4 12H2") && !v.contains("M12 2v2"), "Flip vertical draws a horizontal axis:\n{v}");
+
+        let i = flipped("Flip horizontal");
+        assert!(i.flip_h && !i.flip_v, "Flip horizontal mirrors left and right");
+        let i = flipped("Flip vertical");
+        assert!(i.flip_v && !i.flip_h, "Flip vertical mirrors top and bottom");
+    }
 }

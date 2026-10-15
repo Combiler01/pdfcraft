@@ -298,3 +298,30 @@ fn unreadable_constraint_extensions_fail_closed() {
     let c = issue("Garbled Constraints", None, FOREVER, &[garbage]);
     assert!(c.cert.has_basic_constraints && !c.cert.is_ca && !c.cert.may_issue());
 }
+
+#[test]
+fn an_unreadable_extended_key_usage_allows_no_purpose() {
+    // An extendedKeyUsage that is present restricts the key even when it doesn't parse (#1807):
+    // truncated, critical or not; a SET instead of a SEQUENCE; or a member that isn't an OID.
+    // Each would otherwise read as "no restriction", or as only its readable members.
+    let r = root();
+    let any = der::oid("2.5.29.37.0");
+    let truncated = [0x30, 0x05, 0x06];
+    let malformed = [
+        ext("2.5.29.37", &truncated),
+        der::seq(&[&der::oid("2.5.29.37"), &der::octets(&truncated)]),
+        ext("2.5.29.37", &der::tlv(tag::SET, &any)),
+        ext("2.5.29.37", &der::seq(&[&der::int(1), &any])),
+    ];
+    for (i, eku) in malformed.into_iter().enumerate() {
+        let signer = signer_with("Malformed EKU", &r, &[key_usage(DIGITAL_SIGNATURE), eku]);
+        assert_eq!(signer.cert.extended_key_usage.as_deref(), Some(&[][..]), "case {i}");
+        let (status, details) = verdict(signer, vec![], &r.cert);
+        assert_eq!(status, Status::Unknown, "case {i}: {details:?}");
+        assert!(details.iter().any(|d| d.contains("not issued for signing documents")), "case {i}: {details:?}");
+    }
+    // The same document-signing purpose, well formed, may sign.
+    let (status, details) =
+        verdict(signer_with("Good EKU", &r, &[key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["2.5.29.37.0"])]), vec![], &r.cert);
+    assert_eq!(status, Status::Valid, "{details:?}");
+}

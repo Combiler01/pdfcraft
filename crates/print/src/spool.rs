@@ -59,6 +59,12 @@ pub fn submit(pdf: &[u8], job: &Job) -> Result<String, crate::PrintError> {
     craft_print::submit(pdf, job).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }
 
+/// [`submit`], told `(sent, sheets)` as each sheet reaches the spooler (Windows; CUPS takes the
+/// whole PDF at once and reports nothing).
+pub fn submit_with_progress(pdf: &[u8], job: &Job, progress: &mut dyn FnMut(usize, usize)) -> Result<String, crate::PrintError> {
+    craft_print::submit_with_progress(pdf, job, progress).map_err(|e| crate::PrintError::Spool(e.to_string()))
+}
+
 pub fn open_printer_preferences(printer: &str) -> Result<(), crate::PrintError> {
     craft_print::open_printer_preferences(printer).map_err(|e| crate::PrintError::Spool(e.to_string()))
 }

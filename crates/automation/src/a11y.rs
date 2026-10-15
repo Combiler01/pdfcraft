@@ -202,6 +202,10 @@ fn review_html(record: &Value) -> Result<String> {
     Ok(html)
 }
 
+/// Tags in one page of `accessibility_tags`, by default and at most.
+const TAG_PAGE: usize = 200;
+const MAX_TAG_PAGE: usize = 1000;
+
 impl Automation {
     pub(crate) fn accessibility_autotag_apply(&mut self, a: &Args) -> Result<Value> {
         let id = self.doc(a)?.id;
@@ -211,6 +215,19 @@ impl Automation {
             "tags": tags["tags"], "count": tags["count"],
             "note": "Text objects were tagged as paragraphs. Review heading roles, reading order and remaining accessibility findings manually.",
         }))
+    }
+
+    pub(crate) fn accessibility_autotag_form_fields(&mut self, a: &Args) -> Result<Value> {
+        let id = self.doc(a)?.id;
+        self.session.apply(id, pdfcraft_engine::Edit::AutoTagFormFields).map_err(failed)?;
+        let report = self
+            .doc(a)?
+            .accessibility_check(&Options { rules: [Rule::TaggedFormFields].into(), pages: None })
+            .ok_or_else(|| failed("the document can't be read"))?;
+        let result = report.result(Rule::TaggedFormFields).ok_or_else(|| failed("the form field check is unavailable"))?;
+        Ok(
+            json!({ "status": status_id(result.status), "remaining_findings": result.findings.len(), "note": "Only form widgets were tagged. Review text, figures, links, reading order, and other document content separately." }),
+        )
     }
 
     pub(crate) fn accessibility_autotag_preview(&self, a: &Args) -> Result<Value> {
@@ -267,6 +284,14 @@ impl Automation {
         let o = self.a11y_options(a)?;
         let r = self.doc(a)?.accessibility_check(&o).ok_or_else(|| failed("the document can't be read for checking"))?;
         Ok(report_json(&r))
+    }
+
+    /// Report only untagged page content, annotations, and AcroForm widgets.
+    pub(crate) fn a11y_find_untagged(&self, a: &Args) -> Result<Value> {
+        let pages = a.opt_ints("pages")?.map(|_| self.pages(a, "pages")).transpose()?;
+        let rules = [Rule::TaggedContent, Rule::TaggedAnnotations, Rule::TaggedFormFields].into_iter().collect();
+        let report = self.doc(a)?.accessibility_check(&Options { rules, pages }).ok_or_else(|| failed("the document can't be read for checking"))?;
+        Ok(report_json(&report))
     }
 
     pub(crate) fn a11y_report(&self, a: &Args) -> Result<Value> {
@@ -441,11 +466,39 @@ impl Automation {
         self.accessibility_figures(a)
     }
 
+    /// The structure tags, one page at a time (`offset`, `limit`), optionally only some types, pages
+    /// (1-based) or depths. `count` is how many match; `next` is where the following page starts.
     pub(crate) fn accessibility_tags(&self, a: &Args) -> Result<Value> {
-        let tags: Vec<Value> = self
+        let offset = usize::try_from(a.opt_int("offset")?.unwrap_or(0)).map_err(|_| ToolError::InvalidArgs("offset must be 0 or more".into()))?;
+        let limit = a.opt_int("limit")?.unwrap_or(TAG_PAGE as i64);
+        let limit = usize::try_from(limit)
+            .ok()
+            .filter(|l| (1..=MAX_TAG_PAGE).contains(l))
+            .ok_or_else(|| ToolError::InvalidArgs(format!("limit must be from 1 to {MAX_TAG_PAGE}")))?;
+        let types: Option<Vec<&str>> = a.get("types").map(|_| a.strs("types")).transpose()?;
+        let pages: Option<Vec<usize>> = a
+            .opt_ints("pages")?
+            .map(|p| p.into_iter().map(|n| usize::try_from(n).ok().filter(|n| *n >= 1).map(|n| n - 1)).collect::<Option<Vec<_>>>())
+            .map(|p| p.ok_or_else(|| ToolError::InvalidArgs("pages must be 1-based page numbers".into())))
+            .transpose()?;
+        let max_depth = a
+            .opt_int("max_depth")?
+            .map(|d| usize::try_from(d).map_err(|_| ToolError::InvalidArgs("max_depth must be 0 or more".into())))
+            .transpose()?;
+        let matching: Vec<_> = self
             .doc(a)?
             .tags()
             .into_iter()
+            .filter(|t| types.as_ref().is_none_or(|ty| ty.contains(&t.kind.as_str())))
+            .filter(|t| pages.as_ref().is_none_or(|p| t.page.is_some_and(|page| p.contains(&page))))
+            .filter(|t| max_depth.is_none_or(|d| t.depth <= d))
+            .collect();
+        let count = matching.len();
+        let next = offset.checked_add(limit).filter(|n| *n < count);
+        let tags: Vec<Value> = matching
+            .into_iter()
+            .skip(offset)
+            .take(limit)
             .map(|t| {
                 json!({
                     "object": t.object.num, "generation": t.object.generation, "type": t.kind,
@@ -455,7 +508,17 @@ impl Automation {
                 })
             })
             .collect();
-        Ok(json!({ "count": tags.len(), "tags": tags }))
+        Ok(json!({ "count": count, "tags": tags, "next": next }))
+    }
+
+    pub(crate) fn accessibility_tag_content(&self, a: &Args) -> Result<Value> {
+        let object = u32::try_from(a.int("object")?).map_err(|_| ToolError::InvalidArgs("object must be a positive tag object number".into()))?;
+        let generation =
+            u16::try_from(a.int("generation")?).map_err(|_| ToolError::InvalidArgs("generation must be a PDF object generation".into()))?;
+        let content = self.doc(a)?.tag_content(pdfcraft_cos::ObjRef { num: object, generation }).map_err(failed)?;
+        Ok(
+            json!({ "count": content.len(), "content": content.into_iter().map(|item| json!({ "page": item.page.map(|p| p + 1), "mcid": item.mcid, "text": item.text })).collect::<Vec<_>>() }),
+        )
     }
 
     pub(crate) fn accessibility_set_tag_property(&mut self, a: &Args) -> Result<Value> {
@@ -473,6 +536,18 @@ impl Automation {
         self.session
             .apply(id, pdfcraft_engine::Edit::SetTagProperty { object: pdfcraft_cos::ObjRef::new(object, generation), property, value })
             .map_err(failed)?;
+        self.accessibility_tags(a)
+    }
+
+    pub(crate) fn accessibility_mark_tag_artifact(&mut self, a: &Args) -> Result<Value> {
+        let object = u32::try_from(a.int("object")?).map_err(|_| ToolError::InvalidArgs("object must be a positive tag object number".into()))?;
+        if object == 0 {
+            return Err(ToolError::InvalidArgs("object must be a positive tag object number".into()));
+        }
+        let generation = u16::try_from(a.int("generation")?)
+            .map_err(|_| ToolError::InvalidArgs("generation must be a PDF object generation from accessibility_tags".into()))?;
+        let id = self.doc(a)?.id;
+        self.session.apply(id, pdfcraft_engine::Edit::MarkTagArtifact { object: pdfcraft_cos::ObjRef::new(object, generation) }).map_err(failed)?;
         self.accessibility_tags(a)
     }
 
@@ -524,7 +599,7 @@ impl Automation {
         // other tools (the write check passes missing files, which stay per-file errors below).
         let paths = a.strs("paths")?;
         for p in &paths {
-            self.resolve(p, true)?;
+            self.resolve_for(p, crate::file_access::Access::Read, true)?;
         }
         std::fs::create_dir_all(&folder).map_err(|e| failed(e.to_string()))?;
         let ocr = pdfcraft_engine::ocr::engine().map_err(failed)?;

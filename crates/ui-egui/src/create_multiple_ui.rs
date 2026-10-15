@@ -148,7 +148,7 @@ impl PdfCraftApp {
         if self.views.len() > before
             && let Some(view) = self.active.and_then(|i| self.views.get_mut(i))
         {
-            view.organize = true;
+            view.open_organize();
         }
     }
 }

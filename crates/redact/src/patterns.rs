@@ -68,18 +68,41 @@ fn digit_run(s: &[char], start: usize, seps: &[char], max_len: usize) -> (usize,
     (i, n)
 }
 
+/// Whether the separated digit run goes on past `k` in the direction `step` (1 or −1): the next
+/// digit after `k` is reached through separators only.
+fn run_continues(s: &[char], k: usize, step: isize, seps: &[char]) -> bool {
+    let mut j = k;
+    loop {
+        let Some(c) = j.checked_add_signed(step).and_then(|j| s.get(j)) else { return false };
+        if c.is_ascii_digit() {
+            return true;
+        }
+        if !seps.contains(c) {
+            return false;
+        }
+        j = j.wrapping_add_signed(step);
+    }
+}
+
 fn phone(s: &[char], i: usize) -> Option<usize> {
+    const SEPS: [char; 5] = [' ', '-', '.', '(', ')'];
     let start_ok = s[i] == '+' && digit(s.get(i + 1)) || s[i] == '(' && digit(s.get(i + 1)) || s[i].is_ascii_digit();
     if !start_ok || word(i.checked_sub(1).and_then(|p| s.get(p))) || s.get(i.wrapping_sub(1)) == Some(&'+') {
         return None;
     }
+    // A phone number is a whole run of digit groups. The tail of a longer one (an IBAN, a
+    // company or social security number) is not a phone number, however it is grouped (#1884).
+    if run_continues(s, i, -1, &SEPS) {
+        return None;
+    }
     let plus = s[i] == '+';
     let first = if plus { i + 1 } else { i };
-    let (end, n) = digit_run(s, first, &[' ', '-', '.', '(', ')'], 28);
+    let (end, n) = digit_run(s, first, &SEPS, 28);
     let run = s.get(first..end)?;
     let seps = run.iter().filter(|c| !c.is_ascii_digit()).count();
-    // Always grouped by at least one separator, so plain numbers never match.
-    if seps == 0 || digit(s.get(end)) {
+    // Always grouped by at least one separator, so plain numbers never match; nor does the
+    // head of a run too long to be a phone number.
+    if seps == 0 || digit(s.get(end)) || run_continues(s, end - 1, 1, &SEPS) {
         return None;
     }
     let ok = if plus {
@@ -356,6 +379,18 @@ mod tests {
             ),
             Vec::<String>::new()
         );
+    }
+
+    #[test]
+    fn the_tail_of_a_longer_number_is_not_a_phone_number() {
+        // #1884: the last groups of a French social security number, an IBAN and a SIRET used
+        // to be marked as phone numbers (and the start left visible). Example numbers.
+        for s in ["NIR 1 85 05 78 006 084 36 end", "IBAN FR76 3000 6000 0112 3456 7890 189", "SIRET 123 456 782 00010"] {
+            assert_eq!(found(Pattern::Phone, s), Vec::<String>::new(), "{s}");
+        }
+        assert_eq!(found(Pattern::Phone, "tel 01 23 45 67 89 / +33 1 23 45 67 89"), ["01 23 45 67 89", "+33 1 23 45 67 89"]);
+        // Nor the head of a run too long to be one: 28 characters in, this one still goes on.
+        assert_eq!(found(Pattern::Phone, "01 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7"), Vec::<String>::new());
     }
 
     #[test]

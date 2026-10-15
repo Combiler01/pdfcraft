@@ -269,6 +269,12 @@ fn stamp_turn(d: &Dict) -> i64 {
     d.get(b"PCStampRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
 }
 
+/// The page `/Rotate` a text box's or Fill & Sign text's lines are turned back by
+/// (`/PCTextRotate`, written when it is added to a turned page).
+fn text_turn(d: &Dict) -> i64 {
+    d.get(b"PCTextRotate").and_then(Object::as_int).unwrap_or(0).rem_euclid(360) / 90 * 90
+}
+
 /// The first text [`build`] would draw in the standard fonts (Helvetica, WinAnsiEncoding) that
 /// they can't, which would come out as `?`: what it is (for the message) and the character. The
 /// text of a text box, callout or Fill & Sign text, a measurement's label, a dynamic stamp's
@@ -666,6 +672,19 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let bw = if d.contains(b"BS") || d.contains(b"Border") { border_width(d) } else { 0.0 };
             // A callout: the leader line (arrowhead at its first point), and the text box inside
             // `/Rect` by `/RD`.
+            // Text added to a turned page is drawn upright in its displayed box, which the form
+            // `/Matrix` then maps into `/Rect` (as for stamps). Callouts keep user-space axes.
+            let turn = if d.contains(b"CL") { 0 } else { text_turn(d) };
+            let (rect, matrix) = if turn == 0 {
+                (rect, None)
+            } else {
+                let (rw, rh) = (rect[2] - rect[0], rect[3] - rect[1]);
+                let (dw, dh) = if matches!(turn, 90 | 270) { (rh, rw) } else { (rw, rh) };
+                if dw < 1.0 || dh < 1.0 {
+                    return None;
+                }
+                ([0.0, 0.0, dw, dh], Some(pdfcraft_model::view_matrix_for(turn, rect)))
+            };
             let full = rect;
             let mut rect = rect;
             if d.contains(b"CL") {
@@ -751,7 +770,11 @@ pub fn build(d: &Dict) -> Option<Stream> {
             let mut fonts = Dict::new();
             fonts.set(b"Helv".to_vec(), Object::Dict(font));
             res.set(b"Font".to_vec(), Object::Dict(fonts));
-            return Some(form(full, &out, res));
+            let mut stream = form(full, &out, res);
+            if let Some(m) = matrix {
+                stream.dict.set(b"Matrix".to_vec(), Object::Array(m.iter().copied().map(Object::Real).collect()));
+            }
+            return Some(stream);
         }
         _ => return None,
     }

@@ -254,6 +254,16 @@ pub fn render_into<'a>(
         interpreter_settings.preview,
     );
 
+    // PdfCraft patch (18): the page renders as one transparency group with the background
+    // painted *inside* it, as the initial backdrop. A group isolates what it wraps from what
+    // was painted before it, so with the background outside, a Multiply highlight blended
+    // only with the group's transparent backdrop and stayed its own colour — over a dark
+    // reading-colours background the whole quad became one flat bar and the words under it
+    // vanished. Inside the group the highlight multiplies with the background too: the words
+    // keep the highlight's colour and the band between them takes the background (white
+    // backgrounds are unaffected — multiplying with white is the identity).
+    device.push_transparency_group(1.0, None, BlendMode::Normal);
+
     device.ctx.set_paint(render_settings.bg_color);
     device
         .ctx
@@ -265,12 +275,10 @@ pub fn render_into<'a>(
         fill: FillRule::NonZero,
     });
 
-    device.push_transparency_group(1.0, None, BlendMode::Normal);
     interpret_page(page, &mut state, &mut device);
 
-    device.pop_transparency_group();
-
     device.pop_clip_path();
+    device.pop_transparency_group();
 
     let mut resources = vello_cpu::Resources::default();
     device.ctx.render_to_buffer(

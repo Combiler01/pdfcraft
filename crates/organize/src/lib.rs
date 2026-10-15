@@ -11,7 +11,7 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString};
+use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, XrefEntry};
 
 mod boxes;
 mod dedupe;
@@ -20,6 +20,7 @@ mod labels;
 mod outline;
 mod pdfx;
 mod prune;
+mod transition;
 pub mod view;
 mod xmp;
 
@@ -27,14 +28,15 @@ pub use boxes::{BoxSpec, PageBox, page_boxes, set_page_box};
 pub use dedupe::dedupe_resources;
 pub use import::{
     CombineOutcome, Combiner, FieldConflicts, ImportOutcome, Run, SplitBy, combine, combine_field_conflicts, combine_grouped, combine_grouped_with,
-    combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, page_as_form, split,
-    split_ranges,
+    combine_selected, combine_selected_with, combine_with, extract_pages, field_name_conflicts, import_pages, import_pages_with, insert_file_pages,
+    page_as_form, split, split_ranges,
 };
 pub use labels::{LabelRange, LabelStyle, PageLabels, number_pages, page_label_ranges, page_labels, set_page_label_ranges};
 pub use outline::{
     Bookmark, BookmarkPage, OutlineEntry, OutlineError, add_bookmark, add_bookmark_tree, bookmark_page, bookmarks, delete_bookmark, move_bookmark,
     rename_bookmark, set_bookmark_open, set_bookmark_page, top_level_bookmarks,
 };
+pub use transition::{TRANSITION_DIRECTIONS, TRANSITION_STYLES, Transition, TransitionSpec, set_transition};
 pub use view::{InitialView, displays_doc_title, initial_view, set_initial_view};
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -146,8 +148,44 @@ fn rebuild(doc: &mut Document, order: &[(ObjRef, Dict)]) -> Result<(), OrganizeE
     Ok(())
 }
 
+/// Gather the document's `/Type /Page` objects into a new page tree when the catalog leads to no
+/// page (its `/Pages` is missing or points at a lost object). Readers then find the pages by
+/// scanning the file, in file order, and edits must address those same pages. Returns how many
+/// pages were gathered; 0 leaves the document unchanged.
+pub fn recover_page_tree(doc: &mut Document) -> Result<usize, OrganizeError> {
+    if walk(doc).is_ok_and(|pages| !pages.is_empty()) {
+        return Ok(0);
+    }
+    let catalog = doc.root().ok_or(OrganizeError::NoPageTree)?;
+    let position = |num: u32| match doc.xref_entry(num) {
+        Some(XrefEntry::InFile { offset, .. }) => (offset, 0),
+        Some(XrefEntry::InStream { stream, index }) => match doc.xref_entry(stream) {
+            Some(XrefEntry::InFile { offset, .. }) => (offset, index),
+            _ => (u64::MAX, index),
+        },
+        _ => (u64::MAX, 0),
+    };
+    let mut found: Vec<((u64, u32), ObjRef)> = doc
+        .scan_objects()
+        .filter(|(_, o)| o.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"Page")))
+        .map(|(r, _)| (position(r.num), r))
+        .collect();
+    if found.is_empty() {
+        return Ok(0);
+    }
+    found.sort();
+    let root = doc.add(Dict::new());
+    doc.update_dict(catalog, |d| d.set(b"Pages".to_vec(), Object::Ref(root)))?;
+    let order: Vec<(ObjRef, Dict)> = found.into_iter().map(|(_, r)| (r, Dict::new())).collect();
+    rebuild(doc, &order)?;
+    Ok(order.len())
+}
+
 fn check(indices: &[usize], n: usize) -> Result<(), OrganizeError> {
     match indices.iter().find(|i| **i >= n) {
+        // A viewer still shows pages a lost page tree leaves out (#1656): "page 1 does not
+        // exist" would contradict it.
+        Some(_) if n == 0 => Err(OrganizeError::Invalid("the document's page tree lists no pages: the file is damaged".into())),
         Some(i) => Err(OrganizeError::NoSuchPage(*i)),
         None => Ok(()),
     }
@@ -179,6 +217,7 @@ pub fn delete_pages(doc: &mut Document, indices: &[usize]) -> Result<(), Organiz
         return Err(OrganizeError::WouldRemoveAllPages);
     }
     rebuild(doc, &keep)?;
+    labels::drop_deleted_pages(doc, indices)?;
     // The deleted pages go for good: bookmarks, links and widgets that still point at one would
     // otherwise keep it, with its content, in the saved file. Their form widgets leave the form,
     // and bookmarks and links that went to them lose that destination.

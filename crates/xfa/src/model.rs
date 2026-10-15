@@ -350,6 +350,30 @@ impl Node {
     }
 }
 
+pub(crate) struct SomIndices(Vec<usize>);
+
+impl SomIndices {
+    pub(crate) fn of(children: &[Node]) -> Self {
+        let mut seen = std::collections::HashMap::new();
+        SomIndices(
+            children
+                .iter()
+                .map(|c| {
+                    c.common().name.as_deref().map_or(0, |name| {
+                        let n = seen.entry(name).or_insert(0);
+                        *n += 1;
+                        *n - 1
+                    })
+                })
+                .collect(),
+        )
+    }
+
+    pub(crate) fn at(&self, i: usize) -> usize {
+        self.0.get(i).copied().unwrap_or(0)
+    }
+}
+
 /// How often a subform occurs when no data drives it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Occur {

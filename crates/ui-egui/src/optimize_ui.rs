@@ -8,7 +8,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Align, Layout};
-use pdfcraft_engine::optimize::{Compression, ImageSettings, QUALITIES, Settings};
+use pdfcraft_engine::optimize::{Compression, ImageSettings, Preset, QUALITIES, Settings};
 use pdfcraft_engine::optimizer::{OptimizeStage, Optimized};
 use pdfcraft_engine::{DocId, EditError, Hidden, OptimizeReport};
 
@@ -78,6 +78,7 @@ pub struct OptimizeRun {
 fn stage_label(stage: OptimizeStage) -> String {
     match stage {
         OptimizeStage::Discarding => tl!("Optimizing… removing user data").to_string(),
+        OptimizeStage::Fragments => tl!("Optimizing… merging image fragments").to_string(),
         OptimizeStage::Images { done, total } => crate::i18n::fmt(
             tl!("Optimizing… image {d} of {t}"),
             &[("d", &(done + 1).min(total.max(1)).to_string()), ("t", &total.max(1).to_string())],
@@ -157,6 +158,22 @@ fn discard_box(ui: &mut egui::Ui, list: &mut Vec<Hidden>, h: Hidden, label: &str
 pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (bool, bool) {
     ui.label(egui::RichText::new(tl!("PDF Optimizer")).font(theme::semibold(18.0)));
     ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label(tl!("Settings"));
+        let name = |p: Preset| match p {
+            Preset::Standard => tl!("Standard"),
+            Preset::Mobile => tl!("Mobile"),
+        };
+        let current = Preset::of(&d.settings);
+        egui::ComboBox::from_id_salt("optimize-preset").selected_text(current.map_or(tl!("Custom"), name)).show_ui(ui, |ui| {
+            for p in Preset::ALL {
+                if ui.selectable_label(current == Some(p), name(p)).clicked() {
+                    d.settings = p.settings();
+                }
+            }
+        });
+    });
+    ui.add_space(6.0);
     ui.horizontal_wrapped(|ui| {
         for (tab, label) in [
             (OptimizeTab::Images, tl!("Images")),
@@ -174,6 +191,7 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
     let s = &mut d.settings;
     match d.tab {
         OptimizeTab::Images => {
+            ui.add(widgets::checkbox(&mut s.merge_fragments, tl!("Merge image fragments")));
             image_row(ui, "color", "Color Images", &mut s.color);
             image_row(ui, "gray", "Grayscale Images", &mut s.gray);
             ui.label(
@@ -225,33 +243,52 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut OptimizeDraft, t: &Tokens) -> (boo
     (ok, cancel)
 }
 
-/// Audit Space Usage: bytes and share of the file per kind of content.
+/// Audit Space Usage: how the file's bytes are spent now, by kind of content (not what
+/// optimizing would save).
 pub(crate) fn audit_body(ui: &mut egui::Ui, rows: &[pdfcraft_engine::optimize::SpaceUse], t: &Tokens) -> bool {
-    ui.label(egui::RichText::new(tl!("Space Audit")).font(crate::theme::semibold(18.0)));
+    use egui::{RichText, TextWrapMode, WidgetText};
+    ui.label(RichText::new(tl!("Space Audit")).font(crate::theme::semibold(18.0)));
+    ui.add_space(4.0);
+    ui.label(RichText::new(tl!("What takes up the space in this file, by kind of content.")).color(t.text_muted));
     ui.add_space(8.0);
-    egui::Grid::new("space-audit").num_columns(3).striped(true).spacing([24.0, 4.0]).show(ui, |ui| {
-        for h in [tl!("Description"), tl!("Bytes"), tl!("Percentage")] {
-            ui.label(egui::RichText::new(h).color(t.text_muted));
-        }
-        ui.end_row();
-        let total: u64 = rows.iter().map(|r| r.bytes).sum();
-        for r in rows.iter().filter(|r| r.bytes > 0) {
-            // "Patterns" also names the redaction search patterns ("模式"); the audit's PDF
-            // graphics objects need their own key.
-            let category = if r.category == pdfcraft_engine::optimize::SpaceCategory::Patterns {
-                tl!("Patterns (graphics objects)").to_string()
-            } else {
-                tl!(r.category.label()).to_string()
-            };
-            ui.label(category);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(r.bytes.to_string()));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(format!("{:.2}%", r.percent)));
+    // Every cell is laid out first so each column can be exactly as wide as its widest cell. A
+    // right-to-left layout in a grid's last column takes the rest of the window instead, which
+    // drew the percentages at the dialog's far edge, away from their rows.
+    let text = |s: RichText| WidgetText::from(s).into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Body);
+    let header = |s: &str| text(RichText::new(s).color(t.text_muted));
+    let mut table = vec![[header(tl!("Description")), header(tl!("Bytes")), header(tl!("Percentage"))]];
+    for r in rows.iter().filter(|r| r.bytes > 0) {
+        // "Patterns" also names the redaction search patterns ("模式"); the audit's PDF
+        // graphics objects need their own key.
+        let category = if r.category == pdfcraft_engine::optimize::SpaceCategory::Patterns {
+            tl!("Patterns (graphics objects)")
+        } else {
+            tl!(r.category.label())
+        };
+        table.push([text(RichText::new(category)), text(RichText::new(r.bytes.to_string())), text(RichText::new(format!("{:.2}%", r.percent)))]);
+    }
+    let total: u64 = rows.iter().map(|r| r.bytes).sum();
+    table.push([
+        text(RichText::new(tl!("Total")).strong()),
+        text(RichText::new(total.to_string()).strong()),
+        text(RichText::new("100.00%").strong()),
+    ]);
+    let gap = 24.0;
+    let width = |column: usize| table.iter().filter_map(|row| row.get(column)).map(|g| g.size().x).fold(0.0, f32::max);
+    // The description takes what the numbers leave, so the striped rows span the dialog.
+    let numbers = width(1) + width(2) + 2.0 * gap;
+    let widths = [width(0).max(ui.available_width() - numbers), width(1), width(2)];
+    let height = table.iter().flatten().map(|g| g.size().y).fold(ui.spacing().interact_size.y, f32::max);
+    egui::Grid::new("space-audit").num_columns(3).striped(true).spacing([gap, 4.0]).show(ui, |ui| {
+        for row in table {
+            for (column, (cell, width)) in row.into_iter().zip(widths).enumerate() {
+                // Numbers line up on their last digit.
+                let layout = if column == 0 { Layout::left_to_right(Align::Center) } else { Layout::right_to_left(Align::Center) };
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+                ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(layout)).label(cell);
+            }
             ui.end_row();
         }
-        ui.label(egui::RichText::new(tl!("Total")).strong());
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(egui::RichText::new(total.to_string()).strong()));
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(egui::RichText::new("100.00%").strong()));
-        ui.end_row();
     });
     ui.add_space(12.0);
     let mut ok = false;

@@ -29,6 +29,12 @@
 	+Bin	+Bin
 	+LOC	+LOC
 	, Expires: 	, poteče: 
+	Digitally signed by	Digitalno podpisal
+	DN: 	DN: 
+	Reason: 	Razlog: 
+	Location: 	Lokacija: 
+	Date: 	Datum: 
+	The labels are in English: the signature's font can't draw them in this language.	Oznake so v angleščini: pisava podpisa jih v tem jeziku ne more prikazati.
 	1 difference found	1 razlika najdena
 	1 file	1 datoteka
 	1 file done	1 datoteka dokončana
@@ -836,6 +842,7 @@
 	Font Size:	Velikost pisave:
 	Font colour:	Barva pisave:
 	Font size:	Velikost pisave:
+	Font size	Velikost pisave
 	Font:	Pisava:
 	Font: Helvetica	Pisava: Helvetica
 	Fonts	Pisave
@@ -1044,6 +1051,7 @@
 	Low resolution	Nizka ločljivost
 	Magnification	Povečava
 	Make Current Properties Default	Nastavi kot privzeto
+	Make Properties Default	Lastnosti nastavi kot privzete
 	Make accessible	Naredi dostopno
 	Make scans searchable, then make them smaller.	Skenirane dokumente naredite iskalne, nato pa jih zmanjšajte.
 	Manage embedded index	Upravljaj vdelani indeks
@@ -1113,6 +1121,7 @@
 	Name	Ime
 	Name (A–Z)	Ime (A–Ž)
 	Name on new comments	Ime na novih komentarjih
+	Hide hover previews for highlights without comment text	Skrij predoglede ob lebdenju za označitve brez besedila komentarja
 	Name:	Ime:
 	Named Destinations	Poimenovani cilji
 	Navigation links	Navigacijske povezave
@@ -1495,6 +1504,9 @@
 	Reverse the order	Obrni vrstni red
 	Revert	Povrni
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Povrniti na prej shranjeno različico dokumenta „{name}“? Sprememb od takrat pozneje ni mogoče razveljaviti.
+	Save over the changed file?	Shranim čez spremenjeno datoteko?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	»{name}« se je na disku spremenila po odprtju ali zadnjem shranjevanju. Shranjevanje zdaj zamenja to novejšo različico s to.
+	Save anyway	Vseeno shrani
 	Reverted to the last saved version	Povrnjeno na zadnjo shranjeno različico
 	Review	Pregled
 	Review History	Zgodovina pregledov
@@ -1626,6 +1638,7 @@
 	Set layer visibility	Nastavi vidnost plasti
 	Set measurement scale	Nastavi merilo meritev
 	Set page boxes	Nastavi robove strani
+	Set page transitions	Nastavi prehode strani
 	Set page boxes…	Nastavi robove strani…
 	Set properties	Nastavi lastnosti
 	Set status	Nastavi status
@@ -1697,6 +1710,7 @@
 	Sort items	Razvrsti elemente
 	Source	Vir
 	Space Audit	Pregled prostora
+	What takes up the space in this file, by kind of content.	Kaj zaseda prostor v tej datoteki, po vrsti vsebine.
 	Special	Posebno
 	Split	Razdeli
 	Split document	Razdeli dokument
@@ -2178,6 +2192,8 @@ signature pad	Type	Vtipkaj
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Samodejno sledi velikosti besedila v sistemu. Strani se vedno izrišejo v polni ločljivosti zaslona.
 	Check the pages	Preveri strani
 	Collapse all	Strni vse
+	Collapse all pages	Strni vse strani
+	Expand all pages	Razširi vse strani
 	Column select	Izbira stolpcev
 	Drag the selection to move it. Esc clears the selection.	Povlecite izbor, da ga premaknete. Esc počisti izbor.
 	Expand all	Razširi vse
@@ -2214,6 +2230,8 @@ key	Shift	Shift
 key	Space	Preslednica
 @plural	{n} object selected|{n} objects selected	{n} izbran objekt|{n} izbrana objekta|{n} izbrani objekti|{n} izbranih objektov
 	Looking for printers…	Iskanje tiskalnikov…
+	Sending sheet {s} of {n} to {printer}…	Pošiljanje lista {s} od {n} na {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Ni najdenih tiskalnikov. Preverite, ali je tiskalnik nameščen in ali tiskalna vrsta deluje, nato znova odprite Natisni.
 	Sending to {printer}…	Pošiljanje na {printer}…
 	Float panel	Odtrgaj razdelek
 	Inspector	Inšpektor
@@ -2266,10 +2284,10 @@ key	Space	Preslednica
 	Printer paper and scaling may differ. Check driver settings.	Papir in merilo tiskalnika se lahko razlikujeta. Preverite nastavitve gonilnika.
 	Drawing scale changes. Use Actual size for full-scale plans.	Merilo risbe se spremeni. Za načrte v polnem merilu uporabite Dejansko velikost.
 	Reload documents when their files change on disk	Znova naloži dokumente, ko se njihove datoteke na disku spremenijo
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Ta datoteka se je na disku spremenila. Znova jo naložite, da vidite novo različico; neshranjene spremembe bodo izgubljene.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ta datoteka se je na disku spremenila. Ponovno naloži pokaže novo različico in zavrže neshranjene spremembe; Shrani jo zamenja s to različico.
 	Reload	Znova naloži
 	Couldn't reload {name}: {e}	Datoteke {name} ni bilo mogoče znova naložiti: {e}
-	Mouse wheel scroll speed	Hitrost drsenja s kolescem miške
+	Scroll speed (mouse wheel and arrow keys)	Hitrost drsenja (kolesce miške in puščične tipke)
 scroll speed	Slow	Počasi
 scroll speed	Normal	Običajno
 scroll speed	Fast	Hitro
@@ -2346,6 +2364,10 @@ animation effects	Off	Izklopljeni
 	The linked PDF opened, but its named destination was not applied.	Povezani PDF se je odprl, vendar njegov poimenovani cilj ni bil uporabljen.
 	The linked PDF opened, but its page destination was out of range.	Povezani PDF se je odprl, vendar je ciljna stran zunaj obsega.
 	Local cross-PDF links require the desktop app	Lokalne povezave med PDF-ji zahtevajo namizno aplikacijo
+	Cut Image	Izreži sliko
+	Redact Image	Počrni sliko
+	Create Link…	Ustvari povezavo…
+	Recognize Text…	Prepoznaj besedilo…
 	Minimize	Pomanjšaj
 	Maximize	Povečaj
 	Restore	Obnovi
@@ -2355,7 +2377,59 @@ animation effects	Off	Izklopljeni
 # Absolute local GoToR confirmation (#1364).
 	Allow	Dovoli
 	Only allow this if you trust the source document.	To dovolite le, če zaupate izvornemu dokumentu.
+	Open in Full Screen mode?	Odpri v celozaslonskem načinu?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Ta dokument želi, da se odpre v celozaslonskem načinu: stran zapolni zaslon in nič drugega ni prikazano. Za izhod kadar koli pritisnite Esc.
+	Full Screen	Celoten zaslon
+	Not now	Ne zdaj
 	Open this local PDF?	Želite odpreti ta lokalni PDF?
 	This document is trying to open a local file:	Ta dokument poskuša odpreti lokalno datoteko:
 	Move tag earlier	Premakni oznako prej
 	Move tag later	Premakni oznako pozneje
+	Turn upside down (180°)	Obrni na glavo (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Nalepka 4 × 6 in (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Vsako stran obreže na natisnjeno območje, jo poravna pokonci in prilagodi listu brez raztegovanja. Ena nalepka na list.
+	Find untagged content	Poišči neoznačeno vsebino
+	No untagged content was found.	Neoznačene vsebine ni bilo mogoče najti.
+	Found {n} untagged content problems.	Najdenih je {n} težav z neoznačeno vsebino.
+	Tag form fields	Označi polja obrazca
+	Mark as artifact	Označi kot artefakt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Odstranite to listno oznako iz vrstnega reda branja in označite njeno neposredno vsebino kot artefakt
+	Mark content as artifact	Označi vsebino kot artefakt
+	Word count	Število besed
+	Current page only	Samo trenutna stran
+	Exclude tagged tables	Izključi označene tabele
+	Exclude tagged code blocks	Izključi označene bloke kode
+	Exclude image/OCR text	Izključi besedilo slik/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Izključitve uporabljajo oznake PDF. Neoznačene tabele in koda ostanejo vključene. Izključitev slik odstrani tudi nevidno besedilo.
+	Words	Besede
+	Characters	Znaki
+	Characters without spaces	Znaki brez presledkov
+	Pages counted	Preštete strani
+	Some pages contain no countable text. Scanned images need OCR first.	Nekatere strani ne vsebujejo besedila za štetje. Optično prebrane slike najprej potrebujejo OCR.
+	Some content could not be classified safely and was kept in the count.	Nekatere vsebine ni bilo mogoče zanesljivo razvrstiti, zato je ostala vključena v štetje.
+	Counting words… {n} pages read	Štetje besed… prebrane strani: {n}
+	Word counting stopped unexpectedly.	Štetje besed se je nepričakovano ustavilo.
+	Word count…	Število besed…
+@id	file.word_count	Število besed…
+	Standard	Standardno
+	Mobile	Mobilna naprava
+	Merge image fragments	Združi delce slik
+	Optimizing… merging image fragments	Optimiziranje… združevanje delcev slik
+	Side by side	Drug ob drugem
+	New file only	Samo nova datoteka
+	Old file: {name}	Stara datoteka: {name}
+	New file: {name}	Nova datoteka: {name}
+	Print as image	Natisni kot sliko
+	Resolution:	Ločljivost:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Uporabite, ko tiskalnik izpusti besedilo, senčenje ali prosojnost. Natis ni več iskalno besedilo; s tiskanjem v sivinah so slike sive.
+	Crop Image	Obreži sliko
+	Remove Crop	Odstrani obrezovanje
+	Trim the picture with its handles; Enter or Done applies	Obrežite sliko z ročicami; Enter ali Končano uporabi
+	Redaction mark appearance	Videz oznake za zakritje
+	Outline colour:	Barva obrobe:
+	Fill colour:	Barva polnila:
+	Shown while the pointer is over a mark.	Prikazano, ko je kazalec nad oznako.
+	Opacity:	Prekrivnost:
+	Make properties default	Nastavi lastnosti kot privzete
+	Pages selected	Izbrane strani
+	Page properties	Lastnosti strani

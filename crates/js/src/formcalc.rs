@@ -1913,7 +1913,17 @@ fn parse_date(text: &str, picture: &str) -> Option<(i64, u32, u32)> {
         }
     }
     let (y, m, d) = (y?, m.unwrap_or(1), d.unwrap_or(1));
-    ((-200_000..=200_000).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d)).then_some((y, m, d))
+    ((-200_000..=200_000).contains(&y) && (1..=12).contains(&m) && (1..=days_in(y, m)).contains(&d)).then_some((y, m, d))
+}
+
+/// Number of days in month `m` (1-12) of year `y`, leap years included.
+fn days_in(y: i64, m: u32) -> u32 {
+    match m {
+        2 if (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
 }
 
 fn format_date(y: i64, m: u32, d: u32, picture: &str) -> String {

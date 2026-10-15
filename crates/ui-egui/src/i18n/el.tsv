@@ -16,6 +16,7 @@
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Η αυτόματη ρύθμιση ακολουθεί το μέγεθος κειμένου του συστήματος. Οι σελίδες αποδίδονται πάντα στην πλήρη ανάλυση της οθόνης.
 	Identity	Ταυτότητα
 	Name on new comments	Όνομα στα νέα σχόλια
+	Hide hover previews for highlights without comment text	Απόκρυψη προεπισκοπήσεων κατά την αιώρηση για επισημάνσεις χωρίς κείμενο σχολίου
 	Open…	Άνοιγμα…
 	Open Recent	Άνοιγμα πρόσφατων
 	Clear Recent Files	Εκκαθάριση πρόσφατων αρχείων
@@ -464,6 +465,12 @@
 	Choose the digital ID that you want to use for signing:	Επιλέξτε την ψηφιακή ταυτότητα με την οποία θέλετε να υπογράψετε:
 	Issued by: 	Εκδότης: 
 	, Expires: 	, Λήξη: 
+	Digitally signed by	Ψηφιακή υπογραφή από
+	DN: 	DN: 
+	Reason: 	Αιτία: 
+	Location: 	Τοποθεσία: 
+	Date: 	Ημερομηνία: 
+	The labels are in English: the signature's font can't draw them in this language.	Οι ετικέτες είναι στα αγγλικά: η γραμματοσειρά της υπογραφής δεν μπορεί να τις σχεδιάσει σε αυτή τη γλώσσα.
 	No digital IDs yet.	Δεν υπάρχουν ακόμη ψηφιακές ταυτότητες.
 	Configure New Digital ID	Ρύθμιση νέας ψηφιακής ταυτότητας
 	Remove "{name}" from this list? The file itself is not deleted.	Αφαίρεση του «{name}» από αυτή τη λίστα; Το ίδιο το αρχείο δεν διαγράφεται.
@@ -729,6 +736,7 @@
 	Redaction code:	Κωδικός απόκρυψης:
 	Font:	Γραμματοσειρά:
 	Font size:	Μέγεθος γραμματοσειράς:
+	Font size	Μέγεθος γραμματοσειράς
 	Auto-size text to fit redaction region	Αυτόματη προσαρμογή μεγέθους κειμένου στην περιοχή απόκρυψης
 	Font colour:	Χρώμα γραμματοσειράς:
 	Repeat overlay text	Επανάληψη κειμένου επικάλυψης
@@ -845,6 +853,7 @@
 	Set status	Ορισμός κατάστασης
 	Properties…	Ιδιότητες…
 	Make Current Properties Default	Ορισμός τρεχουσών ιδιοτήτων ως προεπιλογών
+	Make Properties Default	Ορισμός ιδιοτήτων ως προεπιλογών
 	Colour	Χρώμα
 	Show all comments	Εμφάνιση όλων των σχολίων
 	Create PDF comment summary…	Δημιουργία σύνοψης σχολίων σε PDF…
@@ -943,6 +952,9 @@
 	Sort comments by:	Ταξινόμηση σχολίων κατά:
 	Create PDF Comment Summary	Δημιουργία σύνοψης σχολίων PDF
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Επαναφορά της τελευταίας αποθηκευμένης έκδοσης του «{name}»; Οι μεταγενέστερες αλλαγές δεν θα μπορούν να αναιρεθούν.
+	Save over the changed file?	Αποθήκευση πάνω στο αλλαγμένο αρχείο;
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	Το «{name}» άλλαξε στον δίσκο μετά το άνοιγμα ή την τελευταία αποθήκευση. Η αποθήκευση τώρα αντικαθιστά αυτή τη νεότερη έκδοση με αυτήν εδώ.
+	Save anyway	Αποθήκευση ούτως ή άλλως
 	Number pages	Αρίθμηση σελίδων
 	Style	Στυλ
 	None (prefix only)	Κανένα (μόνο πρόθεμα)
@@ -1607,6 +1619,8 @@
 	Switch to List view to change the pages it takes.	Μεταβείτε στην προβολή λίστας για να αλλάξετε ποιες σελίδες θα συμπεριληφθούν.
 	Expand all	Ανάπτυξη όλων
 	Collapse all	Σύμπτυξη όλων
+	Collapse all pages	Σύμπτυξη όλων των σελίδων
+	Expand all pages	Ανάπτυξη όλων των σελίδων
 	Remove {n} pages	Αφαίρεση {n} σελίδων
 	Add an image field	Προσθήκη πεδίου εικόνας
 	Add a date field	Προσθήκη πεδίου ημερομηνίας
@@ -1705,6 +1719,7 @@
 	Page grid	Πλέγμα σελίδων
 	Extract	Εξαγωγή
 	Set page boxes	Ορισμός πλαισίων σελίδας
+	Set page transitions	Ορισμός εναλλαγών σελίδων
 	Page transitions	Μεταβάσεις σελίδων
 	Add comments	Προσθήκη σχολίων
 	Markup	Σημειώσεις επισήμανσης
@@ -1875,6 +1890,7 @@
 	Remove unused objects and merge identical ones	Αφαίρεση αχρησιμοποίητων αντικειμένων και συγχώνευση πανομοιότυπων
 	Audit space usage…	Έλεγχος χρήσης χώρου…
 	Space Audit	Έλεγχος χώρου
+	What takes up the space in this file, by kind of content.	Τι καταλαμβάνει τον χώρο σε αυτό το αρχείο, ανά είδος περιεχομένου.
 	Bytes	Byte
 	Content Streams	Ροές περιεχομένου
 	X Object Forms	Φόρμες XObject
@@ -2235,6 +2251,8 @@ comment menu	Edit	Επεξεργασία
 	Fill & Sign signature	Υπογραφή από το εργαλείο «Συμπλήρωση και υπογραφή»
 	Choose image…	Επιλογή εικόνας…
 	Looking for printers…	Αναζήτηση εκτυπωτών…
+	Sending sheet {s} of {n} to {printer}…	Αποστολή φύλλου {s} από {n} στον {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Δεν βρέθηκαν εκτυπωτές. Ελέγξτε ότι ο εκτυπωτής είναι εγκατεστημένος και ότι η ουρά εκτύπωσης εκτελείται και, στη συνέχεια, ανοίξτε ξανά την Εκτύπωση.
 	Sending to {printer}…	Αποστολή στον {printer}…
 	Enter permissions password…	Εισαγωγή κωδικού δικαιωμάτων…
 	Permissions password	Κωδικός δικαιωμάτων
@@ -2269,10 +2287,10 @@ comment menu	Edit	Επεξεργασία
 	Printer paper and scaling may differ. Check driver settings.	Το χαρτί και η κλίμακα του εκτυπωτή μπορεί να διαφέρουν. Ελέγξτε τις ρυθμίσεις του προγράμματος οδήγησης.
 	Drawing scale changes. Use Actual size for full-scale plans.	Η κλίμακα του σχεδίου αλλάζει. Για σχέδια σε πλήρη κλίμακα χρησιμοποιήστε το Πραγματικό μέγεθος.
 	Reload documents when their files change on disk	Επαναφόρτωση εγγράφων όταν αλλάζουν τα αρχεία τους στον δίσκο
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Αυτό το αρχείο άλλαξε στον δίσκο. Επαναφορτώστε το για να δείτε τη νέα έκδοση· οι μη αποθηκευμένες αλλαγές θα χαθούν.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Αυτό το αρχείο άλλαξε στον δίσκο. Η επαναφόρτωση δείχνει τη νέα έκδοση και απορρίπτει τις μη αποθηκευμένες αλλαγές σας· η αποθήκευση την αντικαθιστά με αυτή την έκδοση.
 	Reload	Επαναφόρτωση
 	Couldn't reload {name}: {e}	Δεν ήταν δυνατή η επαναφόρτωση του {name}: {e}
-	Mouse wheel scroll speed	Ταχύτητα κύλισης τροχού ποντικιού
+	Scroll speed (mouse wheel and arrow keys)	Ταχύτητα κύλισης (τροχός ποντικιού και πλήκτρα βέλους)
 scroll speed	Slow	Αργή
 scroll speed	Normal	Κανονική
 scroll speed	Fast	Γρήγορη
@@ -2351,6 +2369,10 @@ animation effects	Off	Ανενεργά
 	Local cross-PDF links require the desktop app	Οι τοπικοί σύνδεσμοι μεταξύ PDF απαιτούν την εφαρμογή υπολογιστή
 	The existing action will be preserved.	Η υπάρχουσα ενέργεια θα διατηρηθεί.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Τα σενάρια αυτής της φόρμας είναι απενεργοποιημένα, επειδή ένα από αυτά εκτελούνταν για πολύ ώρα. Ανοίξτε ξανά το έγγραφο για να εκτελεστούν ξανά.
+	Cut Image	Αποκοπή εικόνας
+	Redact Image	Απόκρυψη ευαίσθητου περιεχομένου εικόνας
+	Create Link…	Δημιουργία συνδέσμου…
+	Recognize Text…	Αναγνώριση κειμένου…
 	Minimize	Ελαχιστοποίηση
 	Maximize	Μεγιστοποίηση
 	Restore	Επαναφορά
@@ -2360,7 +2382,59 @@ animation effects	Off	Ανενεργά
 # Absolute local GoToR confirmation (#1364).
 	Allow	Να επιτραπεί
 	Only allow this if you trust the source document.	Επιτρέψτε το μόνο αν εμπιστεύεστε το έγγραφο προέλευσης.
+	Open in Full Screen mode?	Άνοιγμα σε λειτουργία πλήρους οθόνης;
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Αυτό το έγγραφο ζητά να ανοίξει σε λειτουργία πλήρους οθόνης: η σελίδα γεμίζει την οθόνη και τίποτα άλλο δεν εμφανίζεται. Πατήστε Esc οποιαδήποτε στιγμή για έξοδο.
+	Full Screen	Πλήρης οθόνη
+	Not now	Όχι τώρα
 	Open this local PDF?	Να ανοίξει αυτό το τοπικό PDF;
 	This document is trying to open a local file:	Αυτό το έγγραφο προσπαθεί να ανοίξει ένα τοπικό αρχείο:
 	Move tag earlier	Μετακίνηση ετικέτας νωρίτερα
 	Move tag later	Μετακίνηση ετικέτας αργότερα
+	Turn upside down (180°)	Αναποδογύρισμα (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Ετικέτα 4 × 6 in (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Περικόπτει κάθε σελίδα στην τυπωμένη περιοχή της, την ισιώνει και την προσαρμόζει στο φύλλο χωρίς παραμόρφωση. Μία ετικέτα ανά φύλλο.
+	Find untagged content	Εύρεση μη επισημασμένου περιεχομένου
+	No untagged content was found.	Δεν βρέθηκε μη επισημασμένο περιεχόμενο.
+	Found {n} untagged content problems.	Βρέθηκαν {n} προβλήματα μη επισημασμένου περιεχομένου.
+	Tag form fields	Επισήμανση πεδίων φόρμας
+	Mark as artifact	Σήμανση ως τεχνούργημα
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Αφαιρέστε αυτήν την ετικέτα φύλλου από τη σειρά ανάγνωσης και σημειώστε το άμεσο περιεχόμενό της ως τεχνούργημα
+	Mark content as artifact	Σήμανση περιεχομένου ως τεχνούργημα
+	Word count	Καταμέτρηση λέξεων
+	Current page only	Μόνο η τρέχουσα σελίδα
+	Exclude tagged tables	Εξαίρεση πινάκων με ετικέτες
+	Exclude tagged code blocks	Εξαίρεση μπλοκ κώδικα με ετικέτες
+	Exclude image/OCR text	Εξαίρεση κειμένου εικόνων/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Οι εξαιρέσεις χρησιμοποιούν ετικέτες PDF. Οι πίνακες και ο κώδικας χωρίς ετικέτες παραμένουν στην καταμέτρηση. Η εξαίρεση εικόνων αφαιρεί και το αόρατο κείμενο.
+	Words	Λέξεις
+	Characters	Χαρακτήρες
+	Characters without spaces	Χαρακτήρες χωρίς κενά
+	Pages counted	Σελίδες που καταμετρήθηκαν
+	Some pages contain no countable text. Scanned images need OCR first.	Ορισμένες σελίδες δεν περιέχουν κείμενο για καταμέτρηση. Οι σαρωμένες εικόνες χρειάζονται πρώτα OCR.
+	Some content could not be classified safely and was kept in the count.	Ορισμένο περιεχόμενο δεν ήταν δυνατό να ταξινομηθεί αξιόπιστα και παρέμεινε στην καταμέτρηση.
+	Counting words… {n} pages read	Καταμέτρηση λέξεων… αναγνώστηκαν {n} σελίδες
+	Word counting stopped unexpectedly.	Η καταμέτρηση λέξεων σταμάτησε απροσδόκητα.
+	Word count…	Καταμέτρηση λέξεων…
+@id	file.word_count	Καταμέτρηση λέξεων…
+	Standard	Τυπικές
+	Mobile	Κινητό
+	Merge image fragments	Συγχώνευση τμημάτων εικόνας
+	Optimizing… merging image fragments	Βελτιστοποίηση… συγχώνευση τμημάτων εικόνας
+	Side by side	Δίπλα-δίπλα
+	New file only	Μόνο το νέο αρχείο
+	Old file: {name}	Παλιό αρχείο: {name}
+	New file: {name}	Νέο αρχείο: {name}
+	Print as image	Εκτύπωση ως εικόνα
+	Resolution:	Ανάλυση:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Χρησιμοποιήστε το όταν ένας εκτυπωτής παραλείπει κείμενο, σκίαση ή διαφάνεια. Η εκτύπωση δεν είναι πλέον κείμενο με δυνατότητα αναζήτησης· με εκτύπωση σε αποχρώσεις του γκρι, οι εικόνες είναι γκρι.
+	Crop Image	Περικοπή εικόνας
+	Remove Crop	Κατάργηση περικοπής
+	Trim the picture with its handles; Enter or Done applies	Περικόψτε την εικόνα με τις λαβές της· Enter ή Τέλος για εφαρμογή
+	Redaction mark appearance	Εμφάνιση σήμανσης απαλοιφής
+	Outline colour:	Χρώμα περιγράμματος:
+	Fill colour:	Χρώμα γεμίσματος:
+	Shown while the pointer is over a mark.	Εμφανίζεται όσο ο δείκτης είναι πάνω από μια σήμανση.
+	Opacity:	Αδιαφάνεια:
+	Make properties default	Ορισμός ιδιοτήτων ως προεπιλογή
+	Pages selected	Επιλεγμένες σελίδες
+	Page properties	Ιδιότητες σελίδας

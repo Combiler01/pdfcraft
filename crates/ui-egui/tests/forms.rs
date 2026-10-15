@@ -123,6 +123,45 @@ fn tabbing_into_a_filled_field_selects_it_so_typing_replaces() {
 }
 
 #[test]
+fn dragging_over_another_fields_text_focuses_it_and_selects_from_the_press() {
+    // Issue #2213: with the caret in one field, a drag over another field's text selected
+    // nothing; the field opened only on a click.
+    let mut h = harness();
+    click_field(&mut h, "name", 0);
+    h.event(egui::Event::Text("Ada Lovelace".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    click_field(&mut h, "city", 0);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("city"));
+    let (rect, id) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "name").unwrap();
+        let rect = pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen");
+        (rect, egui::Id::new(("form-field", s.views[0].id.0, "name", 0usize)))
+    };
+    // From inside the first word to past the end of the text.
+    let (from, to) = (egui::pos2(rect.left() + 30.0, rect.center().y), egui::pos2(rect.right() - 8.0, rect.center().y));
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from.lerp(to, k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+    assert_eq!(h.state().views[0].forms.focus.as_ref().map(|f| f.name.as_str()), Some("name"), "the press moved the focus");
+    let n = "Ada Lovelace".chars().count();
+    let range = egui::TextEdit::load_state(&h.ctx, id).and_then(|s| s.cursor.char_range()).expect("a selection in the field");
+    // "Ad|a": not the caret at the end that a newly focused editor gets on its own.
+    assert_eq!(range.secondary.index.0, 2, "anchored where the drag started: {range:?}");
+    assert_eq!(range.primary.index.0, n, "and extended to where it ended: {range:?}");
+}
+
+#[test]
 fn date_fields_offer_a_calendar() {
     use egui_kittest::kittest::Queryable;
     let mut h = harness();
@@ -180,6 +219,19 @@ fn saved_value(path: &std::path::Path, name: &str) -> Vec<String> {
     app.set_option("language", "en").unwrap();
     app.open_bytes("saved.pdf", None, std::fs::read(path).unwrap()).unwrap();
     app.session.get(app.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().value.clone()
+}
+
+/// Step frames until the save has written `path`, instead of assuming it is there after a fixed
+/// number of frames. The write is atomic, so the file appears only when it is complete.
+fn wait_for_file(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !path.exists() {
+        assert!(std::time::Instant::now() < deadline, "the save never wrote {}", path.display());
+        h.run_steps(1);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    // One more frame so the app has seen its own save before the test looks at its state.
+    h.run_steps(1);
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
@@ -257,7 +309,7 @@ fn tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value() {
             h.run_steps(3);
             h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::S);
         }
-        h.run_steps(4);
+        wait_for_file(&mut h, &out);
         assert_eq!(saved_value(&out, "qty"), ["42"], "{case}: saving cannot restore the old value");
         assert_eq!(value(&h, "qty"), ["42"], "{case}");
         // One typing action is one history entry, even after saving. Escape closes the
@@ -383,6 +435,52 @@ fn validated_form() -> Vec<u8> {
     ])
 }
 
+#[test]
+fn pressing_another_text_field_validates_the_refused_value_once() {
+    // The press commits `qty`; its release must not commit (and alert) a second time.
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("order.pdf", None, validated_form_with_note()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    click_field(&mut h, "qty", 0);
+    h.event(egui::Event::Text("500".into()));
+    h.run_steps(2);
+    let p = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "note").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen").center()
+    };
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(2);
+    assert!(h.state().toast.is_some(), "the press committed 4500 and the script refused it");
+    h.state_mut().toast = None;
+    h.drop_at(p);
+    h.run_steps(3);
+    assert_eq!(h.state().toast, None, "the release did not validate it again");
+    let focus = h.state().views[0].forms.focus.clone().expect("the refused field stays open");
+    assert_eq!((focus.name.as_str(), focus.text.as_str()), ("qty", "4500"));
+}
+
+/// `validated_form` plus a plain text field, `note`, under `qty`.
+fn validated_form_with_note() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (qty) /V (4) /Rect [20 350 280 372] /P 3 0 R /F 4 /AA << /V << /S /JavaScript /JS (if (event.value > 100) { app.alert('At most 100'); event.rc = false; }) >> >> >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (note) /Rect [20 300 280 322] /P 3 0 R /F 4 >>",
+    ])
+}
+
 fn pdf_from_objects(objs: &[&str]) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -397,6 +495,78 @@ fn pdf_from_objects(objs: &[&str]) -> Vec<u8> {
     }
     out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
     out
+}
+
+/// Fields that sit on text, where the text layer would show its I-beam: a checked box drawn
+/// with an "X" (appearance text is page text), an empty check box and a text field over printed
+/// words (character-sheet dots are set on printed "OOOOO"), and a printed word with no field.
+fn fields_over_text() -> Vec<u8> {
+    let content = "BT /F1 12 Tf 20 250 Td (Strength) Tj ET BT /F1 12 Tf 20 200 Td (Background) Tj ET BT /F1 12 Tf 20 150 Td (Notes) Tj ET";
+    let check = "q BT /Helv 11 Tf 2 2 Td (X) Tj ET Q";
+    let objs = [
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R 6 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 8 0 R /ZaDb 9 0 R >> >> >> >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".to_string(),
+        "<< /Type /Page /Parent 2 0 R /Contents 7 0 R /Resources << /Font << /F1 8 0 R >> >> /Annots [4 0 R 5 0 R 6 0 R] >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (agree) /V /Yes /AS /Yes /Rect [20 300 32 312] /P 3 0 R /F 4 /DA (/Helv 11 Tf 0 g) /AP << /N << /Yes 10 0 R >> >> >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (strength) /V /Off /AS /Off /Rect [20 246 70 262] /P 3 0 R /F 4 /MK << /CA (l) >> /DA (/ZaDb 11 Tf 0 g) >>".to_string(),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (background) /Rect [20 196 200 214] /P 3 0 R /F 4 >>".to_string(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len() + 1),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".to_string(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /ZapfDingbats >>".to_string(),
+        format!(
+            "<< /Type /XObject /Subtype /Form /BBox [0 0 12 12] /Resources << /Font << /Helv 8 0 R >> >> /Length {} >>\nstream\n{check}\nendstream",
+            check.len() + 1
+        ),
+    ];
+    pdf_from_objects(&objs.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+#[test]
+fn buttons_over_text_show_the_pointing_hand_not_the_i_beam() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("sheet.pdf", None, fields_over_text()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    let (agree, strength, background) = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let at = |name: &str| {
+            let f = doc.form.iter().find(|f| f.name == name).unwrap();
+            pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+        };
+        (at("agree"), at("strength"), at("background"))
+    };
+    let cursor_at = |h: &mut Harness<'static, PdfCraftApp>, p: egui::Pos2| {
+        h.hover_at(p);
+        h.run_steps(2);
+        h.output().platform_output.cursor_icon
+    };
+    // "Notes" (baseline y 150) lies 50 pt below "Background" (y 200), with no field on it.
+    // Wait for the page text: the I-beam over it shows the text layer is live.
+    let scale = background.width() / 180.0;
+    let notes = egui::pos2(background.left() + 12.0 * scale, background.bottom() + (196.0 - 154.0) * scale);
+    let mut over_notes = egui::CursorIcon::Default;
+    for _ in 0..100 {
+        over_notes = cursor_at(&mut h, notes);
+        if over_notes == egui::CursorIcon::Text {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(over_notes, egui::CursorIcon::Text, "printed text off any field shows the I-beam");
+    use egui::CursorIcon::{PointingHand, Text};
+    let over_fields = [agree, strength, background].map(|r| cursor_at(&mut h, r.center()));
+    assert_eq!(over_fields, [PointingHand, PointingHand, Text], "check boxes are buttons, not text to select; a text field keeps the I-beam");
+    // Clicking still toggles them.
+    click_field(&mut h, "agree", 0);
+    assert!(value(&h, "agree").is_empty());
+    click_field(&mut h, "strength", 0);
+    assert_eq!(value(&h, "strength"), ["Yes"]);
 }
 
 #[test]
@@ -700,4 +870,141 @@ fn the_fields_panel_lists_a_field_on_a_missing_page_as_unplaced() {
     h.run_steps(6);
     h.get_by_label("Unplaced");
     assert_eq!(h.query_all_by_label("orphan").count(), 1);
+}
+
+#[test]
+fn list_box_clicks_select_directly_and_ctrl_click_toggles_multi() {
+    let bytes = pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 5 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 6 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 400 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 5 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (ListOne) /Opt [(Red) (Green) (Blue)] /Rect [50 250 200 320] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (ListMulti) /Ff 2097152 /Opt [(Mon) (Tue) (Wed) (Thu) (Fri)] /Rect [50 100 200 170] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+    ]);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("lists.pdf", None, bytes).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "100").unwrap();
+        app
+    });
+    h.run_steps(4);
+
+    // Click row 1 (Green) in ListOne
+    let r_one = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "ListOne").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    let zoom_one = r_one.height() / 70.0;
+    let p_green = egui::pos2(r_one.center().x, r_one.min.y + 19.0 * zoom_one);
+    h.hover_at(p_green);
+    h.run_steps(1);
+    h.drag_at(p_green);
+    h.run_steps(1);
+    h.drop_at(p_green);
+    h.run_steps(3);
+
+    assert_eq!(value(&h, "ListOne"), ["Green"], "clicking row 1 in ListOne selected Green");
+
+    // Click row 1 (Tue) in ListMulti
+    let r_multi = {
+        let s = h.state();
+        let doc = s.session.get(s.views[0].id).unwrap();
+        let f = doc.form.iter().find(|f| f.name == "ListMulti").unwrap();
+        pdfcraft_ui_egui::forms_ui::field_screen_rect(&s.views[0], &doc.info, f, 0).expect("on screen")
+    };
+    let zoom_multi = r_multi.height() / 70.0;
+    let p_tue = egui::pos2(r_multi.center().x, r_multi.min.y + 19.0 * zoom_multi);
+    h.hover_at(p_tue);
+    h.run_steps(1);
+    h.drag_at(p_tue);
+    h.run_steps(1);
+    h.drop_at(p_tue);
+    h.run_steps(3);
+
+    assert_eq!(value(&h, "ListMulti"), ["Tue"], "clicking row 1 in ListMulti selected Tue");
+
+    // Ctrl/Cmd-click row 3 (Thu) in ListMulti
+    let p_thu = egui::pos2(r_multi.center().x, r_multi.min.y + 42.0 * zoom_multi);
+    h.hover_at(p_thu);
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(p_thu));
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::COMMAND));
+    h.event(egui::Event::PointerButton { pos: p_thu, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p_thu, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::COMMAND });
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.run_steps(3);
+
+    assert_eq!(value(&h, "ListMulti"), ["Tue", "Thu"], "Ctrl-clicking Thu toggled it on, keeping Tue");
+}
+
+/// Auto-size (`0 Tf`, inherited from the AcroForm) single-line and multiline fields, and a fixed 10 pt one.
+fn auto_size_form() -> Vec<u8> {
+    pdf_from_objects(&[
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [4 0 R 6 0 R 7 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >> >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>",
+        "<< /Type /Page /Parent 2 0 R /Annots [4 0 R 6 0 R 7 0 R] >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (short) /Rect [20 350 220 364] /P 3 0 R /F 4 >>",
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (notes) /Ff 4096 /Rect [20 270 140 320] /P 3 0 R /F 4 >>",
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (fixed) /DA (/Helv 10 Tf 0 g) /Rect [20 220 120 234] /P 3 0 R /F 4 >>",
+    ])
+}
+
+fn auto_size_harness() -> Harness<'static, PdfCraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("auto.pdf", None, auto_size_form()).unwrap();
+        app.set_option("left", "closed").unwrap();
+        app.set_option("zoom", "150").unwrap();
+        app
+    });
+    h.run_steps(6);
+    h
+}
+
+/// The on-screen size for `text` in the field, and how wide (single-line) or tall (multiline,
+/// wrapped at the box) that text is in the screen font, against the room inside the box (pt).
+fn on_screen_fit(h: &Harness<'static, PdfCraftApp>, name: &str, text: &str) -> (f32, f32, f32) {
+    let s = h.state();
+    let f = s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == name).unwrap().clone();
+    let w = f.widgets[0].clone();
+    let painter = egui::Painter::new(h.ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+    let size = pdfcraft_ui_egui::forms_ui::field_text_size(&painter, &f, &w, text);
+    let (bw, bh) = ((w.rect[2] - w.rect[0]) as f32 - 6.0, (w.rect[3] - w.rect[1]) as f32 - 6.0);
+    let font = egui::FontId::proportional(size);
+    if f.has(pdfcraft_engine::field_flags::MULTILINE) {
+        (size, painter.layout(text.to_string(), font, egui::Color32::BLACK, bw).size().y, bh)
+    } else {
+        (size, painter.layout_no_wrap(text.to_string(), font, egui::Color32::BLACK).size().x, bw)
+    }
+}
+
+#[test]
+fn auto_size_fields_shrink_and_wrap_typed_text_to_fit_their_box() {
+    let mut h = auto_size_harness();
+    let long = "Weekly progress and diligence: CoBank refi, IL and Redwood Falls";
+    click_field(&mut h, "short", 0);
+    h.event(egui::Event::Text(long.into()));
+    h.run_steps(2);
+    let typed = h.state().views[0].forms.focus.clone().expect("the editor is open").text;
+    assert_eq!(typed, long);
+    let (size, used, room) = on_screen_fit(&h, "short", &typed);
+    assert!(size > 4.0 && size < 8.0 / 1.15, "a long value shrinks in the short box: {size} pt");
+    assert!(used <= room + 0.5, "and fits its width: {used} > {room}");
+    let (short_size, ..) = on_screen_fit(&h, "short", "Hi");
+    assert!(short_size > size, "short text keeps a larger size: {short_size}");
+
+    let (size, used, room) = on_screen_fit(&h, "notes", long);
+    assert!(used <= room + 0.5, "multiline text wraps and shrinks to the box height: {used} > {room} at {size} pt");
+    assert!(size >= 6.0, "without shrinking further than it must: {size} pt");
+
+    // An explicit size is kept, as in Acrobat: the text may then run past the box.
+    assert_eq!(on_screen_fit(&h, "fixed", long).0, 10.0);
 }

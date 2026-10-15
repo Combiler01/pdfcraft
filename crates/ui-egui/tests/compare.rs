@@ -33,6 +33,24 @@ fn compare_two_versions() {
     let id = h.state().active_ids().unwrap().1;
     let i = h.state().active_ids().unwrap().0;
     assert_eq!(h.state().views[i].compare_marks.len(), 2);
+    // Side by side: the old file's half shades its side of the changes and follows the new
+    // file's zoom; "New file only" ends it.
+    assert!(h.state().compare.as_ref().unwrap().side_by_side, "side by side on a wide window");
+    let old_i = h.state().views.iter().position(|v| v.id == h.state().compare.as_ref().unwrap().old).unwrap();
+    assert_eq!(h.state().views[old_i].compare_marks.len(), 2, "replaced words shaded on the old file too");
+    assert!(h.state().views[old_i].flash.is_some(), "the old half jumped to the change");
+    h.state_mut().views[i].zoom = 1.5;
+    h.state_mut().views[i].fit = pdfcraft_ui_egui::canvas::Fit::None;
+    h.run_steps(3);
+    assert_eq!((h.state().views[old_i].zoom, h.state().views[old_i].fit), (1.5, pdfcraft_ui_egui::canvas::Fit::None), "the old half follows");
+    h.get_by_label("New file only").click();
+    h.run_steps(2);
+    assert!(!h.state().compare.as_ref().unwrap().side_by_side);
+    h.get_by_label("Side by side").click();
+    h.run_steps(2);
+    assert!(h.state().compare.as_ref().unwrap().side_by_side);
+    h.get_by_label("New file only").click();
+    h.run_steps(2);
     h.get_by_label("Mark as comments").click();
     h.run_steps(3);
     assert_eq!(h.state().session.get(id).unwrap().info.annotations.len(), 2);

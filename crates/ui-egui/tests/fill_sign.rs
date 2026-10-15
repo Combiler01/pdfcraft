@@ -306,6 +306,30 @@ fn changing_saved_signatures_and_initials_preserves_placed_marks() {
 }
 
 #[test]
+fn undo_button_and_ctrl_z_take_back_one_drawn_stroke_at_a_time() {
+    let mut h = harness();
+    let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2]], vec![[0.2, 0.3], [0.6, 0.1]], vec![[0.7, 0.2], [0.9, 0.3]]]);
+    h.state_mut().signature = Some(drawn);
+    assert!(h.state_mut().execute("sign.fill.signature.change"));
+    h.run_steps(2);
+    h.get_by_label("Undo").click();
+    h.run_steps(2);
+    assert_eq!(h.state().signature_draft.strokes.len(), 2);
+    h.key_press(egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().signature_draft.strokes.len(), 2, "plain Z is not undo");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert_eq!(h.state().signature_draft.strokes.len(), 1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert!(h.state().signature_draft.strokes.is_empty());
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Z);
+    h.run_steps(2);
+    assert!(h.state().signature_draft.strokes.is_empty());
+}
+
+#[test]
 fn changing_drawn_signatures_can_be_cancelled_or_switched_to_type() {
     let mut h = harness();
     let drawn = SavedSig::Drawn(vec![vec![[0.1, 0.1], [0.5, 0.2], [0.9, 0.1]]]);

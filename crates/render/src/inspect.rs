@@ -5,6 +5,7 @@
 //! remains the compatibility fallback. When neither can inspect a renderable file, panels
 //! are empty and `warnings` says why.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
@@ -75,6 +76,8 @@ pub struct DocInfo {
     pub layer_groups: Vec<Vec<(u32, u16)>>,
     pub fonts: Vec<FontInfo>,
     pub attachments: Vec<Attachment>,
+    /// Pages with a presentation transition (`/Trans`) or display time (`/Dur`), in page order.
+    pub transitions: Vec<PageTransition>,
     pub warnings: Vec<String>,
 }
 
@@ -87,6 +90,89 @@ pub enum Xfa {
     /// The form is laid out from the XFA packets at open (`/NeedsRendering`, or no fields): the
     /// PDF pages are only a placeholder.
     Dynamic,
+}
+
+/// A page's presentation transition and display time (ISO 32000-2 §12.4.4): how the page comes
+/// into view in a full-screen presentation, and how long it stays before advancing. Only pages
+/// carrying `/Trans` or `/Dur` are listed. Values outside the spec's ranges fall back to the
+/// defaults rather than being refused.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageTransition {
+    pub page: usize,
+    /// `/Trans /S`; `None` when the page has only `/Dur`.
+    pub style: Option<TransitionStyle>,
+    /// `/D`: how long the transition takes, in seconds (default 1).
+    pub duration: f32,
+    /// `/Dm /H` (true) or `/V` (Split, Blinds).
+    pub horizontal: bool,
+    /// `/M /I` (true) or `/O` (Split, Box, Fly).
+    pub inward: bool,
+    /// `/Di`: 0, 90, 180, 270 or 315 degrees (Wipe, Glitter, Fly, Cover, Uncover, Push); `None`
+    /// for `/None` (Fly only).
+    pub direction: Option<u16>,
+    /// `/SS`: the Fly scale (default 1).
+    pub scale: f32,
+    /// `/B`: Fly with an opaque backdrop.
+    pub opaque: bool,
+    /// `/Dur`: seconds the page shows before the presentation advances; `None` waits for the
+    /// presenter.
+    pub display: Option<f32>,
+}
+
+/// The transition styles of ISO 32000-2 table 164 (`/Trans /S`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransitionStyle {
+    Split,
+    Blinds,
+    Box,
+    Wipe,
+    Dissolve,
+    Glitter,
+    /// `/R`: the next page replaces the old one with no effect (the default).
+    Replace,
+    Fly,
+    Push,
+    Cover,
+    Uncover,
+    Fade,
+}
+
+impl TransitionStyle {
+    /// The style a `/S` name means; an unknown name is `Replace`, the spec's default.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "Split" => Self::Split,
+            "Blinds" => Self::Blinds,
+            "Box" => Self::Box,
+            "Wipe" => Self::Wipe,
+            "Dissolve" => Self::Dissolve,
+            "Glitter" => Self::Glitter,
+            "Fly" => Self::Fly,
+            "Push" => Self::Push,
+            "Cover" => Self::Cover,
+            "Uncover" => Self::Uncover,
+            "Fade" => Self::Fade,
+            _ => Self::Replace,
+        }
+    }
+
+    /// The name as written in a PDF (`/S`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Split => "Split",
+            Self::Blinds => "Blinds",
+            Self::Box => "Box",
+            Self::Wipe => "Wipe",
+            Self::Dissolve => "Dissolve",
+            Self::Glitter => "Glitter",
+            Self::Replace => "R",
+            Self::Fly => "Fly",
+            Self::Push => "Push",
+            Self::Cover => "Cover",
+            Self::Uncover => "Uncover",
+            Self::Fade => "Fade",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -499,13 +585,17 @@ struct Inspector<'a> {
     /// Named destinations (`/Names /Dests` tree), keyed by raw string bytes, built once.
     /// Looking each name up by walking the tree was O(links × names): minutes on manuals.
     named: HashMap<Vec<u8>, &'a Object>,
+    /// The page of each annotation (the first page that lists it), built when a field's widget
+    /// has no `/P`. Searching every page's `/Annots` for each such field was O(fields ×
+    /// annotations): a second on a form of 8,000 fields.
+    annotation_pages: OnceCell<HashMap<ObjectId, usize>>,
 }
 
 impl<'a> Inspector<'a> {
     fn new(doc: &'a dyn Structure) -> Self {
         let page_ids = doc.page_ids();
         let page_index = page_ids.iter().copied().enumerate().map(|(index, id)| (id, index)).collect();
-        let mut me = Self { doc, page_ids, page_index, named: HashMap::new() };
+        let mut me = Self { doc, page_ids, page_index, named: HashMap::new(), annotation_pages: OnceCell::new() };
         let mut named = HashMap::new();
         if let Some(tree) =
             doc.catalog().ok().and_then(|c| c.get(b"Names").ok()).and_then(|o| me.dict(o)).and_then(|n| n.get(b"Dests").ok()).and_then(|o| me.dict(o))
@@ -543,6 +633,7 @@ impl<'a> Inspector<'a> {
             (info.outline, info.outline_more) = self.outline_window(first);
         }
         self.annotations(info);
+        self.transitions(info);
         let mut field_seen = HashSet::new();
         if let Some(form) = catalog.get(b"AcroForm").ok().and_then(|o| self.dict(o))
             && let Ok(fields) = form.get(b"Fields").and_then(|o| self.resolve(o).as_array())
@@ -590,6 +681,53 @@ impl<'a> Inspector<'a> {
     }
 
     // ── object helpers ──────────────────────────────────────────────────────────────────────
+
+    /// `/Trans` and `/Dur` of every page (ISO 32000-2 §12.4.4), in page order. Lenient: a value
+    /// outside the spec's choices takes that entry's default, and a page with neither entry is
+    /// not listed. Bounded by the page count.
+    fn transitions(&self, info: &mut DocInfo) {
+        for (page, &pid) in self.page_ids.iter().enumerate() {
+            let Ok(d) = self.doc.get_dictionary(pid) else { continue };
+            let display = d.get(b"Dur").ok().and_then(|o| self.resolve(o).as_float().ok()).filter(|s| s.is_finite() && *s >= 0.0);
+            let trans = d.get(b"Trans").ok().and_then(|o| self.dict(o));
+            if trans.is_none() && display.is_none() {
+                continue;
+            }
+            let mut t = PageTransition {
+                page,
+                style: None,
+                duration: 1.0,
+                horizontal: true,
+                inward: true,
+                direction: Some(0),
+                scale: 1.0,
+                opaque: false,
+                display,
+            };
+            if let Some(tr) = trans {
+                t.style = Some(self.name(tr, b"S").map_or(TransitionStyle::Replace, |n| TransitionStyle::from_name(&n)));
+                let num = |key: &[u8]| tr.get(key).ok().and_then(|o| self.resolve(o).as_float().ok()).filter(|v| v.is_finite());
+                t.duration = num(b"D").filter(|d| *d >= 0.0).unwrap_or(1.0);
+                t.horizontal = self.name(tr, b"Dm").as_deref() != Some("V");
+                t.inward = self.name(tr, b"M").as_deref() != Some("O");
+                t.direction = match tr.get(b"Di").map(|o| self.resolve(o)) {
+                    Ok(Object::Name(n)) if n.as_slice() == b"None" => None,
+                    Ok(o) => match o.as_i64().ok() {
+                        Some(0) => Some(0),
+                        Some(90) => Some(90),
+                        Some(180) => Some(180),
+                        Some(270) => Some(270),
+                        Some(315) => Some(315),
+                        _ => Some(0),
+                    },
+                    Err(_) => Some(0),
+                };
+                t.scale = num(b"SS").filter(|s| *s > 0.0).unwrap_or(1.0);
+                t.opaque = matches!(tr.get(b"B").map(|o| self.resolve(o)), Ok(Object::Boolean(true)));
+            }
+            info.transitions.push(t);
+        }
+    }
 
     fn resolve(&self, o: &'a Object) -> &'a Object {
         self.doc.dereference(o).map(|(_, o)| o).unwrap_or(o)
@@ -846,11 +984,19 @@ impl<'a> Inspector<'a> {
         for (start, d) in ranges {
             let first = d.get(b"St").ok().and_then(|o| self.resolve(o).as_i64().ok()).unwrap_or(1).max(1) as u64;
             let prefix = match d.get(b"P").ok().map(|o| self.resolve(o)) {
-                Some(Object::String(raw, _) | Object::Name(raw)) => {
+                Some(Object::String(raw, _)) => {
                     if raw.len() > MAX_PREFIX_BYTES {
                         return Err("a raw prefix exceeds 2050 bytes");
                     }
-                    self.text(d, b"P").unwrap_or_default()
+                    // A label prefix is literal text, not trimmed document metadata.
+                    text_string(raw).trim_matches('\0').to_string()
+                }
+                Some(Object::Name(raw)) => {
+                    if raw.len() > MAX_PREFIX_BYTES {
+                        return Err("a raw prefix exceeds 2050 bytes");
+                    }
+                    // Retain the existing name compatibility and boundary-NUL handling.
+                    String::from_utf8_lossy(raw).trim_matches('\0').to_string()
                 }
                 _ => String::new(),
             };
@@ -1184,17 +1330,25 @@ impl<'a> Inspector<'a> {
         out.push(Field { name: full, kind, value, page, tooltip: self.text(d, b"TU"), has_actions, rect });
     }
 
+    /// The first page whose `/Annots` lists the field or one of its kids.
     fn find_widget_page(&self, field: &Object, kids: &[Object]) -> Option<usize> {
-        let targets: HashSet<ObjectId> =
-            std::iter::once(field).chain(kids.iter()).filter_map(|o| if let Object::Reference(id) = o { Some(*id) } else { None }).collect();
-        if targets.is_empty() {
-            return None;
+        let pages = self.annotation_pages.get_or_init(|| self.annotation_pages());
+        std::iter::once(field).chain(kids).filter_map(|o| if let Object::Reference(id) = o { pages.get(id).copied() } else { None }).min()
+    }
+
+    /// Each annotation listed in a page's `/Annots`, with the first page that lists it.
+    fn annotation_pages(&self) -> HashMap<ObjectId, usize> {
+        let mut pages = HashMap::new();
+        for (idx, &pid) in self.page_ids.iter().enumerate() {
+            let Some(annots) = self.doc.get_dictionary(pid).ok().and_then(|d| d.get(b"Annots").ok()) else { continue };
+            let Ok(annots) = self.resolve(annots).as_array() else { continue };
+            for a in annots {
+                if let Object::Reference(id) = a {
+                    pages.entry(*id).or_insert(idx);
+                }
+            }
         }
-        self.page_index.iter().find_map(|(&pid, &idx)| {
-            let annots = self.doc.get_dictionary(pid).ok()?.get(b"Annots").ok()?;
-            let arr = self.resolve(annots).as_array().ok()?;
-            arr.iter().any(|a| matches!(a, Object::Reference(id) if targets.contains(id))).then_some(idx)
-        })
+        pages
     }
 
     /// The topmost field above widget `id` (itself without a `/Parent`), or `None` when it or an
@@ -1794,6 +1948,78 @@ mod tests {
         assert!(info.warnings[0].contains("physical page numbers"), "{:?}", info.warnings);
     }
 
+    // Contributor-original, blank three-page PDFs. The public importer reads both labels and metadata.
+    fn page_prefix_space_pdf(prefix: Vec<u8>, decimal: bool, indirect: bool) -> Vec<u8> {
+        use lopdf::dictionary;
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let kids: Vec<Object> = (0..3)
+            .map(|_| {
+                doc.add_object(dictionary! {
+                    "Type" => "Page",
+                    "Parent" => pages_id,
+                    "MediaBox" => vec![0.into(), 0.into(), 200.into(), 300.into()],
+                    "Resources" => Dictionary::new(),
+                })
+                .into()
+            })
+            .collect();
+        doc.objects.insert(pages_id, dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => 3 }.into());
+        let prefix = Object::String(prefix, lopdf::StringFormat::Hexadecimal);
+        let prefix = if indirect { Object::Reference(doc.add_object(prefix)) } else { prefix };
+        let mut label = Dictionary::new();
+        label.set("P", prefix);
+        if decimal {
+            label.set("S", Object::Name(b"D".to_vec()));
+        }
+        let labels = dictionary! { "Nums" => vec![Object::Integer(0), Object::Dictionary(label)] };
+        let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id, "PageLabels" => labels });
+        let info_id = doc.add_object(dictionary! { "Title" => Object::string_literal("  Metadata title  ") });
+        doc.trailer.set("Root", catalog_id);
+        doc.trailer.set("Info", info_id);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).expect("write original page-prefix fixture");
+        bytes
+    }
+
+    #[test]
+    fn page_label_prefix_spaces_survive_public_inspection() {
+        let mut utf16 = vec![0xfe, 0xff];
+        utf16.extend(" Ω ".encode_utf16().flat_map(u16::to_be_bytes));
+        for (raw, prefix, decimal, indirect) in [
+            (b" leading".to_vec(), " leading", true, false),
+            (b"trailing ".to_vec(), "trailing ", true, false),
+            (b" both ".to_vec(), " both ", false, false),
+            (b" ".to_vec(), " ", false, false),
+            (b" Caf\xe9 ".to_vec(), " Café ", true, false),
+            (utf16.clone(), " Ω ", true, false),
+            (utf16, " Ω ", false, true),
+            (Vec::new(), "", true, false),
+            (Vec::new(), "", false, false),
+        ] {
+            let bytes = page_prefix_space_pdf(raw, decimal, indirect);
+            let info = inspect(Arc::new(bytes), None).expect("public import of original page-prefix fixture");
+            let expected: Vec<String> = (1..=3)
+                .map(|n| {
+                    if decimal {
+                        format!("{prefix}{n}")
+                    } else if prefix.is_empty() {
+                        n.to_string()
+                    } else {
+                        prefix.to_owned()
+                    }
+                })
+                .collect();
+            assert_eq!(
+                info.pages.iter().map(|p| p.label.clone()).collect::<Vec<_>>(),
+                expected,
+                "{prefix:?}, decimal={decimal}, indirect={indirect}"
+            );
+            assert!(info.warnings.is_empty(), "{:?}", info.warnings);
+            assert_eq!(info.title.as_deref(), Some("Metadata title"), "page-prefix decoding must not change metadata normalization");
+        }
+    }
+
     #[test]
     fn page_label_limits_keep_normal_pdf_numbering() {
         for (style, first, expected) in [
@@ -2036,6 +2262,46 @@ trailer << /Root 1 0 R >>
 trailer << /Root 1 0 R >>
 %%EOF";
 
+    /// `/Trans` and `/Dur` (ISO 32000-2 §12.4.4): read with the spec's defaults for what a page
+    /// leaves out, lenient about what is out of range, and only for pages that have either.
+    const TRANSITIONS: &[u8] = b"%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R 4 0 R 5 0 R 6 0 R 7 0 R] /Count 5 /MediaBox [0 0 200 200] >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /Trans << /Type /Trans /S /Wipe /D 2.5 /Di 270 >> /Dur 5 >> endobj
+4 0 obj << /Type /Page /Parent 2 0 R /Dur 3 >> endobj
+5 0 obj << /Type /Page /Parent 2 0 R /Trans 8 0 R >> endobj
+6 0 obj << /Type /Page /Parent 2 0 R /Trans << /S /Bogus /D (slow) /Di 45 /Dm /Q >> /Dur -1 >> endobj
+7 0 obj << /Type /Page /Parent 2 0 R >> endobj
+8 0 obj << /S /Fly /M /O /SS 0.5 /B true /Di /None /Dm /V >> endobj
+trailer << /Root 1 0 R >>
+%%EOF";
+
+    #[test]
+    fn page_transitions_and_display_times_are_read() {
+        use super::TransitionStyle as S;
+        let info = inspect(Arc::new(TRANSITIONS.to_vec()), None).expect("opens");
+        let t = &info.transitions;
+        assert_eq!(t.iter().map(|t| t.page).collect::<Vec<_>>(), [0, 1, 2, 3], "pages with /Trans or /Dur, in order; page 5 has neither");
+        assert_eq!((t[0].style, t[0].duration, t[0].direction, t[0].display), (Some(S::Wipe), 2.5, Some(270), Some(5.0)));
+        assert!((t[0].horizontal, t[0].inward, t[0].scale, t[0].opaque) == (true, true, 1.0, false), "defaults: {:?}", t[0]);
+        assert_eq!((t[1].style, t[1].duration, t[1].display), (None, 1.0, Some(3.0)), "/Dur without /Trans");
+        assert_eq!(
+            (t[2].style, t[2].inward, t[2].scale, t[2].opaque, t[2].direction, t[2].horizontal),
+            (Some(S::Fly), false, 0.5, true, None, false),
+            "an indirect /Trans: {:?}",
+            t[2]
+        );
+        // Out of range: an unknown style is the spec's default R, a non-numeric /D the default
+        // second, a direction that is not one of the five falls back to 0, a bad /Dm to
+        // horizontal, and a negative /Dur is no display time.
+        assert_eq!(
+            (t[3].style, t[3].duration, t[3].direction, t[3].horizontal, t[3].display),
+            (Some(S::Replace), 1.0, Some(0), true, None),
+            "{:?}",
+            t[3]
+        );
+    }
+
     #[test]
     fn radio_button_layer_groups_are_read() {
         let info = inspect(Arc::new(LAYERS.to_vec()), None).expect("opens");
@@ -2060,6 +2326,70 @@ trailer << /Root 1 0 R >>
         let info = inspect(Arc::new(ORPHAN_FIELDS.to_vec()), None).expect("opens");
         let listed: Vec<_> = info.fields.iter().map(|f| (f.name.as_str(), f.value.as_deref(), f.page)).collect();
         assert_eq!(listed, [("alpha", Some("one"), Some(0)), ("beta", None, Some(0))], "{:?}", info.fields);
+    }
+
+    /// A `Structure` that counts the objects read through it.
+    struct CountingReads<'a> {
+        doc: &'a Document,
+        reads: std::cell::Cell<usize>,
+    }
+
+    impl Structure for CountingReads<'_> {
+        fn trailer(&self) -> &Dictionary {
+            &self.doc.trailer
+        }
+        fn get_object(&self, id: ObjectId) -> lopdf::Result<&Object> {
+            self.reads.set(self.reads.get() + 1);
+            self.doc.get_object(id)
+        }
+        fn encrypted(&self) -> bool {
+            false
+        }
+    }
+
+    /// Widgets without `/P` are placed on the page that lists them with one pass over the pages'
+    /// `/Annots`, not a search of every page per field: that was O(fields × annotations), a
+    /// second to open a form of 8,000 fields. A widget two pages list is on the first of them.
+    #[test]
+    fn widgets_without_a_page_entry_are_placed_in_one_pass() {
+        const PAGES: usize = 100;
+        const PER_PAGE: usize = 10;
+        let field = |p: usize, k: usize| 4 + PAGES + p * PER_PAGE + k;
+        let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm 3 0 R >> endobj\n");
+        let kids: Vec<String> = (0..PAGES).map(|p| format!("{} 0 R", 4 + p)).collect();
+        pdf += &format!("2 0 obj << /Type /Pages /Kids [{}] /Count {PAGES} >> endobj\n", kids.join(" "));
+        let fields: Vec<String> = (0..PAGES).flat_map(|p| (0..PER_PAGE).map(move |k| format!("{} 0 R", field(p, k)))).collect();
+        pdf += &format!("3 0 obj << /Fields [{}] >> endobj\n", fields.join(" "));
+        for p in 0..PAGES {
+            let mut annots: Vec<String> = (0..PER_PAGE).map(|k| format!("{} 0 R", field(p, k))).collect();
+            // The last page lists the first page's first widget too.
+            if p == PAGES - 1 {
+                annots.push(format!("{} 0 R", field(0, 0)));
+            }
+            pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Annots [{}] >> endobj\n", 4 + p, annots.join(" "));
+        }
+        for p in 0..PAGES {
+            for k in 0..PER_PAGE {
+                pdf += &format!("{} 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (f{p}_{k}) /Rect [10 10 90 30] >> endobj\n", field(p, k));
+            }
+        }
+        pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+        let doc = Document::load_mem(pdf.as_bytes()).expect("loads");
+        let counting = CountingReads { doc: &doc, reads: std::cell::Cell::new(0) };
+        let mut info = DocInfo {
+            pages: (0..PAGES)
+                .map(|_| PageInfo { width: 200.0, height: 200.0, crop: [0.0, 0.0, 200.0, 200.0], rotation: 0, label: String::new() })
+                .collect(),
+            ..Default::default()
+        };
+        Inspector::new(&counting).fill(&mut info);
+        let placed: Vec<_> = info.fields.iter().map(|f| (f.name.clone(), f.page)).collect();
+        let want: Vec<_> = (0..PAGES).flat_map(|p| (0..PER_PAGE).map(move |k| (format!("f{p}_{k}"), Some(p)))).collect();
+        assert_eq!(placed, want);
+        // A handful of reads per page and field; searching the pages for each field read the
+        // page dictionaries about 50,000 times.
+        let reads = counting.reads.get();
+        assert!(reads < 20 * (PAGES + PAGES * PER_PAGE), "{reads} object reads");
     }
 
     #[test]

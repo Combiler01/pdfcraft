@@ -608,6 +608,57 @@ fn choices_accept_exports_or_display_text() {
 }
 
 #[test]
+fn list_box_selection_scrolls_to_show_selected_options() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [6 0 R] >>".into(),
+        "<< /Fields [6 0 R] /DA (/Helv 10 Tf 0 g) /DR << /Font << /Helv 5 0 R >> >> >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(),
+        "<< /Type /Annot /Subtype /Widget /FT /Ch /T (days) /Ff 2097152 /Opt [(Mon) (Tue) (Wed) (Thu) (Fri)] /Rect [50 700 200 746] /P 3 0 R >>"
+            .into(),
+    ];
+    let mut doc = document(&objs);
+    // Setting value to Tue and Thu (indices 1 and 3) in a 46 pt high box (fits 3 rows).
+    // It should scroll /TI to 1 so Tue (1), Wed (2), Thu (3) are drawn and highlighted.
+    set_value(&mut doc, "days", &FieldValue::Choice(vec!["Tue".into(), "Thu".into()])).unwrap();
+    let doc = reopen(&doc);
+    let all = fields(&doc);
+    let days = field(&all, "days");
+    assert_eq!(days.value, ["Tue", "Thu"]);
+    let ti = doc.get(days.obj).as_dict().unwrap().get(b"TI").and_then(|o| o.as_int());
+    assert_eq!(ti, Some(1), "TI scrolled to 1 so both selected options are visible");
+    let appearance = ap(&doc, &days.widgets[0]);
+    assert!(appearance.contains("(Tue) Tj"), "Tue is drawn: {appearance}");
+    assert!(appearance.contains("(Thu) Tj"), "Thu is drawn: {appearance}");
+    assert_eq!(appearance.matches("0.6 0.75 0.86 rg").count(), 2, "both Tue and Thu highlighted");
+}
+
+#[test]
+fn multiselect_choice_indices_are_sorted_without_reordering_values() {
+    let mut forward_appearance = None;
+    for values in [["Ham", "Olives"], ["Olives", "Ham"]] {
+        let mut doc = fixture();
+        let chosen: Vec<String> = values.iter().map(|value| (*value).into()).collect();
+        set_value(&mut doc, "toppings", &FieldValue::Choice(chosen.clone())).unwrap();
+        let doc = reopen(&doc);
+        let all = fields(&doc);
+        let list = field(&all, "toppings");
+        assert_eq!(list.value, chosen, "saving preserves the caller's /V order");
+        let object = doc.get(list.obj);
+        let indices = object.as_dict().unwrap().get(b"I").unwrap().as_array().unwrap();
+        assert_eq!(indices.iter().map(|index| index.as_int().unwrap()).collect::<Vec<_>>(), [1, 2], "saved option indices are ascending");
+        let appearance = ap(&doc, &list.widgets[0]);
+        assert_eq!(appearance.matches("0.6 0.75 0.86 rg").count(), 2, "both selected rows stay highlighted");
+        if let Some(forward) = &forward_appearance {
+            assert_eq!(&appearance, forward, "the same selected rows have the same appearance in either selection order");
+        } else {
+            forward_appearance = Some(appearance);
+        }
+    }
+}
+
+#[test]
 fn errors_are_specific_and_change_nothing() {
     let mut doc = fixture();
     assert_eq!(set_value(&mut doc, "nope", &FieldValue::Text("x".into())), Err(FormError::NoSuchField("nope".into())));
@@ -896,6 +947,34 @@ fn formats_validation_and_calculations_run_like_acrobat() {
 }
 
 #[test]
+fn new_text_fields_fit_their_box() {
+    // #1888: a fixed 12 pt was clipped in a short box. New text and date fields take Acrobat's
+    // Auto size: 12 pt where there is room, smaller where there isn't.
+    let mut doc = one_page();
+    let tf_size = |ap: &str| {
+        ap.split("/Helv ")
+            .nth(1)
+            .and_then(|s| s.split(' ').next())
+            .and_then(|n| n.parse::<f64>().ok())
+            .unwrap_or_else(|| panic!("no /Helv size in {ap}"))
+    };
+    for (kind, name, value) in [(NewField::Text { multiline: false }, "short", "Hello world"), (NewField::Date, "date", "10/13/2026")] {
+        add_field(&mut doc, 0, [20.0, 20.0, 200.0, 28.0], &kind, Some(name)).unwrap();
+        set_value(&mut doc, name, &FieldValue::Text(value.into())).unwrap();
+        let f = field(&fields(&doc), name).clone();
+        assert_eq!(f.da, "/Helv 0 Tf 0 g", "{name}");
+        let size = tf_size(&ap(&doc, &f.widgets[0]));
+        assert!(size > 0.0 && size <= 8.0, "{name}: {size} pt in an 8 pt box");
+    }
+    add_field(&mut doc, 0, [20.0, 50.0, 200.0, 72.0], &NewField::Text { multiline: false }, Some("tall")).unwrap();
+    set_value(&mut doc, "tall", &FieldValue::Text("Hello world".into())).unwrap();
+    assert_eq!(tf_size(&ap(&doc, &field(&fields(&doc), "tall").widgets[0])), 12.0, "a box with room keeps the 12 pt look");
+    // An explicit size still wins.
+    set_props(&mut doc, "short", &FieldProps { font_size: Some(12.0), ..FieldProps::default() }).unwrap();
+    assert_eq!(tf_size(&ap(&doc, &field(&fields(&doc), "short").widgets[0])), 12.0);
+}
+
+#[test]
 fn appearance_properties_restyle_every_widget() {
     let mut doc = one_page();
     add_field(&mut doc, 0, [50.0, 700.0, 250.0, 720.0], &NewField::Text { multiline: false }, Some("name")).unwrap();
@@ -1119,6 +1198,49 @@ fn duplicating_a_field_across_pages_shares_its_value() {
     assert_eq!((f.value.clone(), f.widgets.len()), (vec!["AL".to_string()], 3), "one field, one value, three widgets");
     assert_eq!(fields(&doc).len(), 1);
     assert!(duplicate_field(&mut doc.clone(), &name, &[7]).is_err());
+}
+
+/// Fields with the same fully qualified name are one field (§12.7.3.1): a parent whose widgets are
+/// its kids, as Duplicate Across Pages writes it, and separate field dictionaries that repeat the
+/// same `/T`, as other writers do. Filling the name fills every one of them.
+#[test]
+fn fields_sharing_a_name_take_the_same_value() {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 5 0 R >>".into(),                         // 1
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 600 800] >>".into(),   // 2
+        "<< /Type /Page /Parent 2 0 R /Annots [7 0 R 11 0 R] >>".into(),                    // 3
+        "<< /Type /Page /Parent 2 0 R /Annots [8 0 R 9 0 R 12 0 R] >>".into(),              // 4
+        "<< /Fields [6 0 R 9 0 R 11 0 R 12 0 R] /DA (/Helv 0 Tf 0 g) /DR << /Font << /Helv 10 0 R >> >> >>".into(), // 5
+        "<< /FT /Tx /T (ClientName) /Kids [7 0 R 8 0 R] >>".into(),                         // 6 parent
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [50 700 250 720] /P 3 0 R >>".into(), // 7 its widget, page 1
+        "<< /Type /Annot /Subtype /Widget /Parent 6 0 R /Rect [50 700 250 720] /P 4 0 R >>".into(), // 8 its widget, page 2
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (ClientName) /Rect [50 600 250 620] /P 4 0 R >>".into(), // 9 same name, own field
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>".into(), // 10
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (Agree) /V /Off /AS /Off /Rect [300 700 315 715] /P 3 0 R /AP << /N << /Yes 13 0 R /Off 14 0 R >> >> >>".into(), // 11
+        "<< /Type /Annot /Subtype /Widget /FT /Btn /T (Agree) /V /Off /AS /Off /Rect [300 700 315 715] /P 4 0 R /AP << /N << /Yes 13 0 R /Off 14 0 R >> >> >>".into(), // 12
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                      // 13
+        "<< /Length 0 >>\nstream\n\nendstream".into(),                                      // 14
+    ];
+    let mut doc = document(&objs);
+    set_value(&mut doc, "ClientName", &FieldValue::Text("Ada Lovelace".into())).unwrap();
+    set_value(&mut doc, "Agree", &FieldValue::Check(true)).unwrap();
+    let doc = reopen(&doc);
+    let v = |n: u32| doc.get(ObjRef { num: n, generation: 0 }).as_dict().unwrap().get(b"V").cloned();
+    let typed = Some(Object::String(PdfString::text("Ada Lovelace")));
+    assert_eq!((v(6), v(9)), (typed.clone(), typed), "the value sits on the parent and on the field that repeats its name");
+    assert_eq!((v(7), v(8)), (None, None), "the parent's widgets carry no value of their own");
+    let all = fields(&doc);
+    let named: Vec<&Field> = all.iter().filter(|f| f.name == "ClientName").collect();
+    let widgets: Vec<&Widget> = named.iter().flat_map(|f| &f.widgets).collect();
+    assert_eq!(widgets.iter().map(|w| w.obj.num).collect::<Vec<_>>(), [7, 8, 9]);
+    for w in widgets {
+        assert!(ap(&doc, w).contains("Ada Lovelace"), "widget {} shows the value", w.obj.num);
+    }
+    let agree: Vec<&Field> = all.iter().filter(|f| f.name == "Agree").collect();
+    assert_eq!(agree.len(), 2);
+    for f in agree {
+        assert_eq!((f.value.as_slice(), f.widgets[0].state.as_deref()), (&["Yes".to_string()][..], Some("Yes")), "check box {}", f.obj.num);
+    }
 }
 
 #[test]
@@ -1942,4 +2064,43 @@ fn page_shapes_closes_only_last_stroked_subpath_but_all_filled_subpaths() {
     let filled = detection_test_shapes(format!("{paths} f").as_bytes());
     assert_eq!(filled.boxes, [[50.0, 100.0, 170.0, 140.0], [200.0, 100.0, 320.0, 140.0]]);
     assert!(filled.rules.is_empty());
+}
+
+#[test]
+fn auto_text_size_fits_single_and_multiline_text() {
+    use crate::appearance::auto_text_size;
+    use pdfcraft_fonts::{helvetica_width, wrap_with};
+    let long = "Weekly progress and diligence: CoBank refi, IL and Redwood Falls";
+    // Single line: the height's size for short text, shrunk to the width for long text.
+    assert_eq!(auto_text_size("Hi", 94.0, 8.0, false, helvetica_width), 8.0 / 1.15);
+    let s = auto_text_size(long, 194.0, 8.0, false, helvetica_width);
+    assert!(s > 4.0 && s < 8.0 / 1.15 && helvetica_width(long, s) <= 194.0 + 1e-9, "{s}");
+    // Never past 12 pt or under 4 pt.
+    assert_eq!(auto_text_size("Hi", 500.0, 500.0, false, helvetica_width), 12.0);
+    assert_eq!(auto_text_size(&long.repeat(20), 20.0, 8.0, false, helvetica_width), 4.0);
+    // Multiline: the largest size whose wrapped lines fit the height.
+    let m = auto_text_size(long, 114.0, 44.0, true, helvetica_width);
+    assert!(wrap_with(long, m, 114.0, helvetica_width).len() as f64 * m * 1.15 <= 44.0, "{m}");
+    assert!(wrap_with(long, m + 0.5, 114.0, helvetica_width).len() as f64 * (m + 0.5) * 1.15 > 44.0, "{m} is the largest that fits");
+    // Hostile boxes and measurements don't panic or return nonsense.
+    for (w, h) in [(f64::NAN, 10.0), (10.0, f64::INFINITY), (-5.0, -5.0), (0.0, 0.0)] {
+        for multiline in [false, true] {
+            let s = auto_text_size(long, w, h, multiline, helvetica_width);
+            assert!((4.0..=12.0).contains(&s), "{w}×{h}: {s}");
+        }
+    }
+    assert_eq!(auto_text_size(long, 50.0, 10.0, false, |_, _| f64::NAN), 10.0 / 1.15);
+}
+
+#[test]
+fn document_scripts_read_each_name_tree_node_once() {
+    // The root lists itself and the leaf twice each.
+    let doc = document(&[
+        "<< /Type /Catalog /Pages 2 0 R /Names << /JavaScript 3 0 R >> >>".into(),
+        "<< /Type /Pages /Kids [] /Count 0 >>".into(),
+        "<< /Kids [3 0 R 4 0 R 3 0 R 4 0 R] >>".into(),
+        "<< /Names [(init) 5 0 R] >>".into(),
+        "<< /S /JavaScript /JS (var ready = true;) >>".into(),
+    ]);
+    assert_eq!(document_scripts_named(&doc), [("init".to_string(), "var ready = true;".to_string())]);
 }

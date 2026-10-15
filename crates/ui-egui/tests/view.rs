@@ -199,6 +199,95 @@ fn single_page_wheel_pans_instead_when_zoomed_in() {
 }
 
 #[test]
+fn single_page_wheel_at_the_bottom_edge_turns_to_the_next_page_top_and_back() {
+    // #1924: zoomed in so the page is taller than the window, the wheel pans; at the bottom
+    // edge one more notch shows the next page at its top, and at the top edge one notch up
+    // shows the previous page at its bottom.
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+    // Notches pan page 1 down; the page turns only after the view stopped at the bottom.
+    let (mut notches, mut stalled) = (0, 0);
+    let mut last = rect(&h, 0).expect("page 1 on screen").min.y;
+    while h.state().views[0].current == 0 && notches < 80 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(12);
+        notches += 1;
+        if let Some(r) = rect(&h, 0) {
+            stalled = if (r.min.y - last).abs() < 0.01 { stalled + 1 } else { 0 };
+            last = r.min.y;
+        }
+    }
+    assert!(notches > 2, "the page panned before it turned: {notches} notches");
+    assert_eq!(h.state().views[0].current, 1, "a notch at the bottom edge shows the next page");
+    assert!(stalled <= 1, "no notch was wasted at the edge");
+    let top = rect(&h, 1).expect("page 2 on screen").min.y;
+    assert!(top > h.state().views[0].viewport_rect().min.y, "page 2 shows its top edge: {top}");
+    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 0, "a notch at the top edge shows the previous page");
+    let r = rect(&h, 0).expect("page 1 on screen");
+    assert!(r.max.y < h.state().views[0].viewport_rect().max.y + 40.0, "page 1 shows its bottom edge: {r:?}");
+}
+
+#[test]
+fn single_page_swipe_that_reaches_the_edge_does_not_turn_but_a_fresh_one_does() {
+    // Momentum that carries a swipe to the bottom edge must not go on to turn the page.
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(4);
+    let send = |h: &mut Harness<'static, PdfCraftApp>, phase, dy| {
+        h.event(wheel(MouseWheelUnit::Point, dy, phase));
+        h.step();
+    };
+    // One long swipe: far more motion than the page has, in one gesture.
+    send(&mut h, TouchPhase::Start, 0.0);
+    for _ in 0..120 {
+        send(&mut h, TouchPhase::Move, -40.0);
+    }
+    send(&mut h, TouchPhase::End, 0.0);
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 0, "the swipe that panned to the edge does not turn");
+    // A new swipe at the edge turns exactly one page.
+    send(&mut h, TouchPhase::Start, 0.0);
+    for _ in 0..6 {
+        send(&mut h, TouchPhase::Move, -25.0);
+    }
+    send(&mut h, TouchPhase::End, 0.0);
+    h.run_steps(30);
+    assert_eq!(h.state().views[0].current, 1, "a fresh swipe at the edge turns one page");
+    let top = rect(&h, 1).expect("page 2 on screen").min.y;
+    assert!(
+        top >= h.state().views[0].viewport_rect().min.y,
+        "page 2 starts at its top after the swipe: {top} in {:?}",
+        h.state().views[0].viewport_rect()
+    );
+}
+
+#[test]
+fn stepping_past_either_end_leaves_the_view_alone() {
+    // Paging on past the first or last page must not jump the page back to its top.
+    for (page, forward) in [(2, true), (0, false)] {
+        let mut h = harness_stepping(1.0 / 60.0, &[("layout", "single"), ("zoom", "200")]);
+        h.state_mut().views[0].go_to_page(page);
+        h.run_steps(20);
+        let at = h.state().views[0].viewport_rect().center();
+        h.hover_at(at);
+        h.run_steps(4);
+        // Pan the page off its edge so a jump would show.
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.run_steps(30);
+        let before = rect(&h, page).expect("page on screen");
+        h.state_mut().views[0].step_page(forward);
+        h.run_steps(30);
+        assert_eq!(h.state().views[0].current, page);
+        assert_eq!(rect(&h, page), Some(before), "stepping past the end (forward={forward}) moved the page");
+    }
+}
+
+#[test]
 fn wheel_turns_one_page_per_notch_and_per_trackpad_swipe() {
     // At a real frame rate: brisk notches each turn a page, and one trackpad swipe turns one
     // page, its momentum included (macOS sends the momentum as a second Start…End).
@@ -254,6 +343,86 @@ fn precise_touchpad_wheel_scrolls_one_to_one() {
     h.run_steps(20);
     let drift = settled - rect(&h, 0).unwrap().min.y;
     assert!(drift.abs() < 2.0, "no easing tail after the swipe: drifted {drift}");
+}
+
+/// Steps `frames` frames and returns how far the document scrolled down over them, from the
+/// pages on screen in each pair of consecutive frames (a page can leave the screen on the way).
+fn scroll_over(h: &mut Harness<'static, PdfCraftApp>, frames: usize) -> f32 {
+    let tops = |h: &Harness<'static, PdfCraftApp>| (0..3).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
+    let mut moved = 0.0;
+    for _ in 0..frames {
+        let before = tops(h);
+        h.step();
+        let after = tops(h);
+        let step = before.iter().zip(&after).find_map(|(b, a)| Some(b.as_ref()? - a.as_ref()?));
+        moved += step.expect("a page stays on screen from one frame to the next");
+    }
+    moved
+}
+
+/// A two-finger swipe down the page, 25 points a frame for six frames, lifted the frame after
+/// (the axis stop Wayland sends), at 300 % so the document is long enough to glide in: how far
+/// it scrolled by the frame after the lift (the page is drawn a frame behind its scroll).
+fn swipe_and_lift(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h.event(wheel(MouseWheelUnit::Point, -25.0, TouchPhase::Start));
+    let mut moved = scroll_over(h, 1);
+    for _ in 0..6 {
+        h.event(wheel(MouseWheelUnit::Point, -25.0, TouchPhase::Move));
+        moved += scroll_over(h, 1);
+    }
+    h.event(wheel(MouseWheelUnit::Point, 0.0, TouchPhase::End));
+    moved + scroll_over(h, 2)
+}
+
+/// The touchpad glide is Wayland's: macOS sends its own momentum and the web none (#531).
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn touchpad_swipe_glides_on_after_the_fingers_lift_and_stops() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+    let swiped = swipe_and_lift(&mut h);
+    // The seven 25-point motions, 1:1 (#759).
+    assert!(swiped >= 174.0, "the swipe scrolls 1:1: moved {swiped}");
+    // 1500 points a second at the lift: about 190 points over the next 10 frames.
+    let glided = scroll_over(&mut h, 10);
+    assert!(glided > 100.0, "the page glides on after the lift: moved {glided} more");
+    let rest = scroll_over(&mut h, 180);
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "the glide slows to a stop: still drifting {drift}");
+    let total = swiped - 175.0 + glided + rest;
+    assert!(total > 400.0 && total < 600.0, "about the lift speed × 0.35 s: glided {total}");
+}
+
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn touching_the_touchpad_again_or_turning_animations_off_stops_the_glide() {
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+    swipe_and_lift(&mut h);
+    assert!(scroll_over(&mut h, 3) > 30.0, "gliding");
+    h.event(wheel(MouseWheelUnit::Point, 0.0, TouchPhase::Start));
+    scroll_over(&mut h, 2);
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "fingers back down catch the page: drifted {drift}");
+
+    // A click (a pressed touchpad, or a tap with tap-to-click) catches it too.
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+    swipe_and_lift(&mut h);
+    assert!(scroll_over(&mut h, 3) > 30.0, "gliding");
+    let at = h.state().views[0].viewport_rect().center();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    scroll_over(&mut h, 2);
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "a click catches the page: drifted {drift}");
+
+    // Animation effects off: the page stops with the fingers, as before #531.
+    let mut h = harness_stepping(1.0 / 60.0, &[("layout", "continuous"), ("zoom", "300")]);
+    h.state_mut().set_option("animation_effects", "off").unwrap();
+    let swiped = swipe_and_lift(&mut h);
+    assert!((swiped - 175.0).abs() < 1.0, "the swipe still scrolls 1:1: moved {swiped}");
+    let drift = scroll_over(&mut h, 20);
+    assert!(drift.abs() < 0.5, "no glide with animations off: drifted {drift}");
 }
 
 /// The 40 frames from one wheel notch on, with the system asking for no animations (Windows'
@@ -980,17 +1149,15 @@ fn compare_page_with_raster(h: &mut Harness<'static, PdfCraftApp>, pdf: &[u8], z
     (sum as f64 / n as f64, worst)
 }
 
-#[test]
-fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
-    let _gpu = gpu();
-    // A 1200 pt square page of fine lines (0.5 pt every 1.7 pt): tiled at 300 %.
+/// A 1200 pt square page of fine lines (0.5 pt every 1.7 pt): tiled at 300 %, whole-page at 150 %.
+fn fine_grid_pdf() -> Vec<u8> {
     let mut content = String::from("0 g\n");
     for i in 0..670 {
         let v = 30.0 + 1.7 * i as f32;
         content.push_str(&format!("{v} 30 0.5 1140 re 30 {v} 1140 0.5 re\n"));
     }
     content.push_str("f\n");
-    let pdf = format!(
+    format!(
         "%PDF-1.7
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
@@ -1002,15 +1169,21 @@ trailer << /Root 1 0 R >>
 %%EOF",
         content.len()
     )
-    .into_bytes();
-    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_eframe(move |_cc| {
+    .into_bytes()
+}
+
+fn grid_harness(pdf: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
+    Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.open_bytes("grid.pdf", None, pdf.clone()).expect("opens");
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
-        app.set_option("zoom", "300").unwrap();
+        app.set_option("zoom", zoom).unwrap();
         app
-    });
+    })
+}
+
+fn settle(h: &mut Harness<'static, PdfCraftApp>) {
     for _ in 0..400 {
         h.run_steps(2);
         if !h.state().render_pending() {
@@ -1018,24 +1191,56 @@ trailer << /Root 1 0 R >>
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    // Detail in the middle of the window: the summed difference between neighbouring pixels.
-    let detail = |h: &mut Harness<'static, PdfCraftApp>| {
-        let img = h.render().expect("renders");
-        let (cx, cy) = (img.width() / 2, img.height() / 2);
-        let mut sum = 0u64;
-        for y in cy - 100..cy + 100 {
-            for x in cx - 150..cx + 150 {
-                sum += u64::from(img.get_pixel(x, y)[0].abs_diff(img.get_pixel(x + 1, y)[0]));
-            }
+}
+
+/// Detail in the middle of the window: the summed difference between neighbouring pixels.
+fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
+    let img = h.render().expect("renders");
+    let (cx, cy) = (img.width() / 2, img.height() / 2);
+    let mut sum = 0u64;
+    for y in cy - 100..cy + 100 {
+        for x in cx - 150..cx + 150 {
+            sum += u64::from(img.get_pixel(x, y)[0].abs_diff(img.get_pixel(x + 1, y)[0]));
         }
-        sum
-    };
-    let sharp = detail(&mut h);
+    }
+    sum
+}
+
+#[test]
+fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
+    let _gpu = gpu();
+    let mut h = grid_harness(fine_grid_pdf(), "300");
+    settle(&mut h);
+    let sharp = centre_detail(&mut h);
     // The first frame at a new zoom has no tiles for it yet (they are requested at its end).
     h.state_mut().set_option("zoom", "310").unwrap();
     h.step();
-    let first = detail(&mut h);
+    let first = centre_detail(&mut h);
     assert!(first * 10 > sharp * 7, "the first frame after zooming lost its detail: {first} against {sharp}");
+}
+
+/// #2196: zooming away from a tiled page and back must not re-blur an area already rendered
+/// sharp. The tiles of the zoom just left used to be dropped while the page was shown whole,
+/// so returning to it was a cold miss and every tile cost a full page interpret again.
+#[test]
+fn returning_to_a_visited_zoom_reuses_its_cached_tiles() {
+    let _gpu = gpu();
+    let mut h = grid_harness(fine_grid_pdf(), "300");
+    settle(&mut h);
+    let before = h.state().views[0].tiles_debug(0);
+    assert!(!before.is_empty(), "the 300 % page should be tiled, but it cached no tiles");
+    // Zoom right out, where the 1200 pt page fits in one raster and is not tiled at all, so
+    // none of its tiles is demanded...
+    h.state_mut().set_option("zoom", "50").unwrap();
+    settle(&mut h);
+    // ...then back to the first zoom, which was already rendered sharp.
+    h.state_mut().set_option("zoom", "300").unwrap();
+    h.step();
+    let after = h.state().views[0].tiles_debug(0);
+    // Every tile rendered sharp before the round trip is still cached: zooming away must not
+    // drop them, so returning shows them at once instead of re-interpreting the page per tile.
+    let lost: Vec<_> = before.iter().copied().filter(|k| !after.contains(k)).collect();
+    assert!(lost.is_empty(), "returning to a visited zoom dropped its cached tiles {lost:?} (had {before:?}, now {after:?})");
 }
 
 #[test]
@@ -1099,4 +1304,76 @@ fn sidebar_collapse_and_resize_preserves_scroll_position() {
     let vp_reopened = v.viewport_rect();
     let rel_y_reopened = rect_reopened.min.y - vp_reopened.min.y;
     assert!((rel_y_reopened - rel_y_before).abs() < 1.0, "page 2 scroll position preserved on reopen: before {rel_y_before}, after {rel_y_reopened}");
+}
+
+/// Synthetic unequal-height spreads, generated without font or image assets.
+fn final_spread_at_scroll_end(heights: &[u32], cover: bool) -> (Vec<(usize, egui::Rect)>, egui::Rect) {
+    let kids = (0..heights.len()).map(|i| format!("{} 0 R", i + 3)).collect::<Vec<_>>().join(" ");
+    let mut pdf = format!(
+        "%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [{kids}] /Count {} >> endobj\n",
+        heights.len()
+    );
+    for (i, height) in heights.iter().enumerate() {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 {height}] >> endobj\n", i + 3);
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("unequal-spreads.pdf", None, pdf.as_bytes().to_vec()).unwrap();
+        for (key, value) in [("left", "closed"), ("panel", "none"), ("layout", "two-up"), ("zoom", "200")] {
+            app.set_option(key, value).unwrap();
+        }
+        app.set_option("cover", if cover { "on" } else { "off" }).unwrap();
+        app
+    });
+    h.run_steps(12);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    for _ in 0..4 {
+        h.event(wheel(MouseWheelUnit::Line, -1000.0, TouchPhase::Move));
+        h.run_steps(45);
+    }
+    let view = &h.state().views[0];
+    let last = heights.len() - 1;
+    let first = if cover { last - (last + 1) % 2 } else { last - last % 2 };
+    let pages = (first..=last).map(|page| (page, view.page_screen_rect(page).expect("final spread is visible"))).collect();
+    (pages, view.viewport_rect())
+}
+
+fn assert_final_spread_bottom_reachable(heights: &[u32], cover: bool) {
+    let (pages, viewport) = final_spread_at_scroll_end(heights, cover);
+    let bottom = pages.iter().map(|(_, rect)| rect.bottom()).fold(0.0_f32, f32::max);
+    assert!(
+        bottom <= viewport.bottom() + 1.0,
+        "final spread remains below the viewport: heights={heights:?}, cover={cover}, pages={pages:?}, viewport={viewport:?}"
+    );
+    // The maximum-height page reaches the bottom margin after the scroll offset settles.
+    assert!((viewport.bottom() - bottom - 28.0).abs() < 1.0, "scroll end leaves the bottom margin: pages={pages:?}, viewport={viewport:?}");
+}
+
+#[test]
+fn two_up_scroll_end_reaches_a_taller_left_page() {
+    assert_final_spread_bottom_reachable(&[400, 400, 400, 100], false);
+}
+
+#[test]
+fn two_up_scroll_end_reaches_a_taller_right_page() {
+    assert_final_spread_bottom_reachable(&[400, 400, 100, 400], false);
+}
+
+#[test]
+fn two_up_scroll_end_reaches_equal_height_pages() {
+    assert_final_spread_bottom_reachable(&[400, 400, 400, 400], false);
+}
+
+#[test]
+fn two_up_scroll_end_reaches_an_unpaired_final_page() {
+    assert_final_spread_bottom_reachable(&[400, 400, 400], false);
+}
+
+#[test]
+fn two_up_scroll_end_with_cover_reaches_a_taller_left_page() {
+    assert_final_spread_bottom_reachable(&[400, 400, 400, 400, 100], true);
 }

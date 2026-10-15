@@ -235,6 +235,7 @@ fn a_gotor_link_to_a_directory_or_device_is_refused_without_reading_it() {
     for target in targets {
         let mut h = remote_harness(Some(dir.join("source.pdf").to_string_lossy().into_owned()), target, "[0 /Fit]");
         click_remote_link(&mut h);
+        support::wait_until(&mut h, "relative invalid target refusal", |app| app.toast.is_some());
         assert_eq!(h.state().views.len(), 1, "{target} opens no tab");
         let toast = &h.state().toast.as_ref().unwrap().0;
         assert!(toast.contains("not a regular file"), "{target}: {toast}");

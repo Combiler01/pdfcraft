@@ -25,6 +25,12 @@ fn row_rect(row: &[usize], lines: &[TextLine]) -> Option<[f64; 4]> {
     row.iter().filter_map(|i| lines.get(*i)).map(|l| l.rect).reduce(union)
 }
 
+/// [`row_rect`] in its text's own frame ([`TextLine::frame_rect`]), so rows of turned text
+/// compare along and across their baselines.
+fn frame_row_rect(row: &[usize], lines: &[TextLine]) -> Option<[f64; 4]> {
+    row.iter().filter_map(|i| lines.get(*i)).map(TextLine::frame_rect).reduce(union)
+}
+
 pub(super) fn group_blocks(lines: &[TextLine]) -> Vec<TextBlock> {
     group_layout(lines, true)
 }
@@ -62,14 +68,14 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut rows: Vec<Vec<usize>> = Vec::new();
     for (i, line) in lines.iter().enumerate() {
         let joins = rows.last().and_then(|r| r.last()).and_then(|i| lines.get(*i)).is_some_and(|prev| {
-            let gap = line.rect[0] - prev.rect[2];
+            let gap = line.frame_rect()[0] - prev.frame_rect()[2];
             // OCR words (invisible text over a scan) join only across a word space: a wider gap
             // is a table cell or a tab stop, which a rewrite would close up.
             let scanned = !mixed || (invisible(prev) == invisible(line) && (!invisible(line) || gap < prev.size.max(line.size) * 0.6));
             scanned
                 && (mixed || same_style(prev, line))
                 && same_plane(prev, line)
-                && (prev.origin.baseline - line.origin.baseline).abs() < prev.size.min(line.size) * 0.2
+                && (prev.frame_origin().1 - line.frame_origin().1).abs() < prev.size.min(line.size) * 0.2
                 && gap >= -prev.size.min(line.size) * 0.2
                 && gap < prev.size.max(line.size) * 1.5
                 // Separate same-style text objects that merely touch or overlap, with no space
@@ -90,14 +96,15 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
     let mut blocks: Vec<TextBlock> = Vec::new();
     for row in rows {
         let Some(first) = row.first().and_then(|i| lines.get(*i)) else { continue };
-        let Some(rect) = row_rect(&row, lines) else { continue };
+        let (Some(rect), Some(frame)) = (row_rect(&row, lines), frame_row_rect(&row, lines)) else { continue };
         let joins = blocks.last().is_some_and(|block| {
             let Some(prev_row) = block.rows.last() else { return false };
             let Some(prev) = prev_row.first().and_then(|i| lines.get(*i)) else { return false };
-            let Some(pr) = row_rect(prev_row, lines) else { return false };
-            let gap = prev.origin.baseline - first.origin.baseline;
+            let Some(pr) = frame_row_rect(prev_row, lines) else { return false };
+            let gap = prev.frame_origin().1 - first.frame_origin().1;
             let tol = prev.size.max(first.size).max(1.0);
-            let aligned = (pr[0] - rect[0]).abs() < tol || ((pr[0] + pr[2] - rect[0] - rect[2]) / 2.0).abs() < tol || (pr[2] - rect[2]).abs() < tol;
+            let aligned =
+                (pr[0] - frame[0]).abs() < tol || ((pr[0] + pr[2] - frame[0] - frame[2]) / 2.0).abs() < tol || (pr[2] - frame[2]).abs() < tol;
             // OCR lines stay apart: the scan fixes where each one is, so they never rewrap together.
             (!mixed || !(invisible(prev) || invisible(first)))
                 && (mixed || same_style(prev, first))
@@ -135,7 +142,7 @@ fn group_layout(lines: &[TextLine], mixed: bool) -> Vec<TextBlock> {
             if let Some(prev) = block.lines.last().filter(|i| row.contains(i)).and_then(|i| lines.get(*i))
                 && !row_text.ends_with(char::is_whitespace)
                 && !line.text.starts_with(char::is_whitespace)
-                && line.rect[0] - prev.rect[2] > line.size * 0.12
+                && line.frame_rect()[0] - prev.frame_rect()[2] > line.size * 0.12
             {
                 row_text.push(' ');
                 block.editor_text.push(' ');
@@ -192,6 +199,46 @@ fn shape_source(
     Err(EditError::Invalid("complex text needs the complete source TrueType/OpenType face; load that font before editing".into()))
 }
 
+/// For each output row (a range of the draft's characters), whether it is exactly the source row
+/// at the same position: the same characters, none of them inserted or changed by the edit.
+fn untouched_rows(block: &TextBlock, draft: &str, rows: &[std::ops::Range<usize>]) -> Vec<bool> {
+    let old: Vec<char> = block.editor_text.chars().collect();
+    let new: Vec<char> = draft.chars().collect();
+    let prefix = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    let suffix = old.iter().rev().zip(new.iter().rev()).take(old.len().min(new.len()).saturating_sub(prefix)).take_while(|(a, b)| a == b).count();
+    // The source character a draft character is, if the edit left it alone.
+    let origin = |i: usize| {
+        if i < prefix {
+            Some(i)
+        } else if i >= new.len().saturating_sub(suffix) {
+            (old.len() + i).checked_sub(new.len())
+        } else {
+            None
+        }
+    };
+    let mut source_rows = Vec::new();
+    let mut start = 0;
+    for (i, ch) in old.iter().enumerate() {
+        if *ch == '\n' {
+            source_rows.push(start..i);
+            start = i + 1;
+        }
+    }
+    source_rows.push(start..old.len());
+    // A line break inside a source run would pair editor rows with the wrong visual rows.
+    if source_rows.len() != block.rows.len() {
+        return vec![false; rows.len()];
+    }
+    rows.iter()
+        .enumerate()
+        .map(|(r, range)| {
+            source_rows.get(r).is_some_and(|source| {
+                !range.is_empty() && range.len() == source.len() && range.clone().zip(source.clone()).all(|(i, j)| origin(i) == Some(j))
+            })
+        })
+        .collect()
+}
+
 /// Rewrite visual rows while keeping the source style on each surviving character. Resource
 /// names may differ between Unicode subsets of the same face; encoding searches those subsets.
 pub(super) fn rewrite_styled_block(
@@ -227,6 +274,7 @@ pub(super) fn rewrite_styled_block(
     {
         return Err(EditError::Invalid("text style ranges must be disjoint UTF-8 boundaries with finite formatting (at most 1024 ranges)".into()));
     }
+    let source_count = lines.len();
     let mut styled_lines = lines.to_vec();
     let mut styled_spans = Vec::new();
     let mut underlines = HashMap::new();
@@ -331,8 +379,9 @@ pub(super) fn rewrite_styled_block(
     if !dx.is_finite() || !dy.is_finite() || style.width.is_some_and(|w| !w.is_finite()) {
         return Err(EditError::Invalid("the paragraph's position and width must be finite".into()));
     }
-    // A rewritten OCR line grows to the right rather than wrapping onto the scanned line below.
-    let natural = if block.invisible {
+    // A visual row grows even when it contains several source/font runs. Multi-row
+    // paragraphs retain their container width; an explicit width always wins.
+    let natural = if block.invisible || block.rows.len() == 1 {
         (p.crop(doc)[2] - 36.0 - (block.rect[0] + dx)).max(block.rect[2] - block.rect[0])
     } else {
         block.rect[2] - block.rect[0]
@@ -343,6 +392,7 @@ pub(super) fn rewrite_styled_block(
     let mut substituted = None;
     let mut fallback_names: std::collections::BTreeMap<(String, char), String> = std::collections::BTreeMap::new();
     let mut full_faces: HashMap<String, String> = HashMap::new();
+    let mut programs: HashMap<String, Option<std::sync::Arc<Vec<u8>>>> = HashMap::new();
     for (range, index) in styled_spans {
         let source = lines.get(index).unwrap_or(first);
         for ch in draft.get(range).unwrap_or_default().chars() {
@@ -374,6 +424,28 @@ pub(super) fn rewrite_styled_block(
                         .get(name.as_bytes())
                         .and_then(|f| doc.dict(f))
                         .ok_or_else(|| EditError::Invalid("the full source font could not be loaded".into()))?;
+                    metrics.insert(name.clone(), Metrics::from_dict(doc, &font));
+                    full_faces.insert(key, name.clone());
+                    name
+                }
+            } else if let Some(bytes) = programs
+                .entry(source.font.clone())
+                .or_insert_with(|| source_program(doc, &fonts, &source.font).map(std::sync::Arc::new))
+                .clone()
+                .filter(|bytes| pdfcraft_fonts::embedding::covers(bytes, &s))
+            {
+                // The document's own complete program of this font has the glyph: draw it with
+                // that face rather than another family's fallback.
+                let key = format!("source {}", source.font);
+                if let Some(name) = full_faces.get(&key) {
+                    name.clone()
+                } else {
+                    let family = pdfcraft_fonts::embedding::names(&bytes).map_or_else(|_| source.base_font.clone(), |(family, _)| family);
+                    let name = pdfcraft_fonts::embedding::embed(doc, &mut fonts, &bytes, &family).map_err(EditError::Invalid)?;
+                    let font = fonts
+                        .get(name.as_bytes())
+                        .and_then(|f| doc.dict(f))
+                        .ok_or_else(|| EditError::Invalid("the source font could not be loaded".into()))?;
                     metrics.insert(name.clone(), Metrics::from_dict(doc, &font));
                     full_faces.insert(key, name.clone());
                     name
@@ -488,6 +560,9 @@ pub(super) fn rewrite_styled_block(
         Ok(width)
     };
     let mut rows: Vec<Vec<(char, usize, String)>> = Vec::new();
+    // Each row's characters, as indexes into the draft's characters (`chars` holds all of them).
+    let mut row_ranges = Vec::new();
+    let mut row_start = 0;
     let mut row = Vec::new();
     let mut row_width = 0.0;
     // Wrap at word boundaries, retaining explicit source row breaks and whitespace.
@@ -495,14 +570,20 @@ pub(super) fn rewrite_styled_block(
     while at < chars.len() {
         let Some(item) = chars.get(at) else { break };
         if item.0 == '\n' {
+            row_ranges.push(row_start..row_start + row.len());
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
             at += 1;
+            row_start = at;
             continue;
         }
         let mut end = at + 1;
         if !item.0.is_whitespace() {
-            while chars.get(end).is_some_and(|c| !c.0.is_whitespace()) {
+            // A word ends at a space, or where Chinese or Japanese text may break between characters.
+            while let (Some(before), Some(c)) = (chars.get(end - 1), chars.get(end))
+                && !c.0.is_whitespace()
+                && !crate::linebreak::between(before.0, c.0)
+            {
                 end += 1;
             }
         }
@@ -512,17 +593,47 @@ pub(super) fn rewrite_styled_block(
             while row.last().is_some_and(|c: &(char, usize, String)| c.0.is_whitespace()) {
                 row.pop();
             }
+            row_ranges.push(row_start..row_start + row.len());
             rows.push(std::mem::take(&mut row));
             row_width = 0.0;
+            row_start = at;
         }
         row.extend_from_slice(word);
         row_width += w;
         at = end;
     }
     if !row.is_empty() {
+        row_ranges.push(row_start..row_start + row.len());
         rows.push(row);
     }
-    for row in &rows {
+    let streams = content_streams(doc, &p.dict);
+    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    // A row the edit doesn't reach keeps its source operators, so its kerning, TJ word gaps and
+    // glyph widths stay exactly as they were instead of being rebuilt from the text state.
+    let plain = BlockStyle { ranges: Vec::new(), ..style.clone() } == BlockStyle::default();
+    let mut kept = if plain {
+        untouched_rows(block, draft, &row_ranges).into_iter().zip(&rows).map(|(same, row)| same && row.iter().all(|c| c.1 < source_count)).collect()
+    } else {
+        vec![false; rows.len()]
+    };
+    let kept_lines: std::collections::HashSet<usize> =
+        kept.iter().enumerate().filter(|(_, k)| **k).filter_map(|(r, _)| block.rows.get(r)).flatten().copied().collect();
+    let rewritten: Vec<&TextLine> = block.lines.iter().filter(|i| !kept_lines.contains(i)).filter_map(|i| lines.get(*i)).collect();
+    // The rewrite goes where the first rewritten row was drawn, so it must share the paragraph's
+    // space. A dropped `'` or `"` also moved to the next line, which a kept row relies on.
+    let lead = rewritten.first().copied().filter(|lead| {
+        lead.origin.ctm.iter().zip(first.origin.ctm).all(|(a, b)| (a - b).abs() < 1e-9)
+            && !rewritten.iter().flat_map(|l| &l.ops).any(|i| ops.get(*i).is_some_and(|op| op.is("'") || op.is("\"")))
+    });
+    let (members, lead) = match lead {
+        Some(lead) if !kept_lines.is_empty() => (rewritten, lead),
+        _ => {
+            kept.iter_mut().for_each(|k| *k = false);
+            (block.lines.iter().filter_map(|i| lines.get(*i)).collect(), first)
+        }
+    };
+    for (row, _) in rows.iter().zip(&kept).filter(|(_, k)| !**k) {
         let text: String = row.iter().map(|v| v.0).collect();
         if pdfcraft_fonts::source_shaping::required(&text) && row.first().is_some_and(|first| row.iter().any(|v| v.1 != first.1 || v.2 != first.2)) {
             return Err(EditError::Invalid(
@@ -534,7 +645,7 @@ pub(super) fn rewrite_styled_block(
     let measured: Vec<_> = rows.iter().map(|r| measure(r)).collect::<Result<_, _>>()?;
     let mut shaped_runs = HashMap::new();
     let mut segment_advances = HashMap::new();
-    for (row_index, row) in rows.iter().enumerate() {
+    for (row_index, row) in rows.iter().enumerate().filter(|(r, _)| !kept.get(*r).copied().unwrap_or(false)) {
         let mut at = 0;
         while let Some(item) = row.get(at) {
             let mut end = at + 1;
@@ -589,6 +700,11 @@ pub(super) fn rewrite_styled_block(
             baseline = anchor.origin.baseline;
         }
         let anchor = anchor.unwrap_or(first);
+        if kept.get(row_index).copied().unwrap_or(false) {
+            // Kept rows only occur without spacing or size changes, so this is the step below.
+            baseline -= source_leading;
+            continue;
+        }
         let w = measured.get(row_index).copied().unwrap_or(0.0);
         let align = style.align.unwrap_or(if centered { crate::added::Align::Center } else { crate::added::Align::Left });
         let original_rect = block.rows.get(row_index).and_then(|row| row_rect(row, lines)).unwrap_or(block.rect);
@@ -692,14 +808,10 @@ pub(super) fn rewrite_styled_block(
         };
     }
     block_ops.push(Op::new("Q", vec![]));
-    let streams = content_streams(doc, &p.dict);
-    let pieces = Pieces::join(&streams.iter().map(|(_, d)| d.as_slice()).collect::<Vec<_>>());
-    let ops = pieces.parse().ops;
-    let members: Vec<_> = block.lines.iter().filter_map(|i| lines.get(*i)).collect();
     let mut drop = coincident_ops(lines, &members);
     drop.extend(members.iter().flat_map(|l| l.ops.iter().copied()));
-    let o = &first.origin;
-    let start = first.ops.first().copied().unwrap_or(o.bt_op);
+    let o = &lead.origin;
+    let start = lead.ops.first().copied().unwrap_or(o.bt_op);
     let split = ops
         .get(o.bt_op..start)
         .unwrap_or_default()

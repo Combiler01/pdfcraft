@@ -643,3 +643,103 @@ fn paper_matching_accepts_rounded_metric_sizes_but_not_custom_or_invalid_sizes()
         assert_eq!(matching_paper(size), None);
     }
 }
+
+#[test]
+fn label_is_cut_turned_upright_and_fitted_without_distortion() {
+    let label = LABEL_PAPER;
+    assert_eq!(PAPERS[label].0, "4 x 6 in label (101.6 x 152.4 mm)");
+    assert_eq!(PAPERS[label].1, (288.0, 432.0));
+    assert_eq!(cups_media(label), Some("w288h432"));
+    // A sideways label in the lower half of an A4 sheet, text running bottom-to-top.
+    let rect = [40.0, 30.0, 560.0, 420.0];
+    for (text_up, flip, want_text_dir) in [(true, false, (1.0, 0.0)), (false, false, (1.0, 0.0)), (true, true, (-1.0, 0.0))] {
+        // Text direction on the page: up when text_up, down otherwise.
+        let page_dir = if text_up { (0.0, 1.0) } else { (0.0, -1.0) };
+        let s = Settings {
+            pages: vec![0],
+            paper: PAPERS[label].1,
+            layout: Layout::Label { flip },
+            crops: vec![Some(Crop { rect, text_up })],
+            ..Settings::default()
+        };
+        let sheets = layout(&[(595.0, 842.0)], &s).unwrap();
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(sheets[0].size, (288.0, 432.0));
+        let pl = sheets[0].placed[0];
+        assert_eq!(pl.clip, rect);
+        let [a, b, c, d, _, _] = pl.matrix.0;
+        // A pure quarter turn with one scale: no stretching.
+        assert!((a.hypot(b) - c.hypot(d)).abs() < 1e-9 && (a * c + b * d).abs() < 1e-9);
+        let dir = (a * page_dir.0 + c * page_dir.1, b * page_dir.0 + d * page_dir.1);
+        let n = dir.0.hypot(dir.1);
+        assert!((dir.0 / n - want_text_dir.0).abs() < 1e-9 && (dir.1 / n - want_text_dir.1).abs() < 1e-9, "text_up={text_up} flip={flip}");
+        let corners = [(rect[0], rect[1]), (rect[2], rect[1]), (rect[2], rect[3]), (rect[0], rect[3])].map(|(x, y)| pl.matrix.apply(x, y));
+        let (x0, x1) = corners.iter().fold((f64::MAX, f64::MIN), |m, p| (m.0.min(p.0), m.1.max(p.0)));
+        let (y0, y1) = corners.iter().fold((f64::MAX, f64::MIN), |m, p| (m.0.min(p.1), m.1.max(p.1)));
+        assert!(x0 >= LABEL_MARGIN - 1e-6 && x1 <= 288.0 - LABEL_MARGIN + 1e-6 && y0 >= LABEL_MARGIN - 1e-6 && y1 <= 432.0 - LABEL_MARGIN + 1e-6);
+        // Fills the label's width (the crop's height, 390 pt, becomes it).
+        assert!((x1 - x0 - (288.0 - 2.0 * LABEL_MARGIN)).abs() < 1e-6);
+    }
+    // No crop: the whole page, upright.
+    let whole =
+        layout(&[(200.0, 300.0)], &Settings { pages: vec![0], paper: (288.0, 432.0), layout: Layout::Label { flip: false }, ..Settings::default() })
+            .unwrap();
+    assert_eq!(whole[0].placed[0].clip, [0.0, 0.0, 200.0, 300.0]);
+    assert_eq!(whole[0].placed[0].matrix.0[1], 0.0);
+}
+
+#[test]
+fn text_direction_is_read_from_text_and_form_matrices() {
+    let doc = fixture(1);
+    assert!(!text_reads_up(&doc, 0), "upright text");
+    assert!(!text_reads_up(&doc, 9), "no such page");
+}
+
+#[test]
+fn imposed_pages_preserve_large_user_unit_matrices() {
+    let (unit, mode) = (75000.0, SizeMode::Fit);
+    let mut doc = fixture(1);
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    doc.update_dict(page, |d| d.set(b"UserUnit".to_vec(), Object::Real(unit))).unwrap();
+    let out = impose(&doc, &Settings { content: Content::Document, ..settings(vec![0], Layout::Size(mode)) }).unwrap();
+    let printed = Document::open(Arc::new(out)).unwrap();
+    let page = &pdfcraft_model::pages(&printed)[0];
+    let contents = printed.resolve(page.dict.get(b"Contents").unwrap());
+    let Object::Stream(stream) = &*contents else { panic!("sheet content") };
+    let bytes = stream.decoded().unwrap();
+    let parsed = pdfcraft_content::parse(&bytes);
+    assert_eq!(parsed.skipped, 0);
+    let cms: Vec<_> = parsed.ops.iter().filter(|op| op.is("cm")).collect();
+    assert_eq!(cms.len(), 2, "placement and source-to-display matrices");
+    let normalized = f64::from(unit as f32);
+    let scale = if mode == SizeMode::Actual { 1.0 } else { 756.0 / (300.0 * normalized) };
+    let expected = [
+        [scale, 0.0, 0.0, scale, 306.0 - 100.0 * normalized * scale, 396.0 - 150.0 * normalized * scale],
+        [normalized, 0.0, 0.0, normalized, 0.0, 0.0],
+    ];
+    for (cm, expected) in cms.iter().zip(expected) {
+        assert_eq!(cm.operands.len(), 6);
+        assert!(!bytes[cm.span.clone()].contains(&b'e') && !bytes[cm.span.clone()].contains(&b'E'));
+        for (actual, expected) in cm.nums::<6>().unwrap().into_iter().zip(expected) {
+            assert!((actual - expected).abs() <= 1e-12 * expected.abs(), "unit={unit}: {actual} != {expected}");
+        }
+    }
+    let clip = parsed.ops.iter().find(|op| op.is("re")).unwrap();
+    assert_eq!(clip.operands.len(), 4);
+    let rect = clip.nums::<4>().unwrap();
+    assert_eq!(rect, [0.0, 0.0, 200.0 * normalized, 300.0 * normalized]);
+    assert!(rect[2] > 0.0 && rect[3] > 0.0, "the clip must retain the visible page");
+    let clip_tokens = std::str::from_utf8(&bytes[clip.span.clone()]).unwrap();
+    assert!(clip_tokens.split_whitespace().take(4).all(|token| !token.contains('e') && !token.contains('E')));
+    let apply = |m: [f64; 6], p: [f64; 2]| [m[0] * p[0] + m[2] * p[1] + m[4], m[1] * p[0] + m[3] * p[1] + m[5]];
+    let to_sheet = |p| apply(cms[0].nums::<6>().unwrap(), apply(cms[1].nums::<6>().unwrap(), p));
+    let mut anchors = vec![([100.0, 150.0], [306.0, 396.0])];
+    if mode == SizeMode::Fit {
+        anchors.extend([([0.0, 0.0], [54.0, 18.0]), ([200.0, 300.0], [558.0, 774.0])]);
+    }
+    for (raw, expected) in anchors {
+        for (actual, expected) in to_sheet(raw).into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-9, "unit={unit}: {actual} != {expected}");
+        }
+    }
+}

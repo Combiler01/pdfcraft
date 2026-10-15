@@ -20,7 +20,8 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 - **images**: fully covered → removed; partly covered → a copy with the covered pixels cleared
   (8/16-bit and 1/2/4-bit images, image masks; Flate/LZW/RL/A85/AHx). Codecs PdfCraft can't
   re-encode (DCT, JPX, JBIG2, CCITT) are removed whole (fail-closed); inline images under an
-  area are removed;
+  area are removed. Images with separate `/SMask` or `/Mask` data are removed whole;
+  cleared copies drop `/Alternates` so alternate pixels cannot survive;
 - **vectors**: covered paths are removed; partly covered paths and shadings are clipped so
   nothing paints inside the areas;
 - **form XObjects**: rewritten recursively into new objects (pages sharing the original keep it);
@@ -32,6 +33,13 @@ clear_marks(&mut doc, None)?;                        // remove marks without app
 A verification pass re-reads each redacted page and fails the operation if any glyph or inline
 image is still under an area. Content that can't be decoded makes the operation fail rather than
 leave it unredacted.
+
+Before changing any page, `apply` prepares the redaction appearances with a shared 8 MiB
+budget for their uncompressed PDF content across the selected pages. It bounds repeated-text
+counts and working line buffers before allocating them, and measures and encodes each repeated
+line once. Invalid or excessive appearances return `RedactError::OverlayLimit` without changing
+the document. Reduce the marked area, disable repeated text, or apply fewer pages at a time.
+This limits appearance generation; it is not a limit on the input PDF or the whole process's memory.
 
 Structure cleanup resolves named MCIDs and indirect content references. Form content
 references are updated to the cleaned copy; unchanged sibling descriptions remain.

@@ -21,6 +21,14 @@ pub struct TagInfo {
     pub page: Option<usize>,
 }
 
+/// A marked-content reference directly owned by a structure tag.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TagContentItem {
+    pub page: Option<usize>,
+    pub mcid: i64,
+    pub text: String,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TagProperty {
     Type,
@@ -138,6 +146,58 @@ pub fn tags(doc: &Document) -> Vec<TagInfo> {
             })
         })
         .collect()
+}
+
+/// List marked-content references directly owned by an indirect tag.
+pub fn tag_content(doc: &Document, object: ObjRef) -> Result<Vec<TagContentItem>, TagError> {
+    let Some(element) = alt::elements(doc).into_iter().find(|e| e.object == object) else { return Err(TagError::NotATag(object)) };
+    let pages = pdfcraft_model::pages(doc);
+    let page_index: std::collections::HashMap<ObjRef, usize> = pages.iter().enumerate().map(|(i, p)| (p.obj, i)).collect();
+    let mut marks = Vec::new();
+    if let Some(kids) = element.dict.get(b"K") {
+        direct_marks(doc, kids, element.page, &mut marks);
+    }
+    // Each page's content is parsed once, however many of its MCIDs the tag owns.
+    let mut texts: std::collections::HashMap<usize, std::collections::HashMap<i64, String>> = std::collections::HashMap::new();
+    Ok(marks
+        .into_iter()
+        .map(|(page, mcid)| {
+            let page = page.and_then(|p| page_index.get(&p).copied());
+            let text = page
+                .and_then(|i| {
+                    let page_texts = match texts.entry(i) {
+                        std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(e) => {
+                            e.insert(pages.get(i).map(|p| crate::headings::mcid_texts(doc, &p.dict)).unwrap_or_default())
+                        }
+                    };
+                    page_texts.get(&mcid).cloned()
+                })
+                .unwrap_or_default();
+            TagContentItem { page, mcid, text }
+        })
+        .collect())
+}
+
+fn direct_marks(doc: &Document, item: &Object, page: Option<ObjRef>, out: &mut Vec<(Option<ObjRef>, i64)>) {
+    match item {
+        Object::Int(mcid) => out.push((page, *mcid)),
+        Object::Array(items) => items.iter().for_each(|item| direct_marks(doc, item, page, out)),
+        Object::Dict(dict) if dict.name(b"Type") == Some(b"MCR") => {
+            if let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int) {
+                out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
+            }
+        }
+        Object::Ref(reference) => {
+            if let Some(dict) = doc.get(*reference).as_dict()
+                && dict.name(b"Type") == Some(b"MCR")
+                && let Some(mcid) = dict.get(b"MCID").and_then(Object::as_int)
+            {
+                out.push((dict.get(b"Pg").and_then(Object::as_ref).or(page), mcid));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Change one property of a reachable tag; `None` removes a text property.

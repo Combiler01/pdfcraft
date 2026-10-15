@@ -428,7 +428,8 @@ impl Control {
             let pos = egui::pos2(point("x", x)?, point("y", y)?);
             let which = pointer_button(p, "ui.click")?;
             let button = |pressed| egui::Event::PointerButton { pos, button: which, pressed, modifiers: egui::Modifiers::NONE };
-            let frames = self.inject(vec![vec![egui::Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]]);
+            // Keep hover/layout warmup, then make an instantaneous click even on slow frames.
+            let frames = self.inject(vec![vec![egui::Event::PointerMoved(pos)], vec![button(true), button(false)]]);
             return Ok(Handled::AfterFrames(frames, json!({ "clicked": [x, y] })));
         }
         let s = self.shared.lock().map_err(|_| "control state poisoned")?;
@@ -780,27 +781,113 @@ pub struct Endpoint {
     pub token: String,
 }
 
+/// What a connection may do before it authenticates, so an unauthenticated local client cannot
+/// hold a thread for ever or exhaust them (#1806).
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct Limits {
+    /// How long a connection has to authenticate, counted from its acceptance: an absolute
+    /// deadline, so a client feeding one byte at a time cannot extend it.
+    auth_deadline: std::time::Duration,
+    /// How many connections may wait for authentication at once; further ones are refused.
+    max_unauthenticated: usize,
+    /// How long a write may block on a client that never reads its replies.
+    write_timeout: std::time::Duration,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+const LIMITS: Limits =
+    Limits { auth_deadline: std::time::Duration::from_secs(10), max_unauthenticated: 8, write_timeout: std::time::Duration::from_secs(30) };
+
+/// One of the [`Limits::max_unauthenticated`] places, given back when dropped: when the
+/// connection authenticates, and on every way its thread can end.
+#[cfg(not(target_arch = "wasm32"))]
+struct Slot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Slot {
+    fn take(waiting: &std::sync::Arc<std::sync::atomic::AtomicUsize>, max: usize) -> Option<Self> {
+        use std::sync::atomic::Ordering;
+        let mut n = waiting.load(Ordering::Acquire);
+        loop {
+            if n >= max {
+                return None;
+            }
+            match waiting.compare_exchange_weak(n, n.saturating_add(1), Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return Some(Slot(waiting.clone())),
+                Err(now) => n = now,
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// The reading half of a connection, with the authentication deadline: every read before it
+/// gets the time left as its timeout, and none at all once it has passed.
+#[cfg(not(target_arch = "wasm32"))]
+struct Reading {
+    stream: std::net::TcpStream,
+    until: Option<std::time::Instant>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl std::io::Read for Reading {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if let Some(until) = self.until {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the authentication deadline passed"));
+            }
+            self.stream.set_read_timeout(Some(left))?;
+        }
+        self.stream.read(buf)
+    }
+}
+
 /// Listen on `127.0.0.1` (random port) and forward authenticated requests to `client`.
 ///
 /// Protocol: newline-delimited JSON-RPC 2.0. The first request on a connection must be
 /// `{"method": "auth", "params": {"token": …}}`; anything else closes the connection, and so does
-/// a line longer than [`MAX_AUTH_LINE`] before that.
+/// a line longer than [`MAX_AUTH_LINE`] before that, or [`LIMITS`] passing without it.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
+    serve_with(client, LIMITS)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn serve_with(client: ControlClient, limits: Limits) -> std::io::Result<Endpoint> {
     use std::io::{BufReader, Write};
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = listener.local_addr()?.port();
     let token = random_token()?;
     let expected = token.clone();
+    let waiting = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     std::thread::Builder::new().name("pdfcraft-control".into()).spawn(move || {
         for stream in listener.incoming().flatten() {
+            let _ = stream.set_write_timeout(Some(limits.write_timeout));
+            // Admitted only while fewer than the limit wait to authenticate: refused on the
+            // accepting thread, so a refused connection costs no thread at all.
+            let Some(slot) = Slot::take(&waiting, limits.max_unauthenticated) else {
+                let mut write = stream;
+                let e = rpc_error(Value::Null, -32003, "too many connections waiting to authenticate; try again later");
+                let _ = writeln!(write, "{e}").and_then(|_| write.flush());
+                continue;
+            };
             let client = client.clone();
             let expected = expected.clone();
             let _ = std::thread::Builder::new().name("pdfcraft-control-conn".into()).spawn(move || {
+                // Held until `auth` succeeds; given back however this thread ends.
+                let mut slot = Some(slot);
                 let Ok(read) = stream.try_clone() else { return };
                 let mut write = stream;
                 let mut authed = false;
-                let mut reader = BufReader::new(read);
+                let mut reader = BufReader::new(Reading { stream: read, until: Some(std::time::Instant::now() + limits.auth_deadline) });
                 let mut buf = Vec::new();
                 loop {
                     // Until `auth` succeeds, lines are capped at MAX_AUTH_LINE; afterwards they
@@ -808,6 +895,13 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                     let max = if authed { usize::MAX } else { MAX_AUTH_LINE };
                     match read_line_limited(&mut reader, &mut buf, max) {
                         Ok(LineRead::Line) => {}
+                        // The deadline passed before `auth`: say so and close.
+                        Err(e) if !authed && matches!(e.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) => {
+                            let secs = limits.auth_deadline.as_secs_f64();
+                            let e = rpc_error(Value::Null, -32004, &format!("not authenticated within {secs} s"));
+                            let _ = writeln!(write, "{e}").and_then(|_| write.flush());
+                            break;
+                        }
                         // End of stream or a failed read ends the connection, as before.
                         Ok(LineRead::End) | Err(_) => break,
                         Ok(LineRead::TooLong) => {
@@ -833,6 +927,10 @@ pub fn serve(client: ControlClient) -> std::io::Result<Endpoint> {
                                     method == "auth" && params.get("token").and_then(Value::as_str).is_some_and(|t| constant_time_eq(t, &expected));
                                 authed = ok;
                                 if ok {
+                                    // Authenticated: no deadline from here on, and its place is free.
+                                    reader.get_mut().until = None;
+                                    let _ = reader.get_mut().stream.set_read_timeout(None);
+                                    drop(slot.take());
                                     (json!({ "jsonrpc": "2.0", "id": id, "result": { "ok": true } }), false)
                                 } else {
                                     (rpc_error(id, -32001, "authenticate first: auth {token}"), true)
@@ -985,6 +1083,109 @@ mod transport_tests {
         assert!(closed, "the connection stayed open: {next:?}");
     }
 
+    /// Small limits for the tests below: a 300 ms deadline, two places to wait in.
+    #[cfg(not(target_arch = "wasm32"))]
+    const TEST_LIMITS: super::Limits = super::Limits {
+        auth_deadline: std::time::Duration::from_millis(300),
+        max_unauthenticated: 2,
+        write_timeout: std::time::Duration::from_secs(5),
+    };
+
+    /// The next line the server sends, as JSON, or `None` when it closed the connection instead.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn next_line(r: &mut std::io::BufReader<std::net::TcpStream>) -> Option<serde_json::Value> {
+        use std::io::BufRead;
+        let mut line = String::new();
+        match r.read_line(&mut line) {
+            Ok(0) | Err(_) => None,
+            Ok(_) => Some(serde_json::from_str(&line).unwrap()),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn connect(port: u16) -> std::net::TcpStream {
+        let s = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        s.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        s
+    }
+
+    /// #1806: a connection that never authenticates is closed at the deadline, counted from its
+    /// acceptance, and a client feeding a byte at a time cannot push that deadline back.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn an_unauthenticated_connection_is_closed_at_the_deadline() {
+        use std::io::{BufReader, Write};
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve_with(client, TEST_LIMITS).unwrap();
+        // Idle.
+        let started = std::time::Instant::now();
+        let mut r = BufReader::new(connect(ep.port));
+        let reply = next_line(&mut r).expect("the server says why before closing");
+        assert_eq!(reply["error"]["code"], -32004, "{reply}");
+        let took = started.elapsed();
+        assert!(took >= std::time::Duration::from_millis(250) && took < std::time::Duration::from_secs(3), "{took:?}");
+        assert!(next_line(&mut r).is_none(), "then the connection is closed");
+        // Dripping: a byte every 50 ms for as long as the server keeps the connection.
+        let started = std::time::Instant::now();
+        let s = connect(ep.port);
+        let mut w = s.try_clone().unwrap();
+        let drip = std::thread::spawn(move || {
+            while w.write_all(b"x").is_ok() {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                if started.elapsed() > std::time::Duration::from_secs(3) {
+                    break;
+                }
+            }
+        });
+        let mut r = BufReader::new(s);
+        let reply = next_line(&mut r).expect("the server says why before closing");
+        assert_eq!(reply["error"]["code"], -32004, "{reply}");
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(2), "the deadline is absolute: {took:?}");
+        drop(r);
+        drip.join().unwrap();
+    }
+
+    /// #1806: only so many connections may wait to authenticate at once. One more is refused
+    /// on the spot; once a waiting one authenticates or times out, its place is free again.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn only_so_many_connections_may_wait_to_authenticate() {
+        use std::io::{BufReader, Write};
+        let (_control, client) = super::attach(&egui::Context::default());
+        let ep = super::serve_with(client, TEST_LIMITS).unwrap();
+        let auth = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "auth", "params": { "token": ep.token } });
+        let first = connect(ep.port);
+        let second = connect(ep.port);
+        // The kernel accepts a connection before the listener admits it: give the listener a
+        // moment to admit both, well within their deadline.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // The third finds both places taken.
+        let mut r3 = BufReader::new(connect(ep.port));
+        let reply = next_line(&mut r3).expect("refused with a reason");
+        assert_eq!(reply["error"]["code"], -32003, "{reply}");
+        assert!(next_line(&mut r3).is_none(), "and closed");
+        // The second authenticates: its place is free, so a new connection is admitted.
+        let mut r2 = BufReader::new(second.try_clone().unwrap());
+        let mut w2 = second.try_clone().unwrap();
+        writeln!(w2, "{auth}").unwrap();
+        assert_eq!(next_line(&mut r2).unwrap()["result"]["ok"], true);
+        let fourth = connect(ep.port);
+        let mut r4 = BufReader::new(fourth.try_clone().unwrap());
+        let mut w4 = fourth.try_clone().unwrap();
+        writeln!(w4, "{auth}").unwrap();
+        assert_eq!(next_line(&mut r4).unwrap()["result"]["ok"], true, "admitted and authenticated");
+        // The first was closed at the deadline (its place freed on that way out too): after it,
+        // another connection is admitted even though the first never authenticated.
+        drop(first);
+        std::thread::sleep(TEST_LIMITS.auth_deadline + std::time::Duration::from_millis(100));
+        let fifth = connect(ep.port);
+        let mut r5 = BufReader::new(fifth.try_clone().unwrap());
+        let mut w5 = fifth.try_clone().unwrap();
+        writeln!(w5, "{auth}").unwrap();
+        assert_eq!(next_line(&mut r5).unwrap()["result"]["ok"], true);
+    }
+
     /// After `auth` the limit no longer applies: a long line is read as before (here it isn't
     /// JSON, so it gets a parse error and the connection stays open).
     #[cfg(not(target_arch = "wasm32"))]
@@ -1009,5 +1210,131 @@ mod transport_tests {
         assert_eq!(reply(&mut r)["error"]["code"], -32700, "a long line after auth is parsed, not refused");
         writeln!(w, "y").unwrap();
         assert_eq!(reply(&mut r)["error"]["code"], -32700, "and the connection is still open");
+    }
+}
+
+#[cfg(test)]
+mod pointer_tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn coordinate_clicks_activate_once_with_slow_frames() {
+        struct Probe {
+            control: Option<Control>,
+            client: Option<ControlClient>,
+            host: crate::PdfCraftApp,
+            primary: usize,
+            secondary: usize,
+            disabled: usize,
+            discard: bool,
+            discarded: bool,
+            events: Vec<(f64, egui::PointerButton, bool, egui::Pos2)>,
+        }
+        fn request(h: &mut Harness<'_, Probe>, c: &ControlClient, params: Value) -> Reply {
+            let rx = c.send("ui.click", params);
+            for _ in 0..8 {
+                let before = h.ctx.input(|i| i.time);
+                h.step();
+                assert!(h.ctx.input(|i| i.time) > before, "simulated input time advances");
+                if let Ok(reply) = rx.try_recv() {
+                    return reply;
+                }
+            }
+            panic!("coordinate click did not reply within eight steps");
+        }
+        let max_duration = egui::Context::default().options(|o| o.input_options.max_click_duration);
+        let slow_dt = (max_duration + 0.25) as f32;
+        assert!(f64::from(slow_dt) > max_duration);
+        for discard in [false, true] {
+            let state = Probe {
+                control: None,
+                client: None,
+                host: crate::PdfCraftApp::new(),
+                primary: 0,
+                secondary: 0,
+                disabled: 0,
+                discard,
+                discarded: false,
+                events: Vec::new(),
+            };
+            let mut h = Harness::builder().with_size(egui::vec2(320.0, 200.0)).with_step_dt(slow_dt).build_ui_state(
+                |ui, state: &mut Probe| {
+                    if state.control.is_none() {
+                        let (control, client) = attach(ui.ctx());
+                        state.control = Some(control);
+                        state.client = Some(client);
+                        ui.ctx().options_mut(|o| o.max_passes = if state.discard { 2 } else { 1 }.try_into().unwrap());
+                    }
+                    state.control.as_mut().unwrap().tick(ui.ctx(), &mut state.host);
+                    ui.input(|i| {
+                        for event in &i.events {
+                            if let egui::Event::PointerButton { pos, button, pressed, .. } = event {
+                                assert!(state.events.len() < 32, "bounded pointer trace");
+                                state.events.push((i.time, *button, *pressed, *pos));
+                            }
+                        }
+                    });
+                    let response = ui.button("Click probe");
+                    if response.clicked() {
+                        state.primary += 1;
+                        if state.discard && !state.discarded {
+                            state.discarded = true;
+                            ui.ctx().request_discard("control click must not replay across passes");
+                        }
+                    }
+                    if response.secondary_clicked() {
+                        state.secondary += 1;
+                    }
+                    let disabled = ui.add_enabled(false, egui::Button::new("Disabled probe"));
+                    if disabled.clicked() || disabled.secondary_clicked() {
+                        state.disabled += 1;
+                    }
+                },
+                state,
+            );
+            h.run_steps(3);
+            let c = h.state().client.as_ref().unwrap().clone();
+            assert_eq!(h.ctx.options(|o| o.input_options.max_click_duration), max_duration);
+            let pos = h.get_by_label("Click probe").rect().center();
+            assert_eq!((h.state().primary, h.state().secondary, h.state().disabled), (0, 0, 0));
+            let reply = request(&mut h, &c, json!({"x":pos.x,"y":pos.y})).unwrap();
+            assert_eq!(reply["clicked"], json!([pos.x, pos.y]));
+            println!("slow control click discard={discard} duration_limit={max_duration} step_dt={slow_dt} pointer_events={:?}", h.state().events);
+            let events = &h.state().events;
+            assert_eq!(
+                events.iter().map(|(_, button, pressed, point)| (*button, *pressed, *point)).collect::<Vec<_>>(),
+                [(egui::PointerButton::Primary, true, pos), (egui::PointerButton::Primary, false, pos)]
+            );
+            let elapsed = events[1].0 - events[0].0;
+            assert!(elapsed == 0.0 || elapsed >= f64::from(slow_dt) - 1e-6, "the pair is atomic or crosses a simulated slow frame");
+            assert_eq!(h.state().primary, 1, "a coordinate click activates the real button once on slow frames");
+            h.run_steps(3);
+            assert_eq!(h.state().primary, 1, "later passes must not replay the click");
+            assert_eq!(h.state().discarded, discard);
+            request(&mut h, &c, json!({"x":pos.x,"y":pos.y,"button":"secondary"})).unwrap();
+            assert_eq!((h.state().primary, h.state().secondary), (1, 1));
+            let disabled = h.get_by_label("Disabled probe").rect().center();
+            request(&mut h, &c, json!({"x":disabled.x,"y":disabled.y})).unwrap();
+            assert_eq!((h.state().primary, h.state().secondary, h.state().disabled), (1, 1, 0));
+            let disabled_id = h
+                .state()
+                .control
+                .as_ref()
+                .unwrap()
+                .shared
+                .lock()
+                .unwrap()
+                .nodes
+                .iter()
+                .find(|(_, node)| node.label() == Some("Disabled probe"))
+                .unwrap()
+                .0
+                .0;
+            assert!(request(&mut h, &c, json!({"id":disabled_id})).unwrap_err().contains("disabled"));
+            assert!(h.state().host.views.is_empty(), "pointer probes create no document edits");
+            assert_eq!(h.ctx.options(|o| o.input_options.max_click_duration), max_duration);
+        }
     }
 }

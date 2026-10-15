@@ -58,7 +58,17 @@ fn formatted(pages: &BTreeSet<usize>) -> String {
 }
 
 impl PageSelectionInput {
-    pub(crate) fn show(&mut self, ui: &mut egui::Ui, selected: &BTreeSet<usize>, count: usize) -> Option<Vec<usize>> {
+    /// The field, as Acrobat's Pages selected: typed pages apply on Enter or when the field loses
+    /// focus, and the chevron opens `menu` (pages by kind), whose choice is returned the same way.
+    /// With nothing selected it shows the current page (0-based `current`), which actions apply to.
+    pub(crate) fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        selected: &BTreeSet<usize>,
+        count: usize,
+        current: usize,
+        menu: impl FnOnce(&mut egui::Ui) -> Option<Vec<usize>>,
+    ) -> Option<Vec<usize>> {
         if self.selection != *selected {
             self.selection.clone_from(selected);
             self.text = formatted(selected);
@@ -75,14 +85,28 @@ impl PageSelectionInput {
             self.error = None;
             ui.memory_mut(|m| m.surrender_focus(id));
         }
+        let mut chosen = None;
         ui.horizontal(|ui| {
             let label = tl!("Selected pages");
-            ui.label(label);
-            let field = ui.add(egui::TextEdit::singleline(&mut self.text).id(id).desired_width(300.0).char_limit(16_384).hint_text("1, 12, 16-18"));
+            let width = (ui.available_width() - 32.0).max(40.0);
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.text)
+                    .id(id)
+                    .desired_width(width)
+                    .char_limit(16_384)
+                    .hint_text(current.saturating_add(1).to_string()),
+            );
             field.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), label));
-            let apply = ui.button(tl!("Apply")).clicked();
-            commit = ui.is_enabled() && !cancel && (field.lost_focus() || apply);
+            commit = ui.is_enabled() && !cancel && field.lost_focus();
+            let pick = crate::icons::button(ui, "chevron-down", 26.0, false, tl!("Select pages"));
+            chosen = egui::Popup::menu(&pick).show(menu).and_then(|r| r.inner);
         });
+        if let Some(pages) = chosen {
+            self.selection = pages.iter().copied().collect();
+            self.text = formatted(&self.selection);
+            self.error = None;
+            return Some(pages);
+        }
         if cancel {
             self.text = formatted(selected);
             self.error = None;

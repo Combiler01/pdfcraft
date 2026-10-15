@@ -64,6 +64,62 @@ pub fn staging_suffixes() -> impl Iterator<Item = u64> {
     (0u64..).map(move |i| state.hash_one(i))
 }
 
+/// Write `bytes` to `path` through a staging file beside it (see [`create_staging`]; `form`
+/// names it as the caller always has), flushed to the disk and then renamed over the target: a
+/// crash, a full disk or a refused flush never leaves a half-written file where a good one was,
+/// and the target is untouched until the new file is complete. The target's folder must exist;
+/// a folder at the target is refused by the rename. Flushing is the staging file's own
+/// (`sync_all`); parent-directory durability after a power loss is not promised.
+pub fn write_atomically(path: &Path, bytes: &[u8], form: StagingName) -> std::io::Result<()> {
+    write_atomically_with(path, bytes, form, staging_suffixes(), std::fs::File::sync_all)
+}
+
+/// [`write_atomically`] with the staging-name suffixes and the flush given, so tests can plant
+/// names and refuse flushes. A failure at any step removes the staging file and leaves the
+/// target as it was.
+pub fn write_atomically_with(
+    path: &Path,
+    bytes: &[u8],
+    form: StagingName,
+    suffixes: impl IntoIterator<Item = u64>,
+    sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("save");
+    let (tmp, file) = create_staging(dir, name, form, suffixes)?;
+    let result = (|| {
+        // Closed at the end of the block, before the rename (required on Windows).
+        {
+            let mut file = file;
+            file.write_all(bytes)?;
+            sync_staged(&file, sync_all)?;
+        }
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+/// Flush the staging file to the disk before it replaces the target. On macOS `sync_all` asks
+/// for a full flush (`F_FULLFSYNC`), which SMB and FUSE volumes, such as a mounted Cryptomator
+/// vault, refuse as unsupported: there a plain `fsync` is the strongest flush the volume offers.
+/// Any other failure still fails the write.
+fn sync_staged(f: &std::fs::File, sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use rustix::io::Errno;
+        match sync_all(f) {
+            Err(e) if matches!(Errno::from_io_error(&e), Some(Errno::NOTSUP | Errno::NOTTY)) => Ok(rustix::fs::fsync(f)?),
+            other => other,
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    sync_all(f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +180,39 @@ mod tests {
         }
         assert!(create_staging(&dir, "out.pdf", StagingName::SuffixThenTag, 1..).is_err());
         assert!(!name(STAGING_ATTEMPTS as u64 + 1).exists(), "a 17th name was tried");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `write_atomically`: the target holds the new bytes only once they are complete; a refused
+    /// flush leaves the old file and removes the staging file; a missing folder writes nothing.
+    #[test]
+    fn an_atomic_write_replaces_the_target_only_when_complete() {
+        let dir = test_dir("write");
+        let target = dir.join("out.pdf");
+        std::fs::write(&target, b"OLD").unwrap();
+        let names = |dir: &Path| {
+            let mut v: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| file_name(&e.unwrap().path())).collect();
+            v.sort();
+            v
+        };
+        // The staging file is written and flushed before the target changes.
+        let mut seen_old = false;
+        write_atomically_with(&target, b"NEW", StagingName::SuffixThenTag, [7], |f| {
+            seen_old = std::fs::read(&target).unwrap() == b"OLD" && f.metadata().unwrap().len() == 3;
+            Ok(())
+        })
+        .unwrap();
+        assert!(seen_old, "flushed before publication, with the target still the old file");
+        assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+        assert_eq!(names(&dir), ["out.pdf"], "no staging file is left");
+        // A refused flush keeps the target and cleans up.
+        let e = write_atomically_with(&target, b"NEWER", StagingName::TagThenSuffix, [8], |_| Err(std::io::Error::other("refused"))).unwrap_err();
+        assert!(e.to_string().contains("refused"));
+        assert_eq!(std::fs::read(&target).unwrap(), b"NEW");
+        assert_eq!(names(&dir), ["out.pdf"]);
+        // A folder that does not exist: nothing is written anywhere.
+        assert!(write_atomically(&dir.join("missing").join("out.pdf"), b"X", StagingName::SuffixThenTag).is_err());
+        assert_eq!(names(&dir), ["out.pdf"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -744,6 +744,137 @@ fn damaged_masks_and_sizes_never_panic() {
     }
 }
 
+#[test]
+fn indexed_image_export_clamps_samples_to_hival() {
+    for palette in [vec![255, 0, 0, 0, 0, 255], vec![255, 0, 0, 0, 0, 255, 0, 255, 0, 255, 255, 255]] {
+        let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+        let page = pdfcraft_model::pages(&doc)[0].clone();
+        let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+        let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+        let image = xo.iter().next().unwrap().1.as_ref().unwrap();
+        let mut dict = Dict::new();
+        dict.set(b"Type".to_vec(), Object::name("XObject"));
+        dict.set(b"Subtype".to_vec(), Object::name("Image"));
+        dict.set(b"Width".to_vec(), Object::Int(4));
+        dict.set(b"Height".to_vec(), Object::Int(1));
+        dict.set(b"BitsPerComponent".to_vec(), Object::Int(2));
+        dict.set(
+            b"ColorSpace".to_vec(),
+            Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), Object::Int(1), Object::String(PdfString::literal(palette))]),
+        );
+        // Default Decode preserves sample values0,1,2,3. Values2 and3 clamp to hival1.
+        doc.set(image, Object::Stream(Stream::from_raw(dict, vec![0b0001_1011])));
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.skipped.is_empty(), "{:?}", out.skipped);
+        assert_eq!(out.images.len(), 1);
+        assert_eq!(exported_png_pixels(&out.images[0].data), vec![255, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255]);
+    }
+}
+
+fn exported_png_pixels(bytes: &[u8]) -> Vec<u8> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    let mut reader = decoder.read_info().unwrap();
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut pixels).unwrap();
+    pixels.truncate(info.buffer_size());
+    pixels
+}
+
+fn indexed_export_fixture(
+    hival: Object,
+    palette: Vec<u8>,
+    stream_table: bool,
+    indirect_hival: bool,
+    bpc: i64,
+    samples: Vec<u8>,
+) -> (Document, pdfcraft_cos::ObjRef) {
+    let mut doc = from_images(&[("flat.png".into(), png_bytes(false))]).unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let res = doc.resolve(page.dict.get(b"Resources").unwrap()).as_dict().cloned().unwrap();
+    let xo = doc.resolve(res.get(b"XObject").unwrap()).as_dict().cloned().unwrap();
+    let image = xo.iter().next().unwrap().1.as_ref().unwrap();
+    let table = if stream_table {
+        Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &palette))))
+    } else {
+        Object::String(PdfString::literal(palette))
+    };
+    let hival = if indirect_hival { Object::Ref(doc.add(hival)) } else { hival };
+    let mut dict = Dict::new();
+    dict.set(b"Type".to_vec(), Object::name("XObject"));
+    dict.set(b"Subtype".to_vec(), Object::name("Image"));
+    dict.set(b"Width".to_vec(), Object::Int(4));
+    dict.set(b"Height".to_vec(), Object::Int(1));
+    dict.set(b"BitsPerComponent".to_vec(), Object::Int(bpc));
+    dict.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB"), hival, table]));
+    doc.set(image, Object::Stream(Stream::from_raw(dict, samples)));
+    (doc, image)
+}
+
+#[test]
+fn indexed_hival_resolves_indirect_values_and_stream_palettes() {
+    for (bpc, samples) in [(2, vec![0x1b]), (4, vec![0x01, 0x23]), (8, vec![0, 1, 2, 255])] {
+        let (doc, image) = indexed_export_fixture(Object::Int(1), vec![255, 0, 0, 0, 0, 255], true, true, bpc, samples);
+        let (ext, bytes) = crate::extract::image_file(&doc, image).unwrap();
+        assert_eq!(ext, "png");
+        assert_eq!(exported_png_pixels(&bytes), vec![255, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255]);
+    }
+}
+
+#[test]
+fn indexed_hival_boundary_values_keep_valid_palette_entries() {
+    let palette: Vec<u8> = (0..=255u8).flat_map(|i| [i, 255 - i, 17]).collect();
+    for high in [0, 255] {
+        let (doc, image) = indexed_export_fixture(Object::Int(high), palette.clone(), false, false, 8, vec![0, 1, 254, 255]);
+        let (_, bytes) = crate::extract::image_file(&doc, image).unwrap();
+        let expected: Vec<u8> = [0u8, 1, 254, 255]
+            .into_iter()
+            .flat_map(|i| {
+                let i = i.min(high as u8);
+                [i, 255 - i, 17]
+            })
+            .collect();
+        assert_eq!(exported_png_pixels(&bytes), expected);
+    }
+}
+
+#[test]
+fn indexed_hival_rejects_invalid_values_without_panicking() {
+    for high in [Object::Int(-1), Object::Int(256), Object::Real(1.0), Object::Null, Object::name("bad")] {
+        let (doc, image) = indexed_export_fixture(high, vec![255, 0, 0], false, false, 8, vec![0; 4]);
+        assert!(crate::extract::image_file(&doc, image).unwrap_err().contains("invalid hival"));
+        let out = extract_images(&doc, &[0], 0);
+        assert!(out.images.is_empty());
+        assert_eq!(out.skipped.len(), 1);
+        assert!(out.skipped[0].2.contains("invalid hival"));
+    }
+}
+
+#[test]
+fn indexed_hival_clamping_preserves_raw_colour_key_mask_samples() {
+    let (mut doc, image) = indexed_export_fixture(Object::Int(1), vec![255, 0, 0, 0, 0, 255], false, false, 2, vec![0x1b]);
+    let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!("image stream") };
+    stream.dict.set(b"Mask".to_vec(), Object::Array(vec![Object::Int(2), Object::Int(2)]));
+    doc.set(image, Object::Stream(stream));
+    let (_, bytes) = crate::extract::image_file(&doc, image).unwrap();
+    assert_eq!(exported_png_pixels(&bytes), vec![255, 0, 0, 255, 0, 0, 255, 255, 0, 0, 255, 0, 0, 0, 255, 255]);
+}
+
+#[test]
+fn indexed_hival_missing_element_returns_export_error() {
+    let (mut doc, image) = indexed_export_fixture(Object::Int(1), vec![255, 0, 0], false, false, 8, vec![0; 4]);
+    let Object::Stream(mut stream) = (*doc.get(image)).clone() else { panic!("image stream") };
+    stream.dict.set(b"ColorSpace".to_vec(), Object::Array(vec![Object::name("Indexed"), Object::name("DeviceRGB")]));
+    doc.set(image, Object::Stream(stream));
+    assert!(crate::extract::image_file(&doc, image).unwrap_err().contains("invalid hival"));
+}
+
+#[test]
+fn indexed_hival_keeps_existing_short_palette_fallback() {
+    let (doc, image) = indexed_export_fixture(Object::Int(1), vec![255, 0, 0], false, false, 2, vec![0x1b]);
+    let (_, bytes) = crate::extract::image_file(&doc, image).unwrap();
+    assert_eq!(exported_png_pixels(&bytes), vec![255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+}
+
 /// An 8×8 baseline JPEG of one flat colour with four components, stored as `samples`, and an
 /// Adobe APP14 segment with `transform` (0: CMYK, 2: YCCK).
 fn flat_four_component_jpeg(samples: [u8; 4], transform: u8) -> Vec<u8> {

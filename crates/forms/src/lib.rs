@@ -103,6 +103,8 @@ pub struct Widget {
     pub hidden: bool,
     /// `/MK /R` as 0, 90, 180 or 270 degrees counterclockwise. Anything else is stored as 0.
     pub rotation: i64,
+    /// List boxes: where the options are drawn, so a click can pick the one under the pointer.
+    pub list: Option<appearance::ListRows>,
 }
 
 /// A terminal form field.
@@ -800,6 +802,7 @@ fn walk(
                 locked: annot_flags & 128 != 0,
                 hidden: annot_flags & (2 | 32) != 0,
                 rotation: appearance::mk_rotation(doc, wd),
+                list: (kind == FieldKind::List).then(|| appearance::list_rows_of(doc, inh.da.as_deref().unwrap_or("/Helv 0 Tf 0 g"), Some(d), wd)),
             })
         })
         .collect();
@@ -854,8 +857,49 @@ pub fn set_value_with(doc: &mut Document, name: &str, value: &FieldValue, script
         return Err(FormError::ReadOnly(name.into()));
     }
     write_value(doc, f, value, scripts)?;
+    // Fields with the same fully qualified name are one field (§12.7.3.1). Writers that repeat a
+    // name as separate field dictionaries, instead of widgets under one parent, get the value
+    // the first one took after its scripts, without running them again.
+    let twins: Vec<&Field> = all.iter().filter(|t| t.name == name && t.obj != f.obj && t.kind == f.kind).collect();
+    if !twins.is_empty() {
+        let taken = fields(doc).into_iter().find(|x| x.obj == f.obj).map(|x| x.value).unwrap_or_default();
+        for t in twins {
+            share_value(doc, f.obj, t, &taken, scripts)?;
+        }
+    }
     recalculate_with(doc, scripts)?;
     Ok(())
+}
+
+/// Give `twin` the value `source` holds: its `/V` (and a choice's `/I`), drawn in the twin's own
+/// widgets.
+fn share_value(doc: &mut Document, source: ObjRef, twin: &Field, value: &[String], scripts: &mut dyn Scripts) -> Result<(), FormError> {
+    match twin.kind {
+        FieldKind::CheckBox => {
+            let state = twin.widgets.iter().find_map(|w| w.on_state.clone()).unwrap_or_else(|| "Yes".into());
+            set_states(doc, twin, (!value.is_empty()).then_some(state.as_str()))
+        }
+        FieldKind::Radio => {
+            let choice = value.first().filter(|c| twin.widgets.iter().any(|w| w.on_state.as_deref() == Some(c.as_str())));
+            set_states(doc, twin, choice.map(String::as_str))
+        }
+        FieldKind::Text | FieldKind::Combo | FieldKind::List => {
+            let src = doc.get(source).as_dict().cloned().unwrap_or_default();
+            doc.update_dict(twin.obj, |d| {
+                for key in [&b"V"[..], b"I"] {
+                    match src.get(key) {
+                        Some(v) => d.set(key.to_vec(), v.clone()),
+                        None => {
+                            d.remove(key);
+                        }
+                    }
+                }
+                d.remove(b"RV");
+            })?;
+            redraw(doc, twin, value, scripts)
+        }
+        FieldKind::PushButton | FieldKind::Signature => Ok(()),
+    }
 }
 
 /// Run every field's Calculate script in the form's calculation order (`/CO`, then the other
@@ -1007,8 +1051,21 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                     }
                 }
             }
-            let indices: Vec<Object> =
+            let mut indices: Vec<Object> =
                 exports.iter().filter_map(|e| f.options.iter().position(|(x, _)| x == e)).map(|i| Object::Int(i as i64)).collect();
+            // /I lists option indices in ascending order; /V keeps the caller's value order.
+            // Every entry above is an integer, so this sorts by its numeric option index.
+            indices.sort_unstable_by_key(Object::as_int);
+            // A list box scrolls (`/TI`) so the picked options are among the rows it draws, as
+            // in other viewers: a pick below the last visible row would otherwise not show (#1524).
+            let top = match (f.kind, f.widgets.first()) {
+                (FieldKind::List, Some(w)) => w.list.map(|rows| {
+                    let height = if matches!(w.rotation, 90 | 270) { w.rect[2] - w.rect[0] } else { w.rect[3] - w.rect[1] };
+                    let picked: Vec<usize> = indices.iter().filter_map(|i| i.as_int()).filter_map(|i| usize::try_from(i).ok()).collect();
+                    (rows.top, appearance::ListRows::top_showing(rows.top, &picked, rows.visible(height), f.options.len()))
+                }),
+                _ => None,
+            };
             doc.update_dict(f.obj, |d| {
                 match exports.as_slice() {
                     [] => {
@@ -1022,7 +1079,22 @@ fn write_value(doc: &mut Document, f: &Field, value: &FieldValue, scripts: &mut 
                 } else {
                     d.set(b"I".to_vec(), Object::Array(indices));
                 }
+                if let Some((old, new)) = top
+                    && old != new
+                {
+                    d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0)));
+                }
             })?;
+            // A widget with its own `/TI` (read before the field's) scrolls too.
+            if let Some((old, new)) = top
+                && old != new
+            {
+                for w in f.widgets.iter().filter(|w| w.obj != f.obj) {
+                    if doc.get(w.obj).as_dict().is_some_and(|d| d.contains(b"TI")) {
+                        doc.update_dict(w.obj, |d| d.set(b"TI".to_vec(), Object::Int(i64::try_from(new).unwrap_or(0))))?;
+                    }
+                }
+            }
             redraw(doc, f, &exports, scripts)
         }
         (FieldKind::PushButton, _) => invalid(format!("{:?} is a button; it has no value", f.name)),

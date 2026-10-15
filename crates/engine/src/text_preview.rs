@@ -33,6 +33,20 @@ impl TextEditPreview {
 }
 
 impl Document {
+    /// Background for retyping an added text item, without changing its saved content.
+    pub fn added_text_preview(&self, page: usize, index: usize) -> Result<TextEditPreview, String> {
+        guard(|| {
+            if !self.added().iter().filter(|a| a.page == page).nth(index).is_some_and(|a| matches!(a.content, crate::AddedContent::Text(_))) {
+                return Err("the selected added item is not text".into());
+            }
+            let editor = self.editor.as_ref().ok_or("the document can't be read")?;
+            let mut cos = editor.cos.clone();
+            pdfcraft_edit::delete_content(&mut cos, page, index).map_err(|e| e.to_string())?;
+            let bytes = Arc::new(pdfcraft_cos::write_incremental(&cos, &pdfcraft_cos::SaveOptions::default()).map_err(|e| e.to_string())?);
+            Ok(TextEditPreview { page, bytes, config: self.config.clone() })
+        })?
+    }
+
     /// Measure a draft without changing bytes, dirty state, or undo history.
     pub fn text_edit_layout(
         &self,

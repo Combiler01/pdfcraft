@@ -41,8 +41,9 @@ fn store(tag: &str) -> RecoveryStore {
     RecoveryStore::new(dir)
 }
 
+/// Snapshot files (the PDF and its sidecar), not the running instances' lock files.
 fn files_in(s: &RecoveryStore) -> usize {
-    std::fs::read_dir(s.dir()).map(|d| d.count()).unwrap_or(0)
+    std::fs::read_dir(s.dir()).map(|d| d.flatten().filter(|e| e.path().extension().and_then(|x| x.to_str()) != Some("lock")).count()).unwrap_or(0)
 }
 
 /// A session that edits a document, autosaves, and then "crashes" (is dropped).
@@ -269,6 +270,7 @@ fn a_failed_metadata_write_keeps_the_completed_snapshot_recoverable() {
         path: Some("original.pdf".into()),
         saved_at: 1,
         encrypted: false,
+        instance: None,
     };
     // A directory at the sidecar path makes its atomic rename fail after the PDF was written.
     std::fs::create_dir_all(s.dir().join("snapshot.json")).unwrap();
@@ -376,4 +378,36 @@ fn control_click_effects_are_visible_when_the_reply_arrives() {
     call(&mut h, "ui.click", serde_json::json!({ "label": "Discard" }));
     assert_eq!(files_in(&s), 0, "discarded by the time the click is answered");
     assert_eq!(call(&mut h, "ui.state", serde_json::json!({}))["dialog"], serde_json::Value::Null);
+}
+
+/// A running instance's autosaves are its own (#2166): a second instance started meanwhile
+/// does not offer them, so it cannot discard them either; once the first is gone, they are
+/// offered. A sidecar naming a lock file outside the folder is a plain leftover. Each instance
+/// is a store of its own here: a clone shares its instance.
+#[test]
+fn a_running_instances_autosaves_are_not_offered_to_a_second_instance() {
+    let s = store("live");
+    let instance = || RecoveryStore::new(s.dir());
+    let mut first = PdfCraftApp::new();
+    first.set_option("language", "en").unwrap();
+    first.enable_recovery(instance());
+    first.open_bytes("work.pdf", None, fixture(2)).unwrap();
+    assert!(first.apply_edit(Edit::DeletePages { pages: vec![0] }));
+    first.autosave_now();
+    assert_eq!(files_in(&s), 2);
+    let second = harness(instance());
+    assert!(second.state().recoverable.is_empty() && second.state().dialog.is_none(), "the first instance is still running");
+    drop(second);
+    drop(first);
+    let third = harness(instance());
+    assert_eq!(third.state().recoverable.len(), 1, "offered once the first instance is gone");
+    assert_eq!(files_in(&s), 2, "listing removes no snapshot");
+    drop(third);
+    let meta =
+        std::fs::read_dir(s.dir()).unwrap().flatten().map(|e| e.path()).find(|p| p.extension().and_then(|x| x.to_str()) == Some("json")).unwrap();
+    let mut json: serde_json::Value = serde_json::from_slice(&std::fs::read(&meta).unwrap()).unwrap();
+    json["instance"] = "../../outside.lock".into();
+    std::fs::write(&meta, json.to_string()).unwrap();
+    let fourth = harness(instance());
+    assert_eq!(fourth.state().recoverable.len(), 1, "a name outside the folder is not looked at, and the snapshot is offered");
 }

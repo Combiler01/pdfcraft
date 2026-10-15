@@ -118,6 +118,12 @@ let form = pdfcraft_xfa::layout_xml(template_xml)?;       // pages of items, for
   allocates is not capped (the same holds for AcroForm JavaScript).
 - **Static XFA forms** (`/NeedsRendering` absent, AcroForm fields present) keep their AcroForm;
   only their data is read and written.
+- **Flattening and converting.** `strip` takes the XFA out of a document: the packets,
+  `/NeedsRendering`, the layout mark, the overrides and the private keys on the fields. The
+  engine calls it after flattening an XFA form's fields (so Adobe's viewers show the baked
+  pages instead of laying the form out again from the template) and for "convert to a static
+  form" (`xfa_to_static`), which keeps the laid-out pages and the fields with their values as
+  an ordinary AcroForm that no viewer lays out again and whose scripts no longer run.
 - **Field kinds.** Choice lists become combo boxes (editable with `textEntry`) or list boxes
   (`open="always"`, multi-select with `open="multiSelect"`), with the shown items and the saved
   values of `<items save="1">` as the options; the data holds saved values, several on

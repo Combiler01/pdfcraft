@@ -60,6 +60,7 @@
 	Auto follows the system's text size. Pages always render at the display's full resolution.	Автоматично следва размера на текста в системата. Страниците винаги се изобразяват с пълната разделителна способност на екрана.
 	Identity	Самоличност
 	Name on new comments	Име в новите коментари
+	Hide hover previews for highlights without comment text	Скриване на прегледите при посочване за маркирания без текст на коментар
 	Open…	Отвори…
 	Open Recent	Последно отваряни
 	Pin folder to Home…	Закачи папка в Начало…
@@ -257,6 +258,7 @@
 	Remove unused objects and merge identical ones	Премахни неизползваните обекти и обедини еднаквите
 	Audit space usage…	Анализ на използваното място…
 	Space Audit	Анализ на мястото
+	What takes up the space in this file, by kind of content.	Какво заема мястото в този файл, по вид съдържание.
 	Bytes	Байтове
 	Content Streams	Потоци на съдържанието
 	X Object Forms	Форми X Object
@@ -530,6 +532,12 @@
 	Windows store  ·  	Хранилище на Windows  ·  
 	Issued by: 	Издаден от: 
 	, Expires: 	, валиден до: 
+	Digitally signed by	Цифрово подписано от
+	DN: 	DN: 
+	Reason: 	Причина: 
+	Location: 	Местоположение: 
+	Date: 	Дата: 
+	The labels are in English: the signature's font can't draw them in this language.	Етикетите са на английски: шрифтът на подписа не може да ги изобрази на този език.
 	No digital IDs yet.	Все още няма цифрови идентификатори.
 	Configure New Digital ID	Конфигурирай нов цифров идентификатор
 	Remove "{name}" from this list? The file itself is not deleted.	Да се премахне ли „{name}“ от този списък? Самият файл няма да бъде изтрит.
@@ -828,6 +836,7 @@
 	Redaction code:	Код за заличаване:
 	Font:	Шрифт:
 	Font size:	Размер на шрифта:
+	Font size	Размер на шрифта
 	Auto-size text to fit redaction region	Автоматично оразмеряване на текста според областта на заличаване
 	Font colour:	Цвят на шрифта:
 	Repeat overlay text	Повтаряй текста върху заличаването
@@ -973,6 +982,7 @@
 	Replace	Замени
 	Split	Раздели
 	Set page boxes	Задай полета на страницата
+	Set page transitions	Задаване на преходи между страници
 	Page labels	Етикети на страниците
 	Page transitions	Преходи между страниците
 	Sticky note	Бележка
@@ -1227,6 +1237,7 @@
 	Copy text	Копирай текста
 	Properties…	Свойства…
 	Make Current Properties Default	Направи текущите свойства подразбиращи се
+	Make Properties Default	Направи свойствата подразбиращи се
 	More options	Още опции
 	Sort by	Сортиране по
 	Author	Автор
@@ -1359,6 +1370,9 @@
 	Sort comments by:	Сортирай коментарите по:
 	Create PDF Comment Summary	Създай PDF обобщение на коментарите
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Да се върне ли последната записана версия на „{name}“? Промените след нея няма да могат да бъдат отменени.
+	Save over the changed file?	Да се запише ли върху променения файл?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	„{name}“ беше променен на диска след отварянето или последното записване. Записването сега заменя тази по-нова версия с настоящата.
+	Save anyway	Запис въпреки това
 	Number pages	Номерирай страниците
 	Style	Стил
 	None (prefix only)	Без (само префикс)
@@ -1564,6 +1578,8 @@
 	Sent to {printer}	Изпратено до {printer}
 	Sent to {printer}: {msg}	Изпратено до {printer}: {msg}
 	Looking for printers…	Търсене на принтери…
+	Sending sheet {s} of {n} to {printer}…	Изпращане на лист {s} от {n} до {printer}…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Не са намерени принтери. Проверете дали принтерът е инсталиран и дали услугата за опашка за печат работи, след което отворете „Печат“ отново.
 	Sending to {printer}…	Изпращане до {printer}…
 	Choose a folder for the searchable files	Изберете папка за файловете с възможност за търсене
 	Files are combined from top to bottom. Leave Pages empty to take every page.	Файловете се обединяват отгоре надолу. Оставете „Страници“ празно, за да се вземат всички страници.
@@ -2203,6 +2219,8 @@ key	Space	Интервал
 	Switch to List view to change the pages it takes.	Превключете към изглед списък, за да промените кои страници се вземат.
 	Expand all	Разгъни всички
 	Collapse all	Свий всички
+	Collapse all pages	Свий всички страници
+	Expand all pages	Разгъни всички страници
 	Remove page	Премахни страницата
 	Remove {n} pages	Премахни {n} страници
 
@@ -2223,14 +2241,14 @@ key	Space	Интервал
 	Printer paper and scaling may differ. Check driver settings.	Хартията и мащабът на принтера може да се различават. Проверете настройките на драйвера.
 	Drawing scale changes. Use Actual size for full-scale plans.	Мащабът на чертежа се променя. Използвайте Действителен размер за планове в оригинален мащаб.
 	Reload documents when their files change on disk	Презареждай документите, когато файловете им се променят на диска
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Този файл е променен на диска. Презаредете го, за да видите новата версия; незаписаните ви промени ще бъдат загубени.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Този файл беше променен на диска. „Презареждане“ показва новата версия и отхвърля незаписаните ви промени; „Запис“ я заменя с тази версия.
 	Reload	Презареди
 	Couldn't reload {name}: {e}	Неуспешно презареждане на {name}: {e}
 	Select page {label}	Избиране на страница {label}
 	Rotate page {label} counterclockwise	Завъртане на страница {label} обратно на часовниковата стрелка
 	Rotate page {label} clockwise	Завъртане на страница {label} по часовниковата стрелка
 	Delete page {label}	Изтриване на страница {label}
-	Mouse wheel scroll speed	Скорост на превъртане с колелцето на мишката
+	Scroll speed (mouse wheel and arrow keys)	Скорост на превъртане (колелце на мишката и клавиши със стрелки)
 scroll speed	Slow	Ниска
 scroll speed	Normal	Нормална
 scroll speed	Fast	Висока
@@ -2304,6 +2322,10 @@ animation effects	Off	Изключени
 	The linked PDF opened, but its named destination was not applied.	Свързаният PDF се отвори, но именуваната му цел не беше приложена.
 	The linked PDF opened, but its page destination was out of range.	Свързаният PDF се отвори, но целевата му страница е извън обхвата.
 	Local cross-PDF links require the desktop app	Локалните връзки между PDF файлове изискват настолното приложение
+	Cut Image	Изрежи изображението
+	Redact Image	Заличи изображението
+	Create Link…	Създай връзка…
+	Recognize Text…	Разпознаване на текст…
 	Minimize	Минимизиране
 	Maximize	Максимизиране
 	Restore	Възстановяване
@@ -2313,7 +2335,59 @@ animation effects	Off	Изключени
 # Absolute local GoToR confirmation (#1364).
 	Allow	Разреши
 	Only allow this if you trust the source document.	Разрешете това само ако имате доверие на изходния документ.
+	Open in Full Screen mode?	Отваряне в режим на цял екран?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Този документ иска да се отвори в режим на цял екран: страницата изпълва екрана и нищо друго не се показва. Натиснете Esc по всяко време, за да излезете.
+	Full Screen	Цял екран
+	Not now	Не сега
 	Open this local PDF?	Да се отвори ли този локален PDF?
 	This document is trying to open a local file:	Този документ се опитва да отвори локален файл:
 	Move tag earlier	Преместване на етикета по-рано
 	Move tag later	Преместване на етикета по-късно
+	Turn upside down (180°)	Обърни наопаки (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	Етикет 4 × 6 in (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Изрязва всяка страница до отпечатаната ѝ област, завърта я изправено и я побира в листа без разтягане. Един етикет на лист.
+	Find untagged content	Намиране на немаркирано съдържание
+	No untagged content was found.	Не е намерено немаркирано съдържание.
+	Found {n} untagged content problems.	Открити са {n} проблема с немаркирано съдържание.
+	Tag form fields	Маркиране на полетата на формуляра
+	Mark as artifact	Маркиране като артефакт
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Премахнете този листов етикет от реда на четене и маркирайте прякото му съдържание като артефакт
+	Mark content as artifact	Маркиране на съдържание като артефакт
+	Word count	Брой думи
+	Current page only	Само текущата страница
+	Exclude tagged tables	Изключване на маркираните таблици
+	Exclude tagged code blocks	Изключване на маркираните блокове с код
+	Exclude image/OCR text	Изключване на текст от изображения/OCR
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Изключването използва PDF тагове. Немаркираните таблици и код остават включени. Изключването на изображения премахва и невидимия текст.
+	Words	Думи
+	Characters	Знаци
+	Characters without spaces	Знаци без интервали
+	Pages counted	Преброени страници
+	Some pages contain no countable text. Scanned images need OCR first.	Някои страници не съдържат текст за преброяване. Сканираните изображения първо изискват OCR.
+	Some content could not be classified safely and was kept in the count.	Част от съдържанието не може да бъде класифицирана надеждно и е включена в броя.
+	Counting words… {n} pages read	Преброяване на думи… прочетени страници: {n}
+	Word counting stopped unexpectedly.	Преброяването на думи спря неочаквано.
+	Word count…	Брой думи…
+@id	file.word_count	Брой думи…
+	Standard	Стандартни
+	Mobile	Мобилни устройства
+	Merge image fragments	Обединяване на фрагменти от изображения
+	Optimizing… merging image fragments	Оптимизиране… обединяване на фрагменти от изображения
+	Side by side	Един до друг
+	New file only	Само новият файл
+	Old file: {name}	Стар файл: {name}
+	New file: {name}	Нов файл: {name}
+	Print as image	Печат като изображение
+	Resolution:	Разделителна способност:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Използвайте го, когато принтерът пропуска текст, сенки или прозрачност. Отпечатаното вече не е текст за търсене; с печат в сиво изображенията са сиви.
+	Crop Image	Изрязване на изображението
+	Remove Crop	Премахване на изрязването
+	Trim the picture with its handles; Enter or Done applies	Изрежете картината чрез дръжките; Enter или Готово прилага
+	Redaction mark appearance	Вид на маркировката за заличаване
+	Outline colour:	Цвят на контура:
+	Fill colour:	Цвят на запълването:
+	Shown while the pointer is over a mark.	Показва се, докато показалецът е над маркировка.
+	Opacity:	Непрозрачност:
+	Make properties default	Задаване като свойства по подразбиране
+	Pages selected	Избрани страници
+	Page properties	Свойства на страницата

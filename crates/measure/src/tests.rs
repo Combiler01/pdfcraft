@@ -1,30 +1,18 @@
 use super::*;
 use pdfcraft_cos::{SaveOptions, write_full};
+use pdfcraft_testkit::Pdf;
 use std::sync::Arc;
 fn fixture(content: &str, attrs: &str, extra: &[&str]) -> Document {
     fixture_with("4 0 R", content, attrs, extra)
 }
 fn fixture_with(contents: &str, content: &str, attrs: &str, extra: &[&str]) -> Document {
-    let mut objects = vec![
-        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>".into(),
-        format!("<< /Type /Page /Parent 2 0 R /Contents {contents} /Resources << /XObject << /Nested 5 0 R >> >> {attrs} >>"),
-        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
-    ];
-    objects.extend(extra.iter().map(|s| s.to_string()));
-    let mut bytes = b"%PDF-1.7\n".to_vec();
-    let mut offsets = Vec::new();
-    for (i, o) in objects.iter().enumerate() {
-        offsets.push(bytes.len());
-        bytes.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
-    }
-    let xref = bytes.len();
-    bytes.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).as_bytes());
-    for o in offsets {
-        bytes.extend(format!("{o:010} 00000 n \n").as_bytes());
-    }
-    bytes.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).as_bytes());
-    Document::open(Arc::new(bytes)).unwrap()
+    let pdf = Pdf::new()
+        .obj("<< /Type /Catalog /Pages 2 0 R >>")
+        .obj("<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 612 792] >>")
+        .obj(format!("<< /Type /Page /Parent 2 0 R /Contents {contents} /Resources << /XObject << /Nested 5 0 R >> >> {attrs} >>"))
+        .stream("", content)
+        .objs(extra);
+    Document::open(Arc::new(pdf.build())).unwrap()
 }
 fn close(a: f64, b: f64) {
     assert!((a - b).abs() < 1e-8, "{a} != {b}");

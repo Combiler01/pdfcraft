@@ -22,6 +22,7 @@
 	Auto ({percent}%)	Automatiškai ({percent} %)
 	Identity	Tapatybė
 	Name on new comments	Naujų komentarų autoriaus vardas
+	Hide hover previews for highlights without comment text	Slėpti užvedimo peržiūras paryškinimams be komentaro teksto
 	Open…	Atverti…
 	Open Recent	Atverti paskiausiai naudotus failus
 	Clear Recent Files	Išvalyti paskiausiai naudotų failų sąrašą
@@ -197,6 +198,12 @@
 	 · password-protected	 · apsaugotas slaptažodžiu
 	(none)	(nėra)
 	, Expires: 	, galiojimo pabaiga: 
+	Digitally signed by	Skaitmeniniu parašu pasirašė
+	DN: 	DN: 
+	Reason: 	Priežastis: 
+	Location: 	Vieta: 
+	Date: 	Data: 
+	The labels are in English: the signature's font can't draw them in this language.	Etiketės rodomos angliškai: parašo šriftas negali jų atvaizduoti šia kalba.
 	1 difference found	Rastas 1 skirtumas
 	1 file	1 failas
 	1 file done	1 failas apdorotas
@@ -370,6 +377,8 @@
 	Closed arrow	Uždara rodyklė
 	Collapse	Suskleisti
 	Collapse all	Suskleisti viską
+	Collapse all pages	Suskleisti visus puslapius
+	Expand all pages	Išskleisti visus puslapius
 	Collapse all bookmarks	Suskleisti visas žymeles
 	Collapse tag	Suskleisti žymą
 	Collate	Rūšiuoti komplektais
@@ -588,6 +597,7 @@
 	Font colour:	Šrifto spalva:
 	Font size 0 uses automatic sizing.	Šrifto dydis 0 reiškia, kad dydis parenkamas automatiškai.
 	Font size:	Šrifto dydis:
+	Font size	Šrifto dydis
 	Font:	Šriftas:
 	Font: Helvetica	Šriftas: „Helvetica“
 	Fonts	Šriftai
@@ -698,10 +708,12 @@
 	Locked	Užrakinta
 	Looking for PDFs…	Ieškoma PDF failų…
 	Looking for printers…	Ieškoma spausdintuvų…
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Spausdintuvų nerasta. Patikrinkite, ar spausdintuvas įdiegtas ir ar veikia spausdinimo eilė, tada vėl atverkite Spausdinti.
 	Low Resolution (150 dpi)	Maža raiška (150 dpi)
 	Low resolution	Maža raiška
 	Magnification	Didinimas
 	Make Current Properties Default	Dabartines savybes nustatyti kaip numatytąsias
+	Make Properties Default	Savybes nustatyti kaip numatytąsias
 	Margins	Paraštės
 	Mark Page Range	Pažymėti puslapių intervalą
 	Mark as comments	Pažymėti kaip komentarus
@@ -716,7 +728,7 @@
 	More options	Daugiau parinkčių
 	More options:	Daugiau parinkčių:
 	More ways to add files	Daugiau būdų pridėti failų
-	Mouse wheel scroll speed	Slinkimo ratuku greitis
+	Scroll speed (mouse wheel and arrow keys)	Slinkimo greitis (pelės ratukas ir rodyklių klavišai)
 	Move down	Perkelti žemyn
 	Move earlier	Perkelti anksčiau
 	Move later	Perkelti vėliau
@@ -962,6 +974,9 @@
 	Reverse pages	Apversti puslapius
 	Revert changes	Atšaukti pakeitimus
 	Revert to the previously saved version of “{name}”? Changes since then can't be undone afterwards.	Grąžinti anksčiau įrašytą „{name}“ versiją? Po to atliktų pakeitimų nebegalėsite atkurti.
+	Save over the changed file?	Įrašyti ant pakeisto failo?
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	„{name}“ diske pasikeitė po atidarymo arba paskutinio įrašymo. Įrašius dabar ta naujesnė versija bus pakeista šia.
+	Save anyway	Vis tiek įrašyti
 	Review History	Pakeitimų retrospektyva
 	Revisions	Versijos
 	Right	Dešinė
@@ -1036,6 +1051,7 @@
 	Selected pages	Pasirinkti puslapiai
 	Selection	Pasirinkimas
 	Sending to {printer}…	Siunčiama į {printer}…
+	Sending sheet {s} of {n} to {printer}…	Siunčiamas lapas {s} iš {n} į {printer}…
 	Sensitivity	Jautrumas
 	Sent to {printer}	Išsiųsta į {printer}
 	Sent to {printer}: {msg}	Išsiųsta į {printer}: {msg}
@@ -1089,6 +1105,7 @@
 	Sort items	Rūšiuoti elementus
 	Source	Šaltinis
 	Space Audit	Vietos naudojimo analizė
+	What takes up the space in this file, by kind of content.	Kas užima vietą šiame faile, pagal turinio rūšį.
 	Special	Specialusis
 	Split document	Skaidyti dokumentą
 	Split into files…	Skaidyti į failus…
@@ -1168,7 +1185,7 @@
 	This document isn't password-protected	Šis dokumentas neapsaugotas slaptažodžiu
 	This drawing exceeds the snapping limit; only the first paths are used.	Brėžinys viršija pritraukimo ribą; naudojami tik pirmieji keliai.
 	This field is locked. Unlock it to change its properties.	Šis laukas užrakintas. Atrakinkite jį, kad galėtumėte keisti savybes.
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Failas diske pasikeitė. Įkelkite jį iš naujo, kad matytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Šis failas diske pasikeitė. „Įkelti iš naujo“ parodo naują versiją ir atmeta neįrašytus pakeitimus; „Įrašyti“ pakeičia ją šia versija.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Failas buvo pažeistas ir pataisytas. Įrašius bus išsaugota pataisyta versija.
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Aplankas šiuo metu nepasiekiamas. Jis galėjo būti perkeltas arba diskas ar sinchronizavimas su debesija neveikia.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Šios formos scenarijai išjungti, nes vienas jų veikė per ilgai. Atverkite dokumentą iš naujo, kad scenarijai būtų vykdomi vėl.
@@ -1542,6 +1559,7 @@
 	Separate PDFs	Atskiri PDF dokumentai
 	Set measurement scale	Nustatyti matavimo mastelį
 	Set page boxes	Nustatyti puslapio sritis
+	Set page transitions	Nustatyti puslapių perėjimus
 	Set page boxes…	Nustatyti puslapio sritis…
 	Set properties	Nustatyti savybes
 	Show cover page in two-page view	Rodyti viršelio puslapį dviejų puslapių rodinyje
@@ -1694,7 +1712,7 @@
 	The font {} isn't embedded	Šriftas {} neįdėtas
 	The metadata doesn't identify the file as {}	Metaduomenys nenurodo, kad failas atitinka {}
 	The password is incorrect.	Slaptažodis netinkamas.
-	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
+	The password must have at least 8 characters.	Slaptažodį turi sudaryti bent 8 simboliai.
 	The passwords do not match.	Slaptažodžiai nesutampa.
 	The security settings don't allow screen readers to read the text	Saugos nuostatos neleidžia ekrano skaitymo programoms skaityti teksto
 	The signature algorithm and the SignerInfo's digest algorithm name different hashes; the signature was made with the SignerInfo's.	Parašo algoritmas ir „SignerInfo“ santraukos algoritmas nurodo skirtingas maišos funkcijas; pasirašyta naudojant „SignerInfo“ nurodytą funkciją.
@@ -2585,6 +2603,10 @@ key	Esc	Esc
 key	Home	Home
 key	End	End
 key	Space	Tarpas
+	Cut Image	Iškirpti paveikslėlį
+	Redact Image	Pašalinti konfidencialią informaciją iš paveikslėlio
+	Create Link…	Kurti saitą…
+	Recognize Text…	Atpažinti tekstą…
 	Minimize	Sumažinti
 	Maximize	Išdidinti
 	Restore	Atkurti
@@ -2594,7 +2616,59 @@ key	Space	Tarpas
 # Absolute local GoToR confirmation (#1364).
 	Allow	Leisti
 	Only allow this if you trust the source document.	Leiskite tai tik tuo atveju, jei pasitikite pirminiu dokumentu.
+	Open in Full Screen mode?	Atidaryti viso ekrano režimu?
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Šis dokumentas prašo būti atidarytas viso ekrano režimu: puslapis užpildo ekraną ir daugiau niekas nerodoma. Norėdami išeiti, bet kada paspauskite Esc.
+	Full Screen	Visas ekranas
+	Not now	Ne dabar
 	Open this local PDF?	Atverti šį vietinį PDF failą?
 	This document is trying to open a local file:	Šis dokumentas bando atverti vietinį failą:
 	Move tag earlier	Perkelti žymą anksčiau
 	Move tag later	Perkelti žymą vėliau
+	Turn upside down (180°)	Apversti aukštyn kojomis (180°)
+	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 col. etiketė (101,6 × 152,4 mm)
+	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Apkerpa kiekvieną puslapį iki spausdinamos srities, pasuka tiesiai ir pritaiko lapui neiškraipydama. Viena etiketė lape.
+	Find untagged content	Rasti nepažymėtą turinį
+	No untagged content was found.	Nepažymėto turinio nerasta.
+	Found {n} untagged content problems.	Rasta nepažymėto turinio problemų: {n}.
+	Tag form fields	Žymėti formos laukus
+	Mark as artifact	Pažymėti kaip artefaktą
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Pašalinkite šią lapo žymą iš skaitymo tvarkos ir pažymėkite jos tiesioginį turinį kaip artefaktą
+	Mark content as artifact	Pažymėti turinį kaip artefaktą
+	Word count	Žodžių skaičius
+	Current page only	Tik dabartinis puslapis
+	Exclude tagged tables	Neįtraukti pažymėtų lentelių
+	Exclude tagged code blocks	Neįtraukti pažymėtų kodo blokų
+	Exclude image/OCR text	Neįtraukti vaizdų ir OCR teksto
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Išimtys naudoja PDF žymas. Nepažymėtos lentelės ir kodas lieka įtraukti. Vaizdų išimtis pašalina ir nematomą tekstą.
+	Words	Žodžiai
+	Characters	Simboliai
+	Characters without spaces	Simboliai be tarpų
+	Pages counted	Suskaičiuoti puslapiai
+	Some pages contain no countable text. Scanned images need OCR first.	Kai kuriuose puslapiuose nėra skaičiuojamo teksto. Nuskaitytiems vaizdams pirmiausia reikia OCR.
+	Some content could not be classified safely and was kept in the count.	Dalies turinio nepavyko patikimai klasifikuoti, todėl jis liko įtrauktas į skaičių.
+	Counting words… {n} pages read	Skaičiuojami žodžiai… perskaityta puslapių: {n}
+	Word counting stopped unexpectedly.	Žodžių skaičiavimas netikėtai sustojo.
+	Word count…	Žodžių skaičius…
+@id	file.word_count	Žodžių skaičius…
+	Standard	Standartinis
+	Mobile	Mobilusis
+	Merge image fragments	Sujungti vaizdo fragmentus
+	Optimizing… merging image fragments	Optimizuojama… jungiami vaizdo fragmentai
+	Side by side	Greta
+	New file only	Tik naujas failas
+	Old file: {name}	Senas failas: {name}
+	New file: {name}	Naujas failas: {name}
+	Print as image	Spausdinti kaip vaizdą
+	Resolution:	Raiška:
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Naudokite, kai spausdintuvas praleidžia tekstą, šešėliavimą ar skaidrumą. Atspaudas nebėra ieškomas tekstas; spausdinant pilkais atspalviais vaizdai yra pilki.
+	Crop Image	Apkarpyti vaizdą
+	Remove Crop	Pašalinti apkarpymą
+	Trim the picture with its handles; Enter or Done applies	Apkarpykite paveikslėlį rankenėlėmis; Enter arba Atlikta pritaiko
+	Redaction mark appearance	Užtamsinimo žymės išvaizda
+	Outline colour:	Kontūro spalva:
+	Fill colour:	Užpildo spalva:
+	Shown while the pointer is over a mark.	Rodoma, kol žymeklis yra virš žymės.
+	Opacity:	Nepermatomumas:
+	Make properties default	Nustatyti ypatybes kaip numatytąsias
+	Pages selected	Pasirinkti puslapiai
+	Page properties	Puslapio ypatybės

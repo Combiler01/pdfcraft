@@ -16,6 +16,11 @@ It reports two kinds of finding:
 A properly applied redaction removes the text, so it never flags. Page backgrounds, table
 shading and highlights don't either: they're painted before the text, or light against it.
 
+A rectangle covers a text line when it hides at least 40% of the area of the words the line
+draws, or at least 40% of the line's box together with a positive-area intersection with one
+of its words. The gap an applied redaction leaves (a `TJ` adjustment where the text was) is in the line's box but
+holds no word, so a redaction box over it alone does not count.
+
 Limits, by design and documented rather than hidden:
 
 - only filled rectangles count as covers, drawn with `re` or as a single `m`/`l` subpath whose
@@ -23,9 +28,13 @@ Limits, by design and documented rather than hidden:
   translucent one (`/ca` below 1) is not flagged;
 - covers inside form XObjects are found, but only text drawn directly in the page content is
   checked under them;
-- annotation rectangles are compared in unrotated user space, so `/Rotate` pages may misalign.
+- annotation rectangles are compared in unrotated user space, so `/Rotate` pages may misalign;
+- a cover that hides less than 40% of a line's box and less than 40% of its words (a short
+  value in the middle of a long line) is not flagged.
 
 It fails closed: an undecodable content stream, malformed `/Annots`, form XObjects nested deeper
 than 32 or in a cycle, or a walk past the operator bound is an error, never "no findings".
 
-Surfaces: the `redact_audit` automation tool and `pdfcraft-cli`.
+Surfaces: the `doc_audit_redactions` automation tool and `pdfcraft-cli audit`. Both report each
+rectangle in points from the top-left of the page as displayed (y down, after `/Rotate`), like
+the other tools; `AuditFinding::rect` itself stays in PDF user space.

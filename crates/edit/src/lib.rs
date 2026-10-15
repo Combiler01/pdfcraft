@@ -73,6 +73,17 @@ impl Default for HeaderFooter {
     }
 }
 
+impl HeaderFooter {
+    /// The first character [`add_header_footer`] would refuse, because the standard fonts can't
+    /// draw it (#125). Tokens only add ASCII (Bates prefixes and suffixes are part of the
+    /// template), so checking the templates, split as `expand`'s output is, covers every page
+    /// (and a `\r` that would be drawn is refused too). The dialog asks this too, so its preview
+    /// never offers text that applying refuses (#2013).
+    pub fn first_undrawable(&self) -> Option<char> {
+        self.text.iter().flat_map(|t| t.lines()).find_map(pdfcraft_fonts::first_non_win_ansi)
+    }
+}
+
 /// A picture for a background or watermark (Acrobat: Source ▸ File): an XObject already in
 /// the document, an image (drawn into a unit square) or a form (a page of a PDF).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,6 +113,17 @@ pub struct Watermark {
     pub behind: bool,
     /// Offset of the centre from the page centre, in points (right, up).
     pub offset: [f64; 2],
+}
+
+impl Watermark {
+    /// The first character of a text watermark [`add_watermark`] would refuse, because the
+    /// standard fonts can't draw it (#125). A picture watermark draws no text.
+    pub fn first_undrawable(&self) -> Option<char> {
+        match self.source {
+            Some(_) => None,
+            None => self.text.trim().lines().find_map(pdfcraft_fonts::first_non_win_ansi),
+        }
+    }
 }
 
 impl Default for Watermark {
@@ -170,6 +192,13 @@ fn add_picture_resource(doc: &mut Document, page: &pdfcraft_model::Page, src: &M
 pub struct Context {
     /// Today's date: (year, month 1–12, day 1–31).
     pub date: (i64, u32, u32),
+}
+
+// Model-derived transforms can contain tiny scale factors; retain their PDF decimal precision.
+fn matrix_number(value: f64) -> String {
+    let mut bytes = Vec::new();
+    pdfcraft_cos::serialize(&Object::Real(value), &mut bytes);
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 fn n(v: f64) -> String {
@@ -365,26 +394,16 @@ fn begin(kind: MarkKind, subtype: &str, matrix: [f64; 6]) -> String {
     format!(
         "q\n/Artifact <</Type /Pagination /Subtype /{subtype} /PCMark /{}>> BDC\n{} {} {} {} {} {} cm\n",
         kind.tag(),
-        n(matrix[0]),
-        n(matrix[1]),
-        n(matrix[2]),
-        n(matrix[3]),
-        n(matrix[4]),
-        n(matrix[5])
+        matrix_number(matrix[0]),
+        matrix_number(matrix[1]),
+        matrix_number(matrix[2]),
+        matrix_number(matrix[3]),
+        matrix_number(matrix[4]),
+        matrix_number(matrix[5])
     )
 }
 
 const END: &str = "EMC\nQ\n";
-
-/// Refuses page text the standard-14 fonts (WinAnsiEncoding) can't draw: written anyway, each
-/// such character would become a `?` on the page (#125). `lines` must split the text the way the
-/// caller draws it, so a `\r` that would be drawn is refused too.
-pub(crate) fn drawable<'a>(lines: impl IntoIterator<Item = &'a str>) -> Result<(), EditError> {
-    match lines.into_iter().find_map(pdfcraft_fonts::first_non_win_ansi) {
-        Some(c) => Err(undrawable(c)),
-        None => Ok(()),
-    }
-}
 
 /// The refusal for page text with `c`, which nothing here can draw.
 pub(crate) fn undrawable(c: char) -> EditError {
@@ -411,9 +430,9 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
     if hf.text.iter().all(|t| t.trim().is_empty()) {
         return Err(EditError::Invalid("type the header or footer text first".into()));
     }
-    // Tokens only add ASCII (Bates prefixes and suffixes are part of the template), so checking
-    // the templates, split as `expand`'s output is, covers every page.
-    hf.text.iter().try_for_each(|t| drawable(t.lines()))?;
+    if let Some(c) = hf.first_undrawable() {
+        return Err(undrawable(c));
+    }
     if !(hf.font_size.is_finite() && hf.font_size > 0.0 && hf.font_size <= 200.0 && hf.margins.iter().all(|m| m.is_finite() && *m >= 0.0)) {
         return Err(EditError::Invalid("invalid font size or margins".into()));
     }
@@ -431,18 +450,26 @@ pub fn add_header_footer(doc: &mut Document, pages: &[usize], hf: &HeaderFooter,
             u32::MAX
         )));
     }
+    // The same goes for Bates numbers: the last selected page must still fit in a u64.
+    let bates0 = hf.text.iter().find_map(|t| bates_start(t)).unwrap_or(1);
+    if bates0.checked_add(pages.len().saturating_sub(1) as u64).is_none() {
+        return Err(EditError::Invalid(format!(
+            "the Bates start number {bates0} leaves no room for {} pages (Bates numbers stop at {})",
+            pages.len(),
+            u64::MAX
+        )));
+    }
     if replace {
         remove_marks(doc, pages, MarkKind::HeaderFooter)?;
     }
     let all = page_list(doc);
     let count = all.len();
-    let bates0 = hf.text.iter().find_map(|t| bates_start(t)).unwrap_or(1);
     for (k, &i) in pages.iter().enumerate() {
         let page = &all[i];
         let (w, h) = page.display_size(doc);
         let number =
             u32::try_from(u64::from(hf.start_number) + k as u64).map_err(|_| EditError::Invalid("the header page numbers are too large".into()))?;
-        let bates = bates0 + k as u64;
+        let bates = bates0.checked_add(k as u64).ok_or_else(|| EditError::Invalid("the Bates numbers are too large".into()))?;
         let size = hf.font_size;
         let [top, bottom, left, right] = hf.margins;
         let mut body: Vec<u8> = format!("BT\n/PCHelv {} Tf\n{}\n", n(size), rgb(hf.color)).into_bytes();
@@ -491,8 +518,8 @@ pub fn add_watermark(doc: &mut Document, pages: &[usize], wm: &Watermark, replac
     if text.is_empty() && wm.source.is_none() {
         return Err(EditError::Invalid("type the watermark text first".into()));
     }
-    if wm.source.is_none() {
-        drawable(text.lines())?;
+    if let Some(c) = wm.first_undrawable() {
+        return Err(undrawable(c));
     }
     if !(wm.opacity.is_finite()
         && wm.rotation.is_finite()
@@ -629,6 +656,7 @@ pub use images::{
 };
 pub mod bidi;
 pub mod indic;
+mod linebreak;
 pub mod text;
 pub use text::{
     BlockStyle, LineEdit, RangeStyle, TextBlock, TextLine, clear_block, reading_blocks, replace_block, replace_line, rewrite_block, text_blocks,

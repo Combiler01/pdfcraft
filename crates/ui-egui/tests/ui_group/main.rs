@@ -3,6 +3,9 @@
 //! write screenshots, use process-ID temporary paths or probe installed fonts stay standalone
 //! in `tests/`. A file in this folder is only built if it is listed here.
 
+#[path = "../support/mod.rs"]
+mod support;
+
 mod animate;
 mod bulk_fields;
 mod column_select;

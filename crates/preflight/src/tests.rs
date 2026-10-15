@@ -250,3 +250,124 @@ fn device_colour_is_found_after_any_whitespace() {
         }
     }
 }
+
+/// A page that draws `content` with `resources`, followed by `extra` objects (from object 5 on).
+fn drawing(content: &str, resources: &str, extra: &[&str]) -> Document {
+    let stream = format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len());
+    let page = format!("<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << {resources} >> >>");
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+        page.as_str(),
+        stream.as_str(),
+    ];
+    objs.extend_from_slice(extra);
+    build(&objs, "")
+}
+
+fn uses_cmyk(doc: &Document) -> bool {
+    messages(&verify(doc, Level::A2b)).contains(&"DeviceCMYK is used: it needs a CMYK output intent (not added automatically)")
+}
+
+/// Issue #2259: a `k` is DeviceCMYK only when it is an operator. Inside a string, a comment, an inline image's
+/// data, a font program, an ICC profile or a mesh shading's data it is just a byte, and the
+/// document still gets its sRGB output intent.
+#[test]
+fn device_colour_is_read_from_operators_not_bytes() {
+    let rgb = "1 0 0 rg 0 0 10 10 re f";
+    let cases: &[(&str, String, &str, Vec<&str>)] = &[
+        (
+            "a string",
+            format!("{rgb} BT /F1 12 Tf 10 10 Td (press k now) Tj ET"),
+            "/Font << /F1 5 0 R >>",
+            vec![
+                "<< /Type /Font /Subtype /TrueType /BaseFont /Sans /FontDescriptor 6 0 R >>",
+                "<< /Type /FontDescriptor /FontName /Sans /FontFile2 7 0 R >>",
+                // A font program whose bytes read " k ", as Chromium and krilla write them.
+                "<< /Length1 3 /Length 3 >>\nstream\n k \nendstream",
+            ],
+        ),
+        ("a comment", format!("{rgb} % 0 0 0 1 k"), "", vec![]),
+        // A 3×1 gray image whose three bytes read " k ".
+        ("inline image data", format!("{rgb} q 10 0 0 10 0 0 cm BI /W 3 /H 1 /CS /G /BPC 8 ID  k  EI Q"), "", vec![]),
+        ("an ICC profile", rgb.to_owned(), "/ColorSpace << /CS0 [/ICCBased 5 0 R] >>", vec!["<< /N 3 /Length 3 >>\nstream\n k \nendstream"]),
+        (
+            "a mesh shading",
+            format!("{rgb} /Sh0 sh"),
+            "/Shading << /Sh0 5 0 R >>",
+            vec![
+                "<< /ShadingType 4 /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 1 0 1 0 1 0 1 0 1] /BBox [0 0 10 10] /Length 3 >>\nstream\n k \nendstream",
+            ],
+        ),
+    ];
+    for (what, content, resources, extra) in cases {
+        let mut doc = drawing(content, resources, extra);
+        assert!(!uses_cmyk(&doc), "a k in {what} was read as DeviceCMYK");
+        let r = convert(&mut doc, Level::A2b).unwrap();
+        assert_eq!(declared(&doc).output_intents, ["sRGB IEC61966-2.1"], "{what}: {:?}", r.fixed);
+    }
+}
+
+/// Issue #2259: DeviceCMYK is found however the content sets it: `k`/`K` right before a delimiter, `cs`/`CS`
+/// with the space's name, or an inline image in `/CMYK` or indexed over it.
+#[test]
+fn device_colour_is_found_however_content_sets_it() {
+    for content in [
+        "0 0 0 1 k/GS0 gs 10 10 50 50 re f",
+        "0 0 0 1 K[]0 d 10 10 m 50 50 l S",
+        "/DeviceCMYK cs 0 0 0 1 sc 10 10 50 50 re f",
+        "/DeviceCMYK CS 0 0 0 1 SC 10 10 m 50 50 l S",
+        "q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS /CMYK /BPC 8 ID \u{0}\u{0}\u{0}\u{0} EI Q",
+        "q 10 0 0 10 0 0 cm BI /W 1 /H 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8 ID \u{0}\u{0}\u{0}\u{0} EI Q",
+        "q 10 0 0 10 0 0 cm BI /W 1 /H 1 /CS [/I /DeviceCMYK 0 <00000000>] /BPC 8 ID \u{0} EI Q",
+    ] {
+        assert!(uses_cmyk(&drawing(content, "", &[])), "{content:?}");
+    }
+    // A resource named like a device space's abbreviation is a resource, not that space.
+    let named =
+        drawing("/CMYK cs 1 sc 10 10 50 50 re f", "/ColorSpace << /CMYK [/ICCBased 5 0 R] >>", &["<< /N 1 /Length 0 >>\nstream\n\nendstream"]);
+    assert!(!uses_cmyk(&named));
+}
+
+/// Issue #2259: content is not only the page's own stream: form XObjects (with `/Type /XObject`, as almost
+/// every writer gives them), appearance streams, tiling patterns and Type 3 glyphs draw too. A
+/// CMYK logo placed as a form must not get the document an sRGB output intent.
+#[test]
+fn device_colour_in_forms_patterns_and_glyphs_is_found() {
+    let cmyk = "0.75 0 1 0 k 0 0 10 10 re f";
+    let stream = |dict: &str| format!("<< {dict} /Length {} >>\nstream\n{cmyk}\nendstream", cmyk.len());
+    let form = stream("/Type /XObject /Subtype /Form /BBox [0 0 10 10]");
+    let appearance = stream("/BBox [0 0 10 10]");
+    let pattern = stream("/Type /Pattern /PatternType 1 /PaintType 1 /TilingType 1 /BBox [0 0 10 10] /XStep 10 /YStep 10 /Resources << >>");
+    let glyph = format!("<< /Length {} >>\nstream\n1 0 d0 {cmyk}\nendstream", cmyk.len() + 7);
+    let cases: [(&str, Document); 4] = [
+        ("a form XObject", drawing("/Fm0 Do", "/XObject << /Fm0 5 0 R >>", &[&form])),
+        (
+            "an appearance stream without /Subtype",
+            build(
+                &[
+                    "<< /Type /Catalog /Pages 2 0 R >>",
+                    "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 200 200] >>",
+                    "<< /Type /Page /Parent 2 0 R /Annots [4 0 R] >>",
+                    "<< /Type /Annot /Subtype /Square /Rect [0 0 10 10] /F 4 /P 3 0 R /AP << /N 5 0 R >> >>",
+                    &appearance,
+                ],
+                "",
+            ),
+        ),
+        ("a tiling pattern", drawing("/Pattern cs /P0 scn 0 0 100 100 re f", "/Pattern << /P0 5 0 R >>", &[&pattern])),
+        (
+            "a Type 3 glyph in an inline font",
+            drawing(
+                "BT /T3 1 Tf (a) Tj ET",
+                "/Font << /T3 << /Type /Font /Subtype /Type3 /FontBBox [0 0 10 10] /FontMatrix [1 0 0 1 0 0] /CharProcs << /a 5 0 R >> /Encoding << /Differences [97 /a] >> /FirstChar 97 /LastChar 97 /Widths [10] >> >>",
+                &[&glyph],
+            ),
+        ),
+    ];
+    for (what, mut doc) in cases {
+        assert!(uses_cmyk(&doc), "DeviceCMYK in {what} wasn't found");
+        let r = convert(&mut doc, Level::A2b).unwrap();
+        assert!(declared(&doc).output_intents.is_empty(), "{what}: an sRGB output intent was added to a CMYK document: {:?}", r.fixed);
+    }
+}

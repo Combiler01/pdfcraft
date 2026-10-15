@@ -2,7 +2,7 @@
 //! "save changes?" prompt when closing a tab or quitting with unsaved edits.
 
 use pdfcraft_engine::Edit;
-use pdfcraft_platform::staging::{StagingName, create_staging, staging_suffixes};
+use pdfcraft_platform::staging::{StagingName, staging_suffixes};
 
 use crate::PdfCraftApp;
 
@@ -16,6 +16,16 @@ pub enum CloseRequest {
     Quit,
     /// File ▸ Close all: like Quit, but the application stays open.
     All,
+}
+
+/// A save held back by [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged): the file
+/// on disk is another version than the document came from (#2166).
+#[cfg(not(target_arch = "wasm32"))]
+pub struct PendingOverwrite {
+    pub id: pdfcraft_engine::DocId,
+    pub dest: String,
+    /// What was to run once the document is written (close its tab, quit).
+    after: Box<dyn FnOnce(&mut PdfCraftApp) + Send>,
 }
 
 /// Where Save writes.
@@ -42,6 +52,10 @@ impl PdfCraftApp {
                 let Some(doc) = self.session.get(id) else { return true };
                 let info = &doc.info;
                 let view = &mut self.views[i];
+                if !matches!(edit, Edit::AddAnnotation(_)) {
+                    // Only a new drawing waits on its raster; any other edit may remove or move it.
+                    view.comments.settling.clear();
+                }
                 view.signature_drag.committed(&edit, doc.edit_generation());
                 view.move_background.committed(&edit, doc.edit_generation());
                 if let Some(page) = comment_page(&edit).or_else(|| content_page(&edit)) {
@@ -158,6 +172,13 @@ impl PdfCraftApp {
 
     /// Undo the last change: to the Combine files list while its tab shows, else the document.
     pub fn undo(&mut self) {
+        // While a polygon, cloud or run of connected lines is being drawn, Undo takes back its
+        // last point instead of the last finished edit.
+        if let Some((i, _)) = self.active_ids()
+            && self.views[i].comments.undo_point()
+        {
+            return;
+        }
         if self.combine_showing() {
             self.combine_history_step(true);
         } else {
@@ -509,7 +530,8 @@ impl PdfCraftApp {
             return true;
         }
         let author = self.comment_prefs.author.clone();
-        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, tb.size, &author);
+        let rotation = self.session.get(id).map_or(0, |doc| crate::comments::page_rotation(&doc.info, tb.page));
+        let edit = crate::fill_sign::typed(tb.page, tb.at, &text, tb.size, rotation, &author);
         if self.apply_edit(edit) {
             if let Some(view) = self.views.get_mut(i) {
                 view.fill_text = None;
@@ -592,18 +614,12 @@ impl PdfCraftApp {
                     let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(name);
                     // The bytes are taken once the user has chosen, so edits made meanwhile are saved too.
                     self.ask_one(crate::pickers::Ask::Save(dialog), None, move |app, dest| {
-                        if app.save_doc_to(id, &dest.to_string_lossy()) {
-                            after(app);
-                        }
+                        app.save_doc_to_then(id, &dest.to_string_lossy(), Box::new(after));
                     });
                     return false;
                 }
             };
-            let saved = self.save_doc_to(id, &destination);
-            if saved {
-                after(self);
-            }
-            saved
+            self.save_doc_to_then(id, &destination, Box::new(after))
         }
         #[cfg(target_arch = "wasm32")]
         {
@@ -649,6 +665,44 @@ impl PdfCraftApp {
                     false
                 }
             }
+        }
+    }
+
+    /// [`Self::save_doc_to`], then `after`. When `dest` is the document's own file and it is
+    /// another version on disk than the one the document came from (something else wrote it
+    /// since the open or the last save, #2166), it asks first: the save waits in
+    /// `pending_overwrite` behind [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged).
+    /// Returns `true` if written now.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
+        let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
+        if own && self.watch.disk_differs(id, dest) {
+            self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), after });
+            self.dialog = Some(crate::Dialog::OverwriteChanged);
+            return false;
+        }
+        let saved = self.save_doc_to(id, dest);
+        if saved {
+            after(self);
+        }
+        saved
+    }
+
+    /// The dialog's Save anyway: write over the changed file.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn overwrite_changed_file(&mut self) {
+        let Some(p) = self.pending_overwrite.take() else { return };
+        if self.save_doc_to(p.id, &p.dest) {
+            (p.after)(self);
+        }
+    }
+
+    /// The dialog's Save as…: leave the file on disk as it is and ask where to put this version.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn save_changed_file_elsewhere(&mut self) {
+        let Some(p) = self.pending_overwrite.take() else { return };
+        if let Some(index) = self.views.iter().position(|v| v.id == p.id) {
+            self.save_then(index, SaveTarget::As, p.after);
         }
     }
 
@@ -835,6 +889,17 @@ impl PdfCraftApp {
 
     /// Intercept window close while documents have unsaved changes.
     pub(crate) fn guard_quit(&mut self, ctx: &egui::Context) {
+        // egui's default quit shortcut ignores extra Alt/Shift, including Ctrl+Alt+Q for '@'.
+        ctx.options_mut(|o| o.quit_shortcuts.clear());
+        let shortcut = ctx.input(|i| {
+            i.events.iter().any(|e| {
+                matches!(e, egui::Event::Key { key: egui::Key::Q, pressed: true, modifiers, .. }
+                    if modifiers.matches_exact(egui::Modifiers::COMMAND))
+            })
+        });
+        if shortcut {
+            self.request_quit(ctx);
+        }
         self.sync_unsaved_flag();
         if !ctx.input(|i| i.viewport().close_requested()) {
             return;
@@ -878,6 +943,7 @@ fn comment_page(edit: &Edit) -> Option<usize> {
         | Edit::ResizeAnnotation { page, .. }
         | Edit::StyleAnnotation { page, .. }
         | Edit::FillAnnotation { page, .. }
+        | Edit::FontSizeAnnotation { page, .. }
         | Edit::SetAnnotationInfo { page, .. } => Some(*page),
         _ => None,
     }
@@ -927,48 +993,15 @@ fn write_atomically_with(path: &str, bytes: &[u8], suffixes: impl IntoIterator<I
 }
 
 /// [`write_atomically_with`], flushing the staging file with `sync_all` (the standard library's
-/// in the app, a failing one in tests).
+/// in the app, a failing one in tests). The writer itself is the platform crate's, shared with
+/// the tools and the CLI (#2166); the desktop app keeps its staging-name form.
 fn write_atomically_syncing(
     path: &str,
     bytes: &[u8],
     suffixes: impl IntoIterator<Item = u64>,
     sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
-    use std::io::Write;
-    let target = std::path::Path::new(path);
-    let dir = target.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
-    let name = target.file_name().and_then(|n| n.to_str()).unwrap_or("save");
-    let (tmp, f) = create_staging(dir, name, StagingName::TagThenSuffix, suffixes)?;
-    let result = (|| {
-        // Closed at the end of the block, before the rename.
-        {
-            let mut f = f;
-            f.write_all(bytes)?;
-            sync_staged(&f, sync_all)?;
-        }
-        std::fs::rename(&tmp, target)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    result
-}
-
-/// Flush the staging file to the disk before it replaces the original. On macOS `sync_all` asks
-/// for a full flush (`F_FULLFSYNC`), which SMB and FUSE volumes, such as a mounted Cryptomator
-/// vault, refuse as unsupported: there a plain `fsync` is the strongest flush the volume offers.
-/// Any other failure still fails the save.
-fn sync_staged(f: &std::fs::File, sync_all: impl FnOnce(&std::fs::File) -> std::io::Result<()>) -> std::io::Result<()> {
-    #[cfg(target_os = "macos")]
-    {
-        use rustix::io::Errno;
-        match sync_all(f) {
-            Err(e) if matches!(Errno::from_io_error(&e), Some(Errno::NOTSUP | Errno::NOTTY)) => Ok(rustix::fs::fsync(f)?),
-            other => other,
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    sync_all(f)
+    pdfcraft_platform::staging::write_atomically_with(std::path::Path::new(path), bytes, StagingName::TagThenSuffix, suffixes, sync_all)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1341,6 +1374,7 @@ mod revert_draft_tests {
             picked: Vec::new(),
             request_focus: false,
             select_all: false,
+            press: None,
             calendar: None,
             calendar_rect: None,
         }

@@ -83,9 +83,9 @@ fn preview(ui: &mut egui::Ui, kind: ThemeKind, width: f32) {
 }
 
 /// One theme card: its title, Active when it is what shows now, a preview of the chosen theme
-/// and a radio row per theme.
-fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) {
-    egui::Frame::new()
+/// and a radio row per theme. Returns true when the card or one of its radio rows was clicked.
+fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(ThemeKind, &str)]) -> bool {
+    let inner = egui::Frame::new()
         .fill(t.card)
         .stroke(egui::Stroke::new(1.0, if active { t.accent } else { t.border }))
         .corner_radius(6.0)
@@ -102,16 +102,21 @@ fn card(ui: &mut egui::Ui, t: &Tokens, title: &str, active: bool, themes: &[(The
             let shown = themes.first().map_or(ThemeKind::Light, |(kind, _)| *kind);
             preview(ui, shown, ui.available_width());
             ui.add_space(4.0);
+            let mut clicked = false;
             for (kind, label) in themes {
                 // One theme per card today, so it is always the chosen one.
-                let _ = ui.add(widgets::radio(*kind == shown, tl!(label)));
+                clicked |= ui.add(widgets::radio(*kind == shown, tl!(label))).clicked();
             }
+            clicked
         });
+    // The whole card picks its theme, not just the radio row.
+    let whole = inner.response.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    inner.inner || whole.clicked()
 }
 
 /// The Appearance section of Preferences.
 pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens) {
-    ui.label(RichText::new(tl!("Appearance")).font(theme::semibold(13.0)));
+    ui.label(RichText::new(tl_ctx!("theme", "Appearance")).font(theme::semibold(13.0)));
     ui.horizontal(|ui| {
         ui.label(tl!("Appearance mode"));
         egui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
@@ -127,8 +132,12 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
     let light_active = app.theme == ThemeKind::Light;
     ui.columns(2, |cols| {
         let [light, dark] = cols else { return };
-        card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES);
-        card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES);
+        if card(light, t, tl!("Light theme"), light_active, LIGHT_THEMES) {
+            app.execute(mode_command(ThemePreference::Light));
+        }
+        if card(dark, t, tl!("Dark theme"), !light_active, DARK_THEMES) {
+            app.execute(mode_command(ThemePreference::Dark));
+        }
     });
 }
 
@@ -178,5 +187,33 @@ mod tests {
         h.get_by_label("Use system setting").click();
         h.run();
         assert_eq!(h.state().theme_preference, ThemePreference::System);
+    }
+
+    /// Clicking a theme card, or its radio row, picks that theme, not only the mode combo box.
+    #[test]
+    fn clicking_a_theme_card_picks_that_theme() {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        let mut fonts = false;
+        let mut h = Harness::builder().with_size(egui::vec2(640.0, 400.0)).build_ui_state(
+            move |ui, app: &mut PdfCraftApp| {
+                if !fonts {
+                    ui.ctx().set_fonts(theme::font_definitions());
+                    fonts = true;
+                    return;
+                }
+                let t = Tokens::get(ui.ctx());
+                preferences_section(ui, app, &t);
+            },
+            app,
+        );
+        h.run();
+        h.get_by_label("Dark gray").click();
+        h.run();
+        assert_eq!((h.state().theme_preference, h.state().theme), (ThemePreference::Dark, ThemeKind::Dark));
+        // The card's title is not a widget of its own: the click lands on the card.
+        h.get_by_label("Light theme").click();
+        h.run();
+        assert_eq!((h.state().theme_preference, h.state().theme), (ThemePreference::Light, ThemeKind::Light));
     }
 }

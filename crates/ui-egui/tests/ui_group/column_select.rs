@@ -37,14 +37,9 @@ fn harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness<'static, P
         setup(&mut app);
         app
     });
-    for _ in 0..200 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(h.state().views[0].glyph_screen_pos(0, 0).is_some(), "text layer loaded");
+    // Wait for the text layer itself (#1277): under load the first render takes longer than a
+    // fixed second, and nothing may be pending yet before the text layer is asked for.
+    crate::support::wait_until(&mut h, "the page's text layer", |app| app.views[0].glyph_screen_pos(0, 0).is_some() && !app.render_pending());
     h
 }
 

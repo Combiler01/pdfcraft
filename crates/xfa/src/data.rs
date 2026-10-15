@@ -188,6 +188,30 @@ fn som_of(doc: &Document, f: &FieldDatum) -> String {
     doc.get(f.obj).as_dict().and_then(|d| text_of(doc, d, crate::pdf::SOM_KEY)).unwrap_or_else(|| f.name.clone())
 }
 
+/// The datasets text for a radio group. The AcroForm value is an appearance-state name
+/// (`New York` is stored as `New_York`); `/PCOn` on the selected widget is the original item.
+fn radio_dataset_value(doc: &Document, f: &FieldDatum, sel: &Option<String>) -> String {
+    let Some(selected) = sel.as_deref().filter(|s| !s.is_empty() && *s != "Off") else {
+        return String::new();
+    };
+    let Some(group) = doc.get(f.obj).as_dict().cloned() else { return selected.to_string() };
+    let kids = group.get(b"Kids").map(|k| doc.resolve(k)).and_then(|k| k.as_array().cloned()).unwrap_or_else(|| vec![Object::Ref(f.obj)]);
+    for kid in kids {
+        let Some(widget) = doc.resolve(&kid).as_dict().cloned() else { continue };
+        let original = text_of(doc, &widget, b"PCOn");
+        let state = widget
+            .get(b"AP")
+            .map(|ap| doc.resolve(ap))
+            .and_then(|ap| ap.as_dict().and_then(|a| a.get(b"N").cloned()))
+            .and_then(|n| doc.resolve(&n).as_dict().cloned())
+            .and_then(|n| n.iter().map(|(k, _)| String::from_utf8_lossy(k).into_owned()).find(|k| k != "Off"));
+        if state.as_deref() == Some(selected) || original.as_deref() == Some(selected) {
+            return original.unwrap_or_else(|| selected.to_string());
+        }
+    }
+    selected.to_string()
+}
+
 /// The on and off item values of a check box (`/PCItems`), or the widget's on state.
 fn items_of(doc: &Document, f: &FieldDatum) -> (String, String) {
     let d = doc.get(f.obj);
@@ -439,7 +463,7 @@ fn wanted(doc: &Document, fields: &[FieldDatum], tpl: Option<&Template>) -> Vec<
                 let (on_item, off_item) = items_of(doc, f);
                 if *on { on_item } else { off_item }
             }
-            FieldData::Radio(sel) => sel.clone().unwrap_or_default(),
+            FieldData::Radio(sel) => radio_dataset_value(doc, f, sel),
             FieldData::None => continue,
         };
         out.push(Want { som, path, text, ensure: false });

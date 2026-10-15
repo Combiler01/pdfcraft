@@ -267,6 +267,56 @@ fn document_info_edits_round_trip_with_unicode() {
     assert_eq!(info(&doc, "Producer"), None);
 }
 
+/// Page transitions (§12.4.4): written as `/Trans` and `/Dur` with only the entries the style
+/// reads and that differ from the defaults, removed again, checked before any page changes, and
+/// kept through a save.
+#[test]
+fn page_transitions_are_set_removed_and_checked() {
+    let mut doc = open(fixture());
+    let wipe = Transition { duration: 2.5, direction: Some(270), ..Transition::new("Wipe") };
+    set_transition(&mut doc, &[0, 2], &TransitionSpec { transition: Some(wipe), display: Some(5.0) }).unwrap();
+    let d = page_dict(&doc, 0);
+    let t = d.get(b"Trans").and_then(|o| o.as_dict()).expect("/Trans").clone();
+    assert_eq!(t.name(b"Type"), Some(&b"Trans"[..]));
+    assert_eq!(t.name(b"S"), Some(&b"Wipe"[..]));
+    assert_eq!(t.get(b"D"), Some(&Object::Real(2.5)));
+    assert_eq!(t.get(b"Di"), Some(&Object::Int(270)));
+    assert!(
+        t.get(b"Dm").is_none() && t.get(b"M").is_none() && t.get(b"SS").is_none() && t.get(b"B").is_none(),
+        "entries Wipe does not read stay out: {t:?}"
+    );
+    assert_eq!(d.get(b"Dur"), Some(&Object::Real(5.0)));
+    assert!(page_dict(&doc, 1).get(b"Trans").is_none(), "page 2 was not asked for");
+    // Fly with everything non-default; the defaults themselves are not written.
+    let fly = Transition { style: "Fly".into(), duration: 1.0, horizontal: false, inward: false, direction: None, scale: 0.5, opaque: true };
+    set_transition(&mut doc, &[1], &TransitionSpec { transition: Some(fly), display: None }).unwrap();
+    let t = page_dict(&doc, 1).get(b"Trans").and_then(|o| o.as_dict()).expect("/Trans").clone();
+    assert_eq!((t.name(b"S"), t.name(b"M"), t.name(b"Di")), (Some(&b"Fly"[..]), Some(&b"O"[..]), Some(&b"None"[..])));
+    assert_eq!((t.get(b"SS"), t.get(b"B")), (Some(&Object::Real(0.5)), Some(&Object::Bool(true))));
+    assert!(t.get(b"D").is_none() && t.get(b"Dm").is_none(), "{t:?}");
+    // Removed again.
+    set_transition(&mut doc, &[0], &TransitionSpec { transition: None, display: None }).unwrap();
+    let d = page_dict(&doc, 0);
+    assert!(d.get(b"Trans").is_none() && d.get(b"Dur").is_none());
+    // Checked before anything changes.
+    for (what, spec) in [
+        ("style", TransitionSpec { transition: Some(Transition::new("Swirl")), display: None }),
+        ("direction", TransitionSpec { transition: Some(Transition { direction: Some(45), ..Transition::new("Wipe") }), display: None }),
+        ("duration", TransitionSpec { transition: Some(Transition { duration: -1.0, ..Transition::new("Fade") }), display: None }),
+        ("scale", TransitionSpec { transition: Some(Transition { scale: 0.0, ..Transition::new("Fly") }), display: None }),
+        ("display", TransitionSpec { transition: None, display: Some(f32::NAN) }),
+    ] {
+        assert!(set_transition(&mut doc, &[2], &spec).is_err(), "{what} must be refused");
+    }
+    assert!(set_transition(&mut doc, &[7], &TransitionSpec { transition: None, display: None }).is_err(), "no such page");
+    let t = page_dict(&doc, 2).get(b"Trans").and_then(|o| o.as_dict()).expect("page 3 unchanged").clone();
+    assert_eq!(t.name(b"S"), Some(&b"Wipe"[..]));
+    // Kept through a save.
+    let doc = save_and_reopen(&doc);
+    // (A whole number of seconds may come back as an integer: the writer's choice.)
+    assert_eq!(page_dict(&doc, 2).get(b"Dur").and_then(Object::as_f64), Some(5.0));
+}
+
 /// A one-page document whose catalog has `xmp` as its (Flate-compressed) XMP packet, and the
 /// same title and author in `/Info`, as LibreOffice writes them.
 fn doc_with_xmp(xmp: &[u8]) -> Document {
@@ -1052,6 +1102,65 @@ fn combine_nests_source_bookmarks_and_keeps_attachments() {
     assert_eq!(keys, ["notes.txt", "notes.txt (2)"]);
 }
 
+/// Insert Pages from File brings the inserted file's bookmarks along (they used to be dropped),
+/// collapsed under one bookmark named after the file at its first inserted page, placed among the
+/// host's bookmarks where the pages went. Destinations follow the copies; named ones are resolved.
+#[test]
+fn inserting_a_file_brings_its_bookmarks_under_one_named_after_it() {
+    let mut host = open(fixture());
+    add_bookmark(&mut host, &[], 0, "Start", 0).unwrap();
+    add_bookmark(&mut host, &[], 1, "End", 2).unwrap();
+    insert_file_pages(&mut host, &doc_c(), "annex", &[0, 1], 1, FieldConflicts::Rename).unwrap();
+    let host = save_and_reopen(&host);
+    assert_eq!(labels(&host), ["Page 1", "C1", "C2", "Page 2", "Page 3"]);
+    let marks = bookmarks(&host);
+    assert_eq!(titles(&marks), ["Start", "annex[Chapter one[Section]]", "End"]);
+    let page_of = |title: &str| marks.iter().find(|b| b.title == title).and_then(|b| b.page);
+    assert_eq!((page_of("annex"), page_of("Chapter one"), page_of("Section"), page_of("End")), (Some(1), Some(1), Some(2), Some(4)));
+    assert!(!marks.iter().find(|b| b.title == "annex").unwrap().open, "the file's bookmarks start collapsed");
+    // Inserted last, after every bookmark; only the pages chosen keep a destination.
+    let mut host = open(fixture());
+    add_bookmark(&mut host, &[], 0, "Start", 0).unwrap();
+    insert_file_pages(&mut host, &doc_c(), "annex", &[0], 9, FieldConflicts::Rename).unwrap();
+    let marks = bookmarks(&host);
+    assert_eq!(titles(&marks), ["Start", "annex[Chapter one[Section]]"]);
+    assert_eq!(marks.iter().find(|b| b.title == "Section").unwrap().page, None, "its page was left out");
+    // A file without bookmarks adds none, and a host without an outline gets one only when needed.
+    let mut host = open(fixture());
+    insert_file_pages(&mut host, &doc_b(), "plain", &[0], 0, FieldConflicts::Rename).unwrap();
+    assert!(bookmarks(&host).is_empty());
+    assert!(!catalog(&host).contains(b"Outlines"));
+}
+
+/// Bookmarks say where on their page they go, through every kind of destination: explicit,
+/// named (resolved), and a GoTo action's.
+#[test]
+fn bookmarks_report_the_view_their_destination_asks_for() {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /Outlines 5 0 R /Names << /Dests << /Names [(sec) [4 0 R /FitH 300]] >> >> >>".into(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 /MediaBox [0 0 200 400] >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Page /Parent 2 0 R >>".into(),
+        "<< /Type /Outlines /First 6 0 R /Last 9 0 R /Count 4 >>".into(),
+    ];
+    objs.push("<< /Title (Explicit) /Parent 5 0 R /Next 7 0 R /Dest [4 0 R /XYZ 20 250 null] >>".into()); // 6
+    objs.push("<< /Title (Named) /Parent 5 0 R /Prev 6 0 R /Next 8 0 R /Dest (sec) >>".into()); // 7
+    objs.push("<< /Title (Action) /Parent 5 0 R /Prev 7 0 R /Next 9 0 R /A << /S /GoTo /D [3 0 R /FitR 10 20 110 (x) 999] >> >>".into()); // 8
+    objs.push("<< /Title (Nowhere) /Parent 5 0 R /Prev 8 0 R /Dest (missing) >>".into()); // 9
+    let doc = open(build(&objs, "/Root 1 0 R"));
+    type View = Option<(Vec<u8>, Vec<Option<f64>>)>;
+    let views: Vec<(String, Option<usize>, View)> = bookmarks(&doc).into_iter().map(|b| (b.title, b.page, b.view)).collect();
+    assert_eq!(
+        views,
+        [
+            ("Explicit".into(), Some(1), Some((b"XYZ".to_vec(), vec![Some(20.0), Some(250.0), None]))),
+            ("Named".into(), Some(1), Some((b"FitH".to_vec(), vec![Some(300.0)]))),
+            ("Action".into(), Some(0), Some((b"FitR".to_vec(), vec![Some(10.0), Some(20.0), Some(110.0), None]))),
+            ("Nowhere".into(), None, None),
+        ]
+    );
+}
+
 #[test]
 fn combine_and_insert_share_identical_resources() {
     let a = doc_a();
@@ -1392,6 +1501,38 @@ fn number_pages_like_acrobat() {
     assert!(d.get(d.root().unwrap()).as_dict().unwrap().get(b"PageLabels").is_none());
 }
 
+/// Deleting pages moves the label ranges with the pages they label (#2091): later ranges start that
+/// many pages earlier and keep numbering on, a range whose first page went starts on the next page
+/// left, and a range left with no pages gives way to the one after it.
+#[test]
+fn deleting_pages_keeps_the_label_ranges_on_their_pages() {
+    use crate::{LabelRange, LabelStyle::*};
+    let ten = || {
+        let mut d = doc_a();
+        for at in 3..10 {
+            crate::insert_blank_page(&mut d, at, 300.0, 400.0).unwrap();
+        }
+        let ranges = [
+            LabelRange { start: 0, style: LowerRoman, prefix: String::new(), first: 1 },
+            LabelRange { start: 3, style: Decimal, prefix: String::new(), first: 1 },
+            LabelRange { start: 7, style: Decimal, prefix: "A-".into(), first: 1 },
+        ];
+        crate::set_page_label_ranges(&mut d, &ranges).unwrap();
+        assert_eq!(crate::page_labels(&d).unwrap(), ["i", "ii", "iii", "1", "2", "3", "4", "A-1", "A-2", "A-3"]);
+        d
+    };
+    for (deleted, expected) in [
+        (&[4, 5][..], &["i", "ii", "iii", "1", "2", "A-1", "A-2", "A-3"][..]),
+        (&[3], &["i", "ii", "iii", "1", "2", "3", "A-1", "A-2", "A-3"]),
+        (&[3, 4, 5, 6], &["i", "ii", "iii", "A-1", "A-2", "A-3"]),
+    ] {
+        let mut d = ten();
+        crate::delete_pages(&mut d, deleted).unwrap();
+        assert_eq!(crate::page_labels(&d).unwrap(), expected, "after deleting {deleted:?}");
+        assert_eq!(crate::page_labels(&full_roundtrip(&d)).unwrap(), expected, "reopened after deleting {deleted:?}");
+    }
+}
+
 #[test]
 fn page_label_limits_reject_unsupported_edits_before_mutating() {
     use crate::LabelStyle::*;
@@ -1518,6 +1659,38 @@ fn page_label_limits_validate_the_same_ranges_that_are_written() {
     let nums = tree.as_dict().unwrap().get(b"Nums").unwrap().as_array().unwrap();
     assert_eq!(nums[0].as_int(), Some(0));
     assert_eq!(nums[2].as_int(), Some(1));
+}
+
+/// Each label dictionary is its own object, referenced from `/Nums`, as Acrobat writes them. A
+/// direct dictionary is just as valid, but some readers (pdfannots2json, through unipdf) skip it
+/// and fall back to physical page numbers (#1763).
+#[test]
+fn page_labels_are_written_as_indirect_dictionaries() {
+    use crate::{LabelRange, LabelStyle};
+    let mut d = doc_a();
+    let ranges = [
+        LabelRange { start: 0, style: LabelStyle::LowerRoman, prefix: String::new(), first: 1 },
+        LabelRange { start: 1, style: LabelStyle::Decimal, prefix: "A-".into(), first: 324 },
+        LabelRange { start: 2, style: LabelStyle::None, prefix: "Cover".into(), first: 1 },
+    ];
+    crate::set_page_label_ranges(&mut d, &ranges).unwrap();
+    let back = full_roundtrip(&d);
+    let catalog = back.get(back.root().unwrap());
+    let tree = back.resolve(catalog.as_dict().unwrap().get(b"PageLabels").unwrap());
+    let nums = tree.as_dict().unwrap().get(b"Nums").unwrap().as_array().unwrap();
+    assert_eq!(nums.len(), 6);
+    let expected = [(0, Some(b"r".as_slice()), None, None), (1, Some(b"D".as_slice()), Some("A-"), Some(324)), (2, None, Some("Cover"), None)];
+    for (pair, (start, style, prefix, first)) in nums.chunks(2).zip(expected) {
+        assert_eq!(pair[0].as_int(), Some(start));
+        let Object::Ref(r) = &pair[1] else { panic!("the label of page {start} is not an indirect object: {:?}", pair[1]) };
+        let spec = back.get(*r);
+        let spec = spec.as_dict().unwrap();
+        assert_eq!(spec.name(b"S"), style);
+        assert_eq!(spec.get(b"P").and_then(|p| p.as_string()).map(|p| p.to_text()).as_deref(), prefix);
+        assert_eq!(spec.int(b"St"), first);
+    }
+    assert_eq!(crate::page_label_ranges(&back), ranges);
+    assert_eq!(crate::page_labels(&back).unwrap(), ["i", "A-324", "Cover"]);
 }
 
 #[test]
@@ -2025,9 +2198,12 @@ fn extract_still_prunes_separate_resources_when_many_pages_share_a_type3_font() 
     assert_eq!(xobject_names(&part, 0), [b"ImA".to_vec()], "one shared font's direct resource graph is protected once");
 }
 
+// Both sides of the comparison go through the same pdftoppm, so the assertion is about our two
+// documents rather than about Poppler's output, and no Poppler version can change the verdict.
+// It skips where pdftoppm is absent and fails where PDFCRAFT_ORACLES_REQUIRED is set.
 #[test]
-#[ignore = "requires the external Poppler pdftoppm oracle"]
 fn extract_type3_shared_xobjects_matches_poppler_pixels() {
+    let pdftoppm = pdfcraft_oracle::or_skip!(pdfcraft_oracle::pdftoppm());
     let dir = std::env::temp_dir().join(format!("pdfcraft-type3-extract-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let fixtures = [
@@ -2042,7 +2218,7 @@ fn extract_type3_shared_xobjects_matches_poppler_pixels() {
         let render = |doc: &Document, name: &str| {
             let path = dir.join(format!("{i}-{name}.pdf"));
             std::fs::write(&path, write_full(doc, &SaveOptions::default()).unwrap()).unwrap();
-            let output = std::process::Command::new("pdftoppm").args(["-singlefile", "-r", "72", "-gray"]).arg(path).output().unwrap();
+            let output = pdftoppm.command().args(["-singlefile", "-r", "72", "-gray"]).arg(path).output().unwrap();
             assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
             assert!(output.stderr.is_empty(), "{}", String::from_utf8_lossy(&output.stderr));
             output.stdout
@@ -2440,4 +2616,44 @@ fn combine_field_conflicts_previews_each_file_in_order() {
     assert_eq!(preview[0], [], "the first file collides with nothing");
     assert_eq!(preview[1], [("Text1".to_string(), "Text1-1".to_string())]);
     assert_eq!(preview[2], [("Text1".to_string(), "Text1-2".to_string())], "the cascade continues past the earlier rename");
+}
+
+/// #1800: thousands of shallow objects, each referring to the next, used to recurse once per
+/// object and exhaust the stack. The copy is refused instead, and the destination is as it was;
+/// a chain within the budget and a short cycle copy as before.
+#[test]
+fn a_chain_of_objects_too_deep_to_copy_is_refused_and_leaves_the_destination_alone() {
+    fn chained(tail: &[String]) -> Document {
+        let mut b: Vec<String> = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 300 400] >>".into(),
+            "<< /Type /Page /Parent 2 0 R /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Foo 6 0 R >>".into(),
+            body("C1"),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        ];
+        b.extend_from_slice(tail);
+        open(build(&b, "/Root 1 0 R"))
+    }
+    fn chain(n: usize) -> Document {
+        let mut tail: Vec<String> = (0..n).map(|i| format!("<< /Next {} 0 R >>", 7 + i)).collect();
+        tail.push("<< /End true >>".into());
+        chained(&tail)
+    }
+    // On a thread with less stack than any platform's main thread, so the budget is proven.
+    let run = std::thread::Builder::new()
+        .stack_size(512 << 10)
+        .spawn(|| {
+            let mut dst = open(fixture());
+            let before = (labels(&dst), dst.object_numbers());
+            let err = import_pages(&mut dst, &chain(20_000), &[0], 0).unwrap_err();
+            assert!(matches!(&err, OrganizeError::Invalid(m) if m.contains("levels deep")), "{err:?}");
+            assert_eq!((labels(&dst), dst.object_numbers()), before, "the destination is as it was");
+            import_pages(&mut dst, &chain(100), &[0], 0).unwrap();
+            let cycle = chained(&["<< /Next 7 0 R >>".into(), "<< /Next 6 0 R >>".into()]);
+            import_pages(&mut dst, &cycle, &[0], 0).unwrap();
+            assert_eq!(labels(&dst)[..3], ["C1", "C1", "Page 1"]);
+        })
+        .unwrap()
+        .join();
+    assert!(run.is_ok(), "the copy must not overflow the stack");
 }

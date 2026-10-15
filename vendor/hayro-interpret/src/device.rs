@@ -66,6 +66,13 @@ pub trait Device<'a> {
     fn actual_text(&mut self, _text: &[u8]) {}
     /// Called at the end of a marked content sequence (EMC).
     fn end_marked_content(&mut self) {}
+    /// PdfCraft patch (29): the page's annotations are about to be drawn (until
+    /// `end_annotations`), as page content finishes. Devices can use this to treat their
+    /// paints as annotation colours rather than document colours — the reading-colours
+    /// setting replaces document colours only, never the colours a comment was given.
+    fn begin_annotations(&mut self) {}
+    /// PdfCraft patch (29): the page's annotations are done; what follows is page content.
+    fn end_annotations(&mut self) {}
 }
 
 /// A device that discards all drawing operations.

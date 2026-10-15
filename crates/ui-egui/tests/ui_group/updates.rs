@@ -21,13 +21,17 @@ fn harness(answer: Result<&str, &str>) -> Harness<'static, PdfCraftApp> {
     })
 }
 
-/// Run frames until the background check has reported (or give up).
+/// Run frames until the background check has reported. By what the dialog shows, with the
+/// same 30-second deadline as `support::wait_until`, not for a fixed second: under load the
+/// check's thread can take longer (#1277).
 fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
         h.run_steps(2);
         if h.query_by_label_contains("Checking for a newer version").is_none() {
             break;
         }
+        assert!(std::time::Instant::now() < deadline, "timed out waiting for the update check");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     h.run_steps(2);

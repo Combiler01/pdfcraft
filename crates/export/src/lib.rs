@@ -520,6 +520,36 @@ fn layout_number(n: f64) -> f64 {
     if n.is_finite() { n.clamp(-1584.0, 1584.0) } else { 0.0 }
 }
 
+/// Most images a Word export embeds, and most image bytes (the zip writer has 32-bit sizes and
+/// a 16-bit entry count; a hostile PDF must not be able to overflow them).
+const MAX_MEDIA: usize = 1000;
+const MAX_MEDIA_BYTES: usize = 512 << 20;
+
+/// Whether `im` can still be embedded: it has data, and the package stays within its limits.
+fn room_for(media: &[(String, &Image)], im: &Image) -> bool {
+    !im.bytes.is_empty()
+        && media.len() < MAX_MEDIA
+        && media.iter().map(|(_, m)| m.bytes.len()).fold(im.bytes.len(), usize::saturating_add) <= MAX_MEDIA_BYTES
+}
+
+/// Points as EMU (12700 per point); non-finite values are 0.
+fn emu(pt: f64) -> i64 {
+    if pt.is_finite() { (pt * 12700.0).round() as i64 } else { 0 }
+}
+
+/// The `a:graphic` of one picture (DrawingML), rotated by `rotation` degrees when given.
+fn picture_xml(n: usize, name: &str, (cx, cy): (i64, i64), rotation: Option<f64>) -> String {
+    let rot = rotation.map_or(String::new(), |r| format!(" rot=\"{}\"", (r * 60000.0).round() as i64));
+    format!(
+        "<wp:docPr id=\"{n}\" name=\"Picture {n}\"/><wp:cNvGraphicFramePr/>\
+<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
+<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"{n}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
+<pic:blipFill><a:blip r:embed=\"rIdImg{n}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
+<pic:spPr><a:xfrm{rot}><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>\
+</a:graphicData></a:graphic>"
+    )
+}
+
 fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, shape_id: &mut usize) -> String {
     // One 1 pt paragraph anchors the whole page. Shapes never reserve body space, so even a
     // page-sized watermark cannot push the invoice footer onto another page.
@@ -552,13 +582,31 @@ fn positioned_page<'a>(page: &'a Page, media: &mut Vec<(String, &'a Image)>, sha
         ));
     }
     for im in &page.images {
+        if !room_for(media, im) {
+            continue;
+        }
         *shape_id = shape_id.saturating_add(1);
         let n = media.len().saturating_add(1);
         let (w, h) = (layout_number(im.size[0]).max(1.0), layout_number(im.size[1]).max(1.0));
         let (x, y) = (layout_number((im.rect[0] + im.rect[2] - w) / 2.0), layout_number(page.height - (im.rect[1] + im.rect[3] + h) / 2.0));
         let rotation = layout_number(-im.rotation).rem_euclid(360.0);
-        s.push_str(&format!("<w:r><w:pict><v:rect id=\"Image{shape_id}\" style=\"position:absolute;margin-left:{x:.3}pt;margin-top:{y:.3}pt;width:{w:.3}pt;height:{h:.3}pt;rotation:{rotation:.3};z-index:-1;mso-position-horizontal-relative:page;mso-position-vertical-relative:page\" stroked=\"f\"><v:imagedata r:id=\"rIdImg{n}\"/><w10:wrap type=\"none\"/></v:rect></w:pict></w:r>"));
-        media.push((format!("image{n}.{}", im.ext), im));
+        let name = format!("image{n}.{}", im.ext);
+        let pic = picture_xml(n, &name, (emu(w), emu(h)), Some(rotation));
+        // A DrawingML anchor, the way Word itself stores a picture placed behind text: a VML
+        // rectangle with an image does not show the picture.
+        s.push_str(&format!(
+            "<w:r><w:drawing><wp:anchor distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\" simplePos=\"0\" relativeHeight=\"{}\" behindDoc=\"1\" locked=\"0\" layoutInCell=\"1\" allowOverlap=\"1\">\
+<wp:simplePos x=\"0\" y=\"0\"/><wp:positionH relativeFrom=\"page\"><wp:posOffset>{}</wp:posOffset></wp:positionH><wp:positionV relativeFrom=\"page\"><wp:posOffset>{}</wp:posOffset></wp:positionV>\
+<wp:extent cx=\"{}\" cy=\"{}\"/><wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/><wp:wrapNone/>",
+            n.saturating_add(1),
+            emu(x),
+            emu(y),
+            emu(w),
+            emu(h),
+        ));
+        s.push_str(&pic);
+        s.push_str("</wp:anchor></w:drawing></w:r>");
+        media.push((name, im));
     }
     s.push_str("</w:p>");
     s
@@ -612,21 +660,18 @@ pub fn docx(pages: &[Page], title: &str) -> Vec<u8> {
                         body.push_str(&docx_table(t));
                     }
                     Item::Img(im) => {
-                        let n = media.len() + 1;
-                        let name = format!("image{n}.{}", im.ext);
-                        // Size on the page, in EMU (12700 per point), at most the text width.
-                        let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
-                        let k = (text_w / w).min(1.0);
-                        let (cx, cy) = ((w * k * 12700.0) as i64, (h * k * 12700.0) as i64);
-                        body.push_str(&format!(
-                    "<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:docPr id=\"{n}\" name=\"Picture {n}\"/>\
-<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">\
-<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:nvPicPr><pic:cNvPr id=\"{n}\" name=\"{name}\"/><pic:cNvPicPr/></pic:nvPicPr>\
-<pic:blipFill><a:blip r:embed=\"rIdImg{n}\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>\
-<pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>\
-</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"
-                ));
-                        media.push((name, im));
+                        if room_for(&media, im) {
+                            let n = media.len() + 1;
+                            let name = format!("image{n}.{}", im.ext);
+                            // Size on the page, at most the text width.
+                            let (w, h) = ((im.rect[2] - im.rect[0]).max(1.0), (im.rect[3] - im.rect[1]).max(1.0));
+                            let k = (text_w / w).min(1.0);
+                            let (cx, cy) = (emu(w * k), emu(h * k));
+                            body.push_str(&format!("<w:p><w:r><w:drawing><wp:inline><wp:extent cx=\"{cx}\" cy=\"{cy}\"/>"));
+                            body.push_str(&picture_xml(n, &name, (cx, cy), None));
+                            body.push_str("</wp:inline></w:drawing></w:r></w:p>");
+                            media.push((name, im));
+                        }
                     }
                     Item::PageBreak => body.push_str("<w:p><w:r><w:br w:type=\"page\"/></w:r></w:p>"),
                 }
@@ -907,8 +952,9 @@ mod tests {
         assert!(xml.contains("margin-left:72.000pt;margin-top:160.000pt"), "Meter field keeps its source position: {xml}");
         let watermark = xml.split(">DRAFT</w:t>").next().unwrap().rsplit("<v:rect ").next().unwrap();
         assert!(watermark.contains("z-index:-2"), "watermark is behind foreground graphics");
-        let image = xml.split("<v:imagedata ").next().unwrap().rsplit("<v:rect ").next().unwrap();
-        assert!(image.contains("z-index:-1"), "foreground graphics cover the watermark");
+        // The picture is a DrawingML anchor behind the text (a VML rectangle shows no picture in Word).
+        assert!(!xml.contains("<v:imagedata"), "{xml}");
+        assert!(xml.contains("<wp:anchor ") && xml.contains("behindDoc=\"1\"") && xml.contains("<a:blip r:embed=\"rIdImg1\"/>"), "{xml}");
     }
 
     #[test]
@@ -1164,5 +1210,43 @@ mod tests {
         };
         let h = html(&[p], "Paper");
         assert!(!h.contains("<table>"), "tall two-column text must stay paragraphs: {h}");
+    }
+
+    /// #1936: every picture Word is told to draw (`r:embed`) names a relationship whose target is a
+    /// file in the package, with a content type; JPEG pictures too, inline or placed.
+    #[test]
+    fn word_pictures_resolve_to_media_in_the_package() {
+        let jpeg = Image { ext: "jpg", bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], ..page().images[0].clone() };
+        for placed in [false, true] {
+            let mut p = page();
+            p.images = vec![jpeg.clone()];
+            if placed {
+                p.images[0].rect = [72.0, 640.0, 272.0, 790.0];
+                p.blocks[0].rect = [72.0, 700.0, 300.0, 760.0];
+            }
+            let zip = docx(&[p], "T");
+            let xml = part(&zip, "word/document.xml");
+            assert_eq!(xml.contains("<wp:anchor "), placed, "{xml}");
+            let rels = part(&zip, "word/_rels/document.xml.rels");
+            let embed = xml.split("r:embed=\"").nth(1).and_then(|r| r.split('"').next()).unwrap();
+            let rel = rels.split(&format!("Id=\"{embed}\"")).nth(1).unwrap();
+            assert!(rel.contains("relationships/image\""), "{rels}");
+            let target = rel.split("Target=\"").nth(1).and_then(|t| t.split('"').next()).unwrap();
+            assert_eq!(target, "media/image1.jpg");
+            assert!(zip.windows(21).any(|w| w == b"word/media/image1.jpg"));
+            assert!(part(&zip, "[Content_Types].xml").contains("Extension=\"jpg\" ContentType=\"image/jpeg\""));
+            assert!(xml.matches("<wp:docPr ").count() == 1 && !xml.contains("<v:imagedata"));
+        }
+    }
+
+    #[test]
+    fn word_export_bounds_the_number_of_pictures_and_skips_empty_ones() {
+        let mut p = page();
+        let one = p.images[0].clone();
+        p.images = vec![Image { bytes: Vec::new(), ..one.clone() }];
+        p.images.extend(std::iter::repeat_n(one, MAX_MEDIA + 10));
+        let zip = docx(&[p], "T");
+        let rels = part(&zip, "word/_rels/document.xml.rels");
+        assert_eq!(rels.matches("relationships/image\"").count(), MAX_MEDIA);
     }
 }

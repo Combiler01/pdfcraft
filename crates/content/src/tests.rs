@@ -39,6 +39,171 @@ fn inline_images_stay_whole() {
 }
 
 #[test]
+fn unfiltered_inline_image_keeps_whitespace_bounded_ei_pixels() {
+    let src = b"q 4 0 0 1 0 0 cm BI /W 4 /H 1 /BPC 8 /CS /G ID  EI \nEI Q";
+    let parsed = parse(src);
+    assert_eq!(parsed.ops[2].inline.as_ref().unwrap().1, b" EI ");
+    assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), [b"q".as_slice(), b"cm", b"BI", b"Q"]);
+    let rewritten = serialize_ops(&parsed.ops);
+    assert_eq!(parse(&rewritten).ops[2].inline, parsed.ops[2].inline);
+}
+
+fn inline_pixels(parameters: &[u8], pixels: &[u8]) -> Parsed {
+    let mut src = b"q BI ".to_vec();
+    src.extend_from_slice(parameters);
+    src.extend_from_slice(b" ID ");
+    src.extend_from_slice(pixels);
+    src.extend_from_slice(b"\nEI Q");
+    parse(&src)
+}
+
+#[test]
+fn unfiltered_inline_image_lengths_use_components_and_parameter_aliases() {
+    for (parameters, pixels) in [
+        (b"/W 4 /H 1 /CS /G /BPC 8".as_slice(), b" EI ".as_slice()),
+        (b"/W 4 /H 1 /CS /G /BPC 8 /Filter null", b" EI "),
+        (b"/W 4 /H 1 /CS /G /BPC 8 /F []", b" EI "),
+        (b"/W 4 /Width 4 /H 1 /CS /G /BPC 8", b" EI "),
+        (b"/Width 4 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", b" EI "),
+        (b"/W 2 /H 1 /CS /RGB /BPC 8", b"\0 EI \xff"),
+        (b"/Width 2 /Height 1 /ColorSpace /DeviceRGB /BitsPerComponent 8", b"\0 EI \xff"),
+        (b"/W 1 /H 1 /CS /CMYK /BPC 8", b" EI "),
+        (b"/Width 1 /Height 1 /ColorSpace /DeviceCMYK /BitsPerComponent 8", b" EI "),
+    ] {
+        let parsed = inline_pixels(parameters, pixels);
+        assert_eq!(parsed.skipped, 0);
+        assert_eq!(parsed.ops.iter().map(|op| op.op.as_slice()).collect::<Vec<_>>(), [b"q".as_slice(), b"BI", b"Q"]);
+        assert_eq!(parsed.ops[1].inline.as_ref().unwrap().1, pixels);
+        assert_eq!(parse(&serialize_ops(&parsed.ops)).ops[1].inline, parsed.ops[1].inline);
+    }
+}
+
+#[test]
+fn unfiltered_inline_image_rows_are_byte_aligned_for_every_sample_depth() {
+    // Two rows of two bytes each. Padding belongs to each row, not only the final row.
+    for (bits, width) in [(1, 9), (2, 5), (4, 3), (8, 2), (16, 1)] {
+        let parameters = format!("/W {width} /H 2 /BPC {bits} /CS /G");
+        let parsed = inline_pixels(parameters.as_bytes(), b" EI ");
+        assert_eq!(parsed.ops[1].inline.as_ref().unwrap().1, b" EI ", "bits={bits}");
+        assert_eq!(parsed.ops.len(), 3);
+    }
+}
+
+#[test]
+fn unfiltered_inline_masks_default_to_one_bit_and_indexed_images_have_one_component() {
+    for parameters in [b"/W 9 /H 2 /IM true".as_slice(), b"/Width 9 /Height 2 /ImageMask true /BitsPerComponent 1"] {
+        let parsed = inline_pixels(parameters, b" EI ");
+        assert_eq!(parsed.ops[1].inline.as_ref().unwrap().1, b" EI ");
+        assert_eq!(parsed.ops.len(), 3);
+    }
+    for name in ["Indexed", "I"] {
+        // A valid 256-entry RGB lookup table; samples are indices regardless of the base space.
+        let parameters = format!("/W 4 /H 1 /BPC 8 /CS [/{name} /DeviceRGB 255 <{}>]", "00".repeat(768));
+        let parsed = inline_pixels(parameters.as_bytes(), b" EI ");
+        assert_eq!(parsed.ops[1].inline.as_ref().unwrap().1, b" EI ");
+        assert_eq!(parsed.ops.len(), 3);
+        // Indexed samples permit at most 8 bits, even though device spaces permit 16.
+        let invalid = parameters.replace("/W 4", "/W 2").replace("/BPC 8", "/BPC 16");
+        let parsed = inline_pixels(invalid.as_bytes(), b" EI ");
+        assert!(parsed.ops[1].inline.as_ref().unwrap().1.is_empty());
+    }
+}
+
+#[test]
+fn unfiltered_inline_image_terminator_must_follow_its_samples() {
+    for separator in [b" ".as_slice(), b"\r\n", b"\0\t\x0c\n"] {
+        let mut src = b"BI /W 4 /H 1 /BPC 8 /CS /G ID  EI ".to_vec();
+        src.extend_from_slice(separator);
+        src.extend_from_slice(b"EI/Q q");
+        let parsed = parse(&src);
+        assert_eq!(parsed.ops[0].inline.as_ref().unwrap().1, b" EI ");
+        assert_eq!(&src[parsed.ops[0].span.clone()], &src[..src.len() - b"/Q q".len()]);
+    }
+    let parsed = parse(b"BI /W 4 /H 1 /BPC 8 /CS /G ID  EI \nEI");
+    assert_eq!(parsed.ops[0].inline.as_ref().unwrap().1, b" EI ");
+    // EI is a keyword: a prefix of a larger token is not a terminator.
+    let parsed = parse(b"BI /W 4 /H 1 /BPC 8 /CS /G ID abcd EIx\nEI Q");
+    assert_eq!(parsed.ops[0].inline.as_ref().unwrap().1, b"abcd EIx");
+}
+
+#[test]
+fn filtered_unknown_and_damaged_inline_images_keep_the_existing_fallback() {
+    for parameters in [
+        b"/W 4 /H 1 /BPC 8 /CS /G /F /A85".as_slice(),
+        b"/W 4 /H 1 /BPC 8 /CS /ResourceColor",
+        b"/W 0 /H 1 /BPC 8 /CS /G",
+        b"/W -1 /H 1 /BPC 8 /CS /G",
+        b"/W 4 /H -1 /BPC 8 /CS /G",
+        b"/W 4 /H 1 /BPC 3 /CS /G",
+        b"/W 4 /H 1 /IM true /BPC 8",
+        b"/W 4 /H 1 /IM true /BPC /Bad",
+        b"/Width 4 /W 1 /H 1 /BPC 8 /CS /G",
+        b"/W 4 /H 1 /BPC 8 /CS /G /ImageMask false /IM true",
+        b"/W 9223372036854775807 /H 9223372036854775807 /BPC 16 /CS /CMYK",
+        b"/W 9223372036854775807 /H 2 /BPC 8 /CS /G",
+    ] {
+        let parsed = inline_pixels(parameters, b"! EI !!~>");
+        assert_eq!(parsed.ops[1].inline.as_ref().unwrap().1, b"!", "{}", String::from_utf8_lossy(parameters));
+    }
+    // A short payload still uses the tolerant recovery, including when there is no EI.
+    for src in [b"BI /W 4 /H 1 /BPC 8 /CS /G ID abc\nEI Q".as_slice(), b"BI /W 4 /H 1 /BPC 8 /CS /G ID abc"] {
+        assert_eq!(parse(src).ops[0].inline.as_ref().unwrap().1, b"abc");
+    }
+}
+
+fn inline_pdf(content: &[u8], object_streams: bool) -> Vec<u8> {
+    use pdfcraft_cos::{Document, SaveOptions, Stream, write_full};
+
+    let mut doc = Document::new_empty();
+    let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), content)));
+    let page = doc.add(Object::Dict(
+        [
+            (b"Type".to_vec(), Object::name("Page")),
+            (b"Parent".to_vec(), Object::Ref(pages)),
+            (b"MediaBox".to_vec(), Object::Array([0, 0, 4, 1].map(Object::Int).to_vec())),
+            (b"Resources".to_vec(), Object::Dict(Dict::new())),
+            (b"Contents".to_vec(), Object::Ref(contents)),
+        ]
+        .into_iter()
+        .collect(),
+    ));
+    doc.update_dict(pages, |dict| {
+        dict.set(b"Kids".to_vec(), Object::Array(vec![Object::Ref(page)]));
+        dict.set(b"Count".to_vec(), Object::Int(1));
+    })
+    .unwrap();
+    write_full(&doc, &SaveOptions { object_streams, ..SaveOptions::default() }).unwrap()
+}
+
+#[test]
+fn rewritten_inline_image_pixels_survive_saving_and_reopening_a_pdf() {
+    use pdfcraft_cos::{Document, Object};
+    use std::sync::Arc;
+
+    let original = b"q 4 0 0 1 0 0 cm BI /W 4 /H 1 /BPC 8 /CS /G ID  EI \nEI Q";
+    let rewritten = serialize_ops(&parse(original).ops);
+    for object_streams in [false, true] {
+        let bytes = inline_pdf(&rewritten, object_streams);
+        let doc = Document::open(Arc::new(bytes.clone())).unwrap();
+        assert!(doc.repair_log().is_empty());
+        let pages = doc.get(doc.root().unwrap()).as_dict().unwrap().reference(b"Pages").unwrap();
+        let pages = doc.get(pages);
+        let page = doc.resolve(&pages.as_dict().unwrap().get(b"Kids").unwrap().as_array().unwrap()[0]);
+        let content = doc.resolve(page.as_dict().unwrap().get(b"Contents").unwrap());
+        let Object::Stream(stream) = &*content else { panic!("page content stream") };
+        assert_eq!(parse(&stream.decoded_strict().unwrap()).ops[2].inline.as_ref().unwrap().1, b" EI ");
+        // Opt-in artifacts for independent readers/renderers; synthetic PDFs are never committed.
+        if let Some(dir) = std::env::var_os("PDFCRAFT_INLINE_FIXTURE_DIR") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("original.pdf"), inline_pdf(original, false)).unwrap();
+            std::fs::write(dir.join(if object_streams { "rewritten-packed.pdf" } else { "rewritten-classic.pdf" }), bytes).unwrap();
+        }
+    }
+}
+
+#[test]
 fn damage_is_skipped_not_fatal() {
     let p = parse(b"1 0 0 RG ) ] 10 20 m 30 40 l S (unterminated");
     let names: Vec<&[u8]> = p.ops.iter().map(|o| o.op.as_slice()).collect();

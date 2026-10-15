@@ -220,6 +220,10 @@ pub const SYSTEM_FALLBACK: &str = "system-fallback";
 pub const SYSTEM_DEVANAGARI_FALLBACK: &str = "system-devanagari-fallback";
 /// The name of the installed Telugu face [`installed_font_definitions`] may add.
 pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
+/// The name of the installed Sinhala face [`installed_font_definitions`] may add.
+pub const SYSTEM_SINHALA_FALLBACK: &str = "system-sinhala-fallback";
+/// The name of the installed Tamil face [`installed_font_definitions`] may add.
+pub const SYSTEM_TAMIL_FALLBACK: &str = "system-tamil-fallback";
 
 /// What [`install_fonts_for`] installs: [`font_definitions_for`], then, on desktop, one face
 /// already installed on this machine. It only draws characters no embedded face has.
@@ -232,8 +236,9 @@ pub const SYSTEM_TELUGU_FALLBACK: &str = "system-telugu-fallback";
 /// - Otherwise it is the last fallback of every family (an Arabic file name in a build without
 ///   craft-fonts).
 ///
-/// An installed Devanagari face and an installed Telugu face, when there are, end every family
-/// just before that one, so Hindi and Telugu text draw in a build without such faces (#1531).
+/// Installed Devanagari, Telugu, Sinhala and Tamil faces, when there are, end every family just
+/// before that one, so Hindi, Telugu (#1531), Sinhala and Tamil (#1688) text, such as a file
+/// name, draws in a build without such faces.
 ///
 /// `PDFCRAFT_SYSTEM_FONTS=0` leaves them out.
 pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
@@ -246,6 +251,8 @@ pub fn installed_font_definitions(cjk: CjkPreference) -> FontDefinitions {
         for (name, data) in [
             (SYSTEM_DEVANAGARI_FALLBACK, crate::system_fonts::devanagari_fallback()),
             (SYSTEM_TELUGU_FALLBACK, crate::system_fonts::telugu_fallback()),
+            (SYSTEM_SINHALA_FALLBACK, crate::system_fonts::sinhala_fallback()),
+            (SYSTEM_TAMIL_FALLBACK, crate::system_fonts::tamil_fallback()),
         ] {
             let Some(data) = data else { continue };
             fonts.font_data.insert(name.to_owned(), data);
@@ -308,6 +315,40 @@ fn primary_font_tweak(platform: FontPolicyPlatform, name: &str) -> FontTweak {
     tweak
 }
 
+/// A face's vertical metrics in em, as egui reads them: skrifa's ascent, descent (negative) and
+/// line gap at the default location. `None` when the face doesn't parse.
+fn vertical_metrics(bytes: &[u8], index: u32) -> Option<[f32; 3]> {
+    use skrifa::MetadataProvider as _;
+    let font = skrifa::FontRef::from_index(bytes, index).ok()?;
+    let m = font.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    let em = f32::from(m.units_per_em);
+    let metrics = [m.ascent / em, m.descent / em, m.leading / em];
+    (em > 0.0 && metrics.iter().all(|v| v.is_finite())).then_some(metrics)
+}
+
+/// How far below the primary face's baseline egui draws a fallback face's, in em of the font size
+/// (negative: above). egui centres the fallback's line box (ascent − descent + gap) on the
+/// primary's rather than lining up their baselines, so the baseline moves by half the difference
+/// of ascent + descent, less half the difference of the line gaps (epaint `text_layout`).
+fn baseline_drop(primary: [f32; 3], fallback: [f32; 3]) -> f32 {
+    let [pa, pd, pg] = primary;
+    let [a, d, g] = fallback;
+    ((a + d) - (pa + pd) + pg - g) / 2.0
+}
+
+/// `data` with its glyphs moved onto Inter's baseline (#1676). Without this, Chinese next to Latin
+/// in one label sits higher or lower than the Latin by a few percent of the font size, depending on
+/// the installed Chinese face (PingFang, Microsoft JhengHei, SimSun…). Inter is the first face of
+/// every proportional family; the monospace family's JetBrains Mono differs from it by 0.004 em,
+/// well under a pixel. A face that doesn't parse is left as it is (egui will skip it anyway).
+pub(crate) fn on_interface_baseline(mut data: FontData) -> FontData {
+    let primary = vertical_metrics(pdfcraft_fonts::INTER_REGULAR, 0);
+    if let (Some(primary), Some(fallback)) = (primary, vertical_metrics(&data.font, data.index)) {
+        data.tweak.y_offset_factor = -baseline_drop(primary, fallback);
+    }
+    data
+}
+
 fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
@@ -315,7 +356,7 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
         let data = if ["Inter", "Inter-Medium", "Inter-SemiBold", "JetBrainsMono"].contains(&name) {
             data.tweak(primary_font_tweak(platform, name))
         } else {
-            data
+            on_interface_baseline(data)
         };
         fonts.font_data.insert(name.to_owned(), Arc::new(data));
     };
@@ -547,6 +588,39 @@ mod tests {
             },
             font_definitions_for_platform(false, platform),
         )
+    }
+
+    /// The baseline of each glyph of `text` laid out by egui at `size` points, in points from the
+    /// top of the row: its position plus its face's `y_offset_factor`, as epaint draws it.
+    fn baselines(fallback: FontData, size: f32, text: &str) -> Vec<f32> {
+        let factor = fallback.tweak.y_offset_factor;
+        let mut defs = FontDefinitions::empty();
+        defs.font_data.insert("Inter".into(), Arc::new(FontData::from_static(pdfcraft_fonts::INTER_REGULAR)));
+        defs.font_data.insert("fallback".into(), Arc::new(fallback));
+        defs.families.insert(FontFamily::Proportional, vec!["Inter".into(), "fallback".into()]);
+        let mut fonts = Fonts::new(TextOptions::default(), defs);
+        let g = galley(&mut fonts, FontFamily::Proportional, size, 1.0, text);
+        let inter_has = |c: char| c.is_ascii();
+        g.rows[0].glyphs.iter().map(|gl| gl.pos.y + if inter_has(gl.chr) { 0.0 } else { size * factor }).collect()
+    }
+
+    #[test]
+    fn fallback_faces_share_the_interface_baseline() {
+        // Dancing Script's metrics differ from Inter's the way a Chinese face's do (by 0.044 em),
+        // and it has letters Inter doesn't (Ǆ), which egui then takes from it.
+        let dancing: &'static [u8] = include_bytes!("../../../assets/fonts/DancingScript.ttf");
+        let size = 100.0;
+        // As egui lays it out by itself, Ǆ sits ~4 pt off H's baseline: the bug (#1676).
+        let raw = baselines(FontData::from_static(dancing), size, "HǄ");
+        assert!((raw[1] - raw[0]).abs() > 3.0, "the test fonts must differ: {raw:?}");
+        let drop = baseline_drop(vertical_metrics(pdfcraft_fonts::INTER_REGULAR, 0).unwrap(), vertical_metrics(dancing, 0).unwrap());
+        assert!((raw[1] - raw[0] - size * drop).abs() <= 1.0, "baseline_drop predicts egui: {raw:?} vs {drop}");
+        // On the interface baseline, to the pixel.
+        let aligned = baselines(on_interface_baseline(FontData::from_static(dancing)), size, "HǄ");
+        assert!((aligned[1] - aligned[0]).abs() <= 1.0, "{aligned:?}");
+        // A face that doesn't parse is left alone rather than guessed at.
+        assert_eq!(on_interface_baseline(FontData::from_static(b"not a font")).tweak, FontTweak::default());
+        assert_eq!(vertical_metrics(b"", 0), None);
     }
 
     #[test]

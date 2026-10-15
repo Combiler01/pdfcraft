@@ -247,6 +247,10 @@ pub struct FileWatch {
     inline: Watcher,
     /// The version of each document's file that PdfCraft last read or wrote.
     known: HashMap<DocId, Stamp>,
+    /// The version each document came from (its open, reload or last save). Unlike `known`,
+    /// a version found on disk and not applied (the document had unsaved changes) is not
+    /// recorded here, so Save can tell that the file is not the one the document came from.
+    basis: HashMap<DocId, Stamp>,
     /// How many times PdfCraft has read or written each document's file: a version the watcher
     /// found before the latest one is older than the document in memory, and is not applied
     /// (#1802).
@@ -259,18 +263,27 @@ impl FileWatch {
     /// PdfCraft read or wrote `path` for `doc`: that version is not a change, and anything the
     /// watcher found before it is stale.
     pub fn known_now(&mut self, doc: DocId, path: &str) {
-        if let Some(stamp) = Stamp::at(path) {
-            self.known.insert(doc, stamp);
-        }
-        self.bump(doc);
+        self.known_as(doc, Stamp::at(path));
     }
 
     /// Remember `stamp`, read before the file was, for `doc`.
     pub fn known_as(&mut self, doc: DocId, stamp: Option<Stamp>) {
         if let Some(stamp) = stamp {
             self.known.insert(doc, stamp);
+            self.basis.insert(doc, stamp);
         }
         self.bump(doc);
+    }
+
+    /// Whether the file at `path` is another version than the one `doc` came from: something
+    /// else wrote it since the document was opened, reloaded or last saved (#2166). A file
+    /// that is missing or can't be looked at, or a document whose version was never recorded,
+    /// is not a difference.
+    pub fn disk_differs(&self, doc: DocId, path: &str) -> bool {
+        match (Stamp::at(path), self.basis.get(&doc)) {
+            (Some(now), Some(basis)) => now != *basis,
+            _ => false,
+        }
     }
 
     fn bump(&mut self, doc: DocId) {
@@ -307,6 +320,7 @@ impl PdfCraftApp {
             let list: Vec<Watched> = self.watched().map(|(doc, path, known, epoch)| Watched { doc, path: path.to_owned(), known, epoch }).collect();
             let open: Vec<DocId> = self.views.iter().map(|v| v.id).collect();
             self.watch.known.retain(|doc, _| open.contains(doc));
+            self.watch.basis.retain(|doc, _| open.contains(doc));
             self.watch.epoch.retain(|doc, _| open.contains(doc));
             if self.send_to_watcher(list.clone()) {
                 self.watch.sent = list;
@@ -514,7 +528,12 @@ mod tests {
         let app = h.state_mut();
         app.views[0].select_pages(&[0]);
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
-        assert!(app.save_active(SaveTarget::InPlace), "saved version C");
+        // B is on disk, not the A the document came from: Save asks first (#2166), and the
+        // user saves C over it.
+        assert!(!app.save_active(SaveTarget::InPlace), "asks before writing over B");
+        app.overwrite_changed_file();
+        assert!(!doc(&h).dirty, "saved version C");
+        let app = h.state_mut();
         app.watch.found.lock().unwrap().extend(stale);
         h.run_steps(3);
         let d = doc(&h);

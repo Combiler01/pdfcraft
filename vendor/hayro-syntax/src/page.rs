@@ -558,9 +558,17 @@ impl<'a> Page<'a> {
         {
             (A4.width() as f32, A4.height() as f32)
         } else {
+            // PdfCraft patch: retain a one-point floor after UserUnit, not one raw unit.
+            // The stored unit is finite and within 1..=75000. Round upward only if the
+            // reciprocal's f32 product would fall below one and trigger a placeholder.
+            let mut raw_floor = 1.0 / self.user_unit;
+            if raw_floor * self.user_unit < 1.0 {
+                raw_floor = raw_floor.next_up();
+            }
+            let raw_floor = f64::from(raw_floor);
             (
-                crop_box.width().max(1.0) as f32,
-                crop_box.height().max(1.0) as f32,
+                crop_box.width().max(raw_floor) as f32,
+                crop_box.height().max(raw_floor) as f32,
             )
         }
     }

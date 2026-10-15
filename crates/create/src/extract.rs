@@ -179,8 +179,9 @@ fn image(doc: &Document, s: &Stream) -> Result<(&'static str, Vec<u8>), String> 
             Space::Gray => rgb.extend_from_slice(&[v(0); 3]),
             Space::Rgb => rgb.extend_from_slice(&[v(0), v(1), v(2)]),
             Space::Cmyk => rgb.extend_from_slice(&cmyk(v(0), v(1), v(2), v(3))),
-            Space::Indexed(base, table) => {
-                let i = px.first().copied().unwrap_or(0) as usize;
+            Space::Indexed(base, hival, table) => {
+                // Indexed samples outside the declared range use the nearest endpoint (ISO 32000-1, 8.6.6.3).
+                let i = px.first().copied().unwrap_or(0).min(*hival) as usize;
                 let k = base.components();
                 let e = table.get(i * k..i * k + k).unwrap_or(&[0, 0, 0, 0][..k]);
                 rgb.extend_from_slice(&match **base {
@@ -310,8 +311,8 @@ enum Space {
     Gray,
     Rgb,
     Cmyk,
-    /// Base space and lookup table (one byte per base component).
-    Indexed(Box<Space>, Vec<u8>),
+    /// Base space, highest valid palette index, and lookup table.
+    Indexed(Box<Space>, u8, Vec<u8>),
 }
 
 impl Space {
@@ -352,12 +353,16 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 if matches!(base, Space::Indexed(..)) {
                     return Err("nested indexed colour spaces aren't valid".into());
                 }
+                let hival = match a.get(2).map(|value| doc.resolve(value)).as_deref() {
+                    Some(Object::Int(value)) if (0..=255).contains(value) => *value as u8,
+                    _ => return Err("an indexed colour space with an invalid hival".into()),
+                };
                 let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
                     Some(Object::Stream(t)) => t.decoded().map_err(|e| e.to_string())?,
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
-                Ok(Space::Indexed(Box::new(base), table))
+                Ok(Space::Indexed(Box::new(base), hival, table))
             }
             Some(other) => unsupported(other),
             None => Err("a damaged colour space".into()),

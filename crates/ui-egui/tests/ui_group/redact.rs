@@ -107,6 +107,95 @@ fn redaction_codes_become_the_overlay_text() {
     assert_eq!(h.state().redact_prefs.overlay_text(), "CONFIDENTIAL", "custom text is kept while codes are used");
 }
 
+/// The Redaction Tool Properties are the next run's too, like every other tool's defaults
+/// (Acrobat's "Make Properties Default" without the box): fill, overlay text or codes, the
+/// text's look, and the mark's outline colour and opacity all come back from the settings.
+#[test]
+fn redaction_properties_survive_a_restart() {
+    let mut h = harness();
+    {
+        let p = &mut h.state_mut().redact_prefs;
+        p.fill = None;
+        p.use_overlay = true;
+        p.use_code = true;
+        p.code_set = pdfcraft_engine::REDACTION_CODE_SETS[0];
+        p.codes = vec!["(b)(6)", "(b)(7)(C)"];
+        p.overlay = "CONFIDENTIAL".into();
+        p.look.font = pdfcraft_engine::OverlayFont::Courier;
+        p.look.size = 12.0;
+        p.look.color = [0.0, 0.0, 1.0];
+        p.look.align = 2;
+        p.look.repeat = true;
+        p.outline = [0.0, 0.5, 0.0];
+        p.hover_fill = [1.0, 1.0, 0.0];
+        p.opacity = 0.4;
+    }
+    // The defaults are what OK with "Make properties default" ticked leaves: go through the
+    // dialog.
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(6);
+    h.get_by_label("Make properties default");
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    let json = h.state().persist();
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&json);
+    let p = &fresh.redact_prefs;
+    assert_eq!(p.fill, None, "no colour is a saved choice, not a missing one");
+    assert_eq!(p.overlay_text(), "(b)(6), (b)(7)(C)");
+    assert_eq!(p.overlay, "CONFIDENTIAL");
+    assert_eq!(p.look.font, pdfcraft_engine::OverlayFont::Courier);
+    assert_eq!((p.look.size, p.look.color, p.look.align, p.look.repeat), (12.0, [0.0, 0.0, 1.0], 2, true));
+    assert_eq!((p.outline, p.hover_fill, p.opacity), ([0.0, 0.5, 0.0], [1.0, 1.0, 0.0], 0.4));
+    // The next mark takes the outline and opacity.
+    let pdfcraft_engine::Edit::AddAnnotation(a) = p.mark(0, vec![pdfcraft_engine::rect_quad([10.0, 10.0, 50.0, 30.0])], "T") else {
+        panic!("a mark adds an annotation")
+    };
+    assert_eq!((a.style.color, a.style.opacity, a.style.fill), ([0.0, 0.5, 0.0], 0.4, None));
+    // Settings are untrusted: a bad colour, an unknown code set and a code outside the set are
+    // dropped, the rest kept.
+    let mut odd = PdfCraftApp::new();
+    odd.restore(
+        r#"{"redact_prefs":{"outline":[2,0,0],"opacity":0.7,"code_set":"nope","codes":["(b)(6)","bogus"],"use_overlay":true,"use_code":true}}"#,
+    );
+    let p = &odd.redact_prefs;
+    assert_eq!((p.outline, p.opacity), ([0.89, 0.13, 0.13], 0.7));
+    assert_eq!(p.code_set.id, pdfcraft_engine::REDACTION_CODE_SETS[0].id);
+    assert_eq!(p.overlay_text(), "(b)(6)");
+}
+
+/// "Make properties default" off: OK keeps the values for this run only, the saved defaults
+/// stay what they were; Cancel puts back what the dialog opened with.
+#[test]
+fn redaction_properties_for_this_run_only_and_cancel() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(6);
+    h.get_by_label("Redaction mark appearance");
+    h.get_by_label("Outline colour:");
+    h.get_by_label("Fill colour:");
+    h.get_by_label("Opacity:");
+    h.get_by_label("Make properties default").click();
+    h.run_steps(3);
+    assert!(!h.state().redact_prefs.remember);
+    h.state_mut().redact_prefs.outline = [0.0, 0.0, 1.0];
+    h.get_by_label("OK").click();
+    h.run_steps(2);
+    assert_eq!(h.state().redact_prefs.outline, [0.0, 0.0, 1.0], "used for this run");
+    assert_eq!(h.state().redact_defaults.outline, [0.89, 0.13, 0.13], "not made the default");
+    let mut fresh = PdfCraftApp::new();
+    fresh.restore(&h.state().persist());
+    assert_eq!(fresh.redact_prefs.outline, [0.89, 0.13, 0.13], "the next run starts from the saved defaults");
+    // Cancel discards the edits made while the dialog was open.
+    assert!(h.state_mut().execute("redact.properties"));
+    h.run_steps(2);
+    h.state_mut().redact_prefs.opacity = 0.2;
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert_eq!(h.state().redact_prefs.opacity, 1.0, "cancelled");
+    assert_eq!(h.state().redact_prefs.outline, [0.0, 0.0, 1.0], "the run's values stay");
+}
+
 #[test]
 fn redacting_an_imported_word_list() {
     let memo = pdfcraft_engine::Session::new().create_from_text("memo", "Call Ada today\nAda is private\nPublic line").unwrap().to_vec();

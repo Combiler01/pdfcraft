@@ -1,8 +1,9 @@
 //! Prepare a form: create, change and delete fields (execution plan M6.6).
 //!
 //! New fields follow Acrobat's conventions: names "Text1", "Check Box1", "Group1" (radio groups),
-//! "Dropdown1", "List Box1", "Button1", "Signature1", "Date1"; 12 pt Helvetica (auto-size for
-//! check boxes), a thin grey border and a white background, and appearance streams generated
+//! "Dropdown1", "List Box1", "Button1", "Signature1", "Date1"; Helvetica at Acrobat's Auto size
+//! for text and date fields (12 pt in a box that has room, smaller in a short one), 12 pt in
+//! choice fields, a thin grey border and a white background, and appearance streams generated
 //! immediately so every viewer shows the empty field.
 
 use pdfcraft_cos::{Dict, Document, ObjRef, Object, PdfString, Stream};
@@ -545,14 +546,15 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
     match kind {
         NewField::Text { multiline } => {
             w.set(b"FT".to_vec(), Object::name("Tx"));
-            w.set(b"DA".to_vec(), PdfString::literal(b"/Helv 12 Tf 0 g".to_vec()));
+            // Auto size (0): a fixed 12 pt is clipped in a box shorter than that (#1888).
+            w.set(b"DA".to_vec(), PdfString::literal(b"/Helv 0 Tf 0 g".to_vec()));
             if *multiline {
                 w.set(b"Ff".to_vec(), Object::Int(flags::MULTILINE as i64));
             }
         }
         NewField::Date => {
             w.set(b"FT".to_vec(), Object::name("Tx"));
-            w.set(b"DA".to_vec(), PdfString::literal(b"/Helv 12 Tf 0 g".to_vec()));
+            w.set(b"DA".to_vec(), PdfString::literal(b"/Helv 0 Tf 0 g".to_vec()));
             // Acrobat's format and keystroke actions for mm/dd/yyyy (run by its JavaScript engine).
             let js = |s: &str| {
                 let mut a = Dict::new();
@@ -655,6 +657,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
                 locked: false,
                 hidden: false,
                 rotation: 0,
+                list: None,
             };
             let ap = appearance::check_box_states(doc, &w, FieldKind::Radio, export);
             doc.update_dict(widget, |d| d.set(b"AP".to_vec(), Object::Dict(ap)))?;

@@ -6,6 +6,9 @@ that placement. The context menu also rotates or flips it. Changes support undo 
 survive saving/reopening. For single-figure transforms, a clipping path exclusive to one image moves and resizes
 together with its pixels, including nested graphics states, intervening state operators
 and paths split across content streams. A clip shared with other content stays where it is.
+When the figure already sits alone in a `q … cm … Q` (its own placement, or the one an
+earlier edit added), moving or resizing it again changes that `cm`, so repeated edits don't
+nest one more graphics state each time.
 
 PDF figures are not always bitmap images. Imported diagrams often use a **Form XObject**,
 which packages text, vector paths, and nested images into one object. PdfCraft selects

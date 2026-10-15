@@ -28,8 +28,16 @@ use crate::{INHERITABLE, OrganizeError, pages_root, rebuild, walk};
 const SKIP_ON_PAGE: &[&[u8]] = &[b"Parent", b"B", b"StructParents", b"Thumb", b"PieceInfo"];
 const SKIP_ON_ANNOT: &[&[u8]] = &[b"StructParent", b"P"];
 
+/// How deep a copy follows references and nested arrays and dictionaries, counted together.
+/// Real documents stay well under this (a page's resources, fonts and descriptors, nested
+/// form XObjects and field trees are a few levels each); a chain of thousands of indirect
+/// objects, each shallow enough for the parser, would otherwise exhaust the stack (#1800).
+const MAX_COPY_DEPTH: usize = 256;
+
 struct Copier<'a> {
     src: &'a Document,
+    /// Current recursion depth, bounded by [`MAX_COPY_DEPTH`].
+    depth: usize,
     map: HashMap<ObjRef, ObjRef>,
     /// Source page → destination page, for rewriting `/P` and destinations.
     pages: HashMap<ObjRef, ObjRef>,
@@ -41,11 +49,15 @@ struct Copier<'a> {
     ocgs: Vec<(ObjRef, ObjRef)>,
 }
 
-impl Copier<'_> {
+impl<'a> Copier<'a> {
+    fn new(src: &'a Document, map: HashMap<ObjRef, ObjRef>, pages: HashMap<ObjRef, ObjRef>) -> Self {
+        Copier { src, depth: 0, map, pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() }
+    }
+
     /// Copy an indirect object (once), returning its destination reference.
-    fn copy_ref(&mut self, dst: &mut Document, r: ObjRef) -> ObjRef {
+    fn copy_ref(&mut self, dst: &mut Document, r: ObjRef) -> Result<ObjRef, OrganizeError> {
         if let Some(d) = self.map.get(&r) {
-            return *d;
+            return Ok(*d);
         }
         // Reserve the number first so cycles (field ↔ widget) terminate.
         let new = dst.add(Object::Null);
@@ -54,26 +66,41 @@ impl Copier<'_> {
         if obj.as_dict().is_some_and(|d| d.name(b"Type") == Some(b"OCG")) {
             self.ocgs.push((r, new));
         }
-        let copied = self.copy_value(dst, &obj, Some(new));
+        let copied = self.copy_value(dst, &obj, Some(new))?;
         dst.set(new, copied);
-        new
+        Ok(new)
     }
 
-    fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Object {
-        match o {
-            Object::Ref(r) => Object::Ref(self.copy_ref(dst, *r)),
-            Object::Array(a) => Object::Array(a.iter().map(|x| self.copy_value(dst, x, None)).collect()),
-            Object::Dict(d) => Object::Dict(self.copy_dict(dst, d, this)),
-            Object::Stream(s) => {
-                let mut s = s.clone();
-                s.dict = self.copy_dict(dst, &s.dict, None);
-                Object::Stream(s)
-            }
-            other => other.clone(),
+    /// One level deeper into the object graph, or the refusal when there are too many.
+    fn descend(&mut self) -> Result<(), OrganizeError> {
+        if self.depth >= MAX_COPY_DEPTH {
+            return Err(OrganizeError::Invalid(format!("the pages refer to objects nested more than {MAX_COPY_DEPTH} levels deep")));
         }
+        self.depth += 1;
+        Ok(())
     }
 
-    fn copy_dict(&mut self, dst: &mut Document, d: &Dict, this: Option<ObjRef>) -> Dict {
+    fn copy_value(&mut self, dst: &mut Document, o: &Object, this: Option<ObjRef>) -> Result<Object, OrganizeError> {
+        if !matches!(o, Object::Ref(_) | Object::Array(_) | Object::Dict(_) | Object::Stream(_)) {
+            return Ok(o.clone());
+        }
+        self.descend()?;
+        let copied = match o {
+            Object::Ref(r) => self.copy_ref(dst, *r).map(Object::Ref),
+            Object::Array(a) => a.iter().map(|x| self.copy_value(dst, x, None)).collect::<Result<Vec<_>, _>>().map(Object::Array),
+            Object::Dict(d) => self.copy_dict(dst, d, this).map(Object::Dict),
+            Object::Stream(s) => self.copy_dict(dst, &s.dict, None).map(|dict| {
+                let mut s = s.clone();
+                s.dict = dict;
+                Object::Stream(s)
+            }),
+            other => Ok(other.clone()),
+        };
+        self.depth = self.depth.saturating_sub(1);
+        copied
+    }
+
+    fn copy_dict(&mut self, dst: &mut Document, d: &Dict, this: Option<ObjRef>) -> Result<Dict, OrganizeError> {
         let is_annot = d.name(b"Type") == Some(b"Annot") || (d.contains(b"Subtype") && d.contains(b"Rect") && !d.contains(b"Type"));
         let is_field = d.contains(b"FT") || (d.contains(b"T") && d.contains(b"Kids"));
         let mut out = Dict::new();
@@ -86,7 +113,7 @@ impl Copier<'_> {
                 out.set(k.clone(), v.clone());
                 continue;
             }
-            out.set(k.clone(), self.copy_value(dst, v, None));
+            out.set(k.clone(), self.copy_value(dst, v, None)?);
         }
         if let Some(this) = this {
             if is_annot {
@@ -97,7 +124,7 @@ impl Copier<'_> {
                 self.fields.push(this);
             }
         }
-        out
+        Ok(out)
     }
 
     /// Map a source destination (explicit array or reference to one) to the destination
@@ -162,15 +189,8 @@ impl Copier<'_> {
                         }
                     } else {
                         // Other actions (URI, Launch, JavaScript…) carry no page references.
-                        let mut c = Copier {
-                            src: self.src,
-                            map: self.map.clone(),
-                            pages: HashMap::new(),
-                            annots: Vec::new(),
-                            fields: Vec::new(),
-                            ocgs: Vec::new(),
-                        };
-                        let copied = c.copy_value(dst, &Object::Dict(ad.clone()), None);
+                        let mut c = Copier::new(self.src, self.map.clone(), HashMap::new());
+                        let copied = c.copy_value(dst, &Object::Dict(ad.clone()), None)?;
                         d.set(b"A".to_vec(), copied);
                     }
                 }
@@ -183,9 +203,8 @@ impl Copier<'_> {
 
 /// Copy `o` from `src` into `dst`, reusing the copies listed in `map` (source → destination), so
 /// an object the copied pages already brought along (an ICC profile) is not stored twice.
-pub(crate) fn copy_object(dst: &mut Document, src: &Document, o: &Object, map: HashMap<ObjRef, ObjRef>) -> Object {
-    let mut c = Copier { src, map, pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
-    c.copy_value(dst, o, None)
+pub(crate) fn copy_object(dst: &mut Document, src: &Document, o: &Object, map: HashMap<ObjRef, ObjRef>) -> Result<Object, OrganizeError> {
+    Copier::new(src, map, HashMap::new()).copy_value(dst, o, None)
 }
 
 /// How colliding fully-qualified field names are resolved when pages are imported.
@@ -222,10 +241,68 @@ pub fn import_pages_with(
     conflicts: FieldConflicts,
 ) -> Result<ImportOutcome, OrganizeError> {
     let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
-    let imported = import_pages_mapped(dst, src, src_pages, at, conflicts)?;
+    let imported = match import_pages_mapped(dst, src, src_pages, at, conflicts) {
+        Ok(imported) => imported,
+        Err(e) => {
+            // A refusal while copying (a source too deep to follow) has only added objects:
+            // take them back, so the destination is as it was.
+            for n in dst.object_numbers().into_iter().filter(|n| *n >= first_new) {
+                dst.free(ObjRef::new(n, dst.generation(n)));
+            }
+            return Err(e);
+        }
+    };
     let created: Vec<ObjRef> = dst.object_numbers().into_iter().filter(|n| *n >= first_new).map(|n| ObjRef::new(n, dst.generation(n))).collect();
     crate::dedupe::dedupe_resources(dst, &created, true);
     Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
+}
+
+/// Insert Pages from File: [`import_pages_with`], and the inserted file's bookmarks come along
+/// under one new bookmark titled `title` (the file's name) at its first inserted page, as Combine
+/// Files does for each file. That bookmark goes among the top-level bookmarks where the pages went:
+/// before the first one that points after them. Bookmarks to pages left out lose their destination;
+/// a file without bookmarks adds none.
+pub fn insert_file_pages(
+    dst: &mut Document,
+    src: &Document,
+    title: &str,
+    src_pages: &[usize],
+    at: usize,
+    conflicts: FieldConflicts,
+) -> Result<ImportOutcome, OrganizeError> {
+    let first_new = dst.object_numbers().last().map_or(1, |n| n + 1);
+    let imported = import_pages_mapped(dst, src, src_pages, at, conflicts)?;
+    let created: Vec<ObjRef> = dst.object_numbers().into_iter().filter(|n| *n >= first_new).map(|n| ObjRef::new(n, dst.generation(n))).collect();
+    crate::dedupe::dedupe_resources(dst, &created, true);
+    let outline = source_outline(src, imported.page_map);
+    if let Some(first) = imported.pages.first()
+        && !outline.is_empty()
+    {
+        let after = at.min(crate::page_count(dst)?.saturating_sub(imported.pages.len())).saturating_add(imported.pages.len());
+        insert_file_bookmark(dst, &Mark { title: title.to_string(), page: *first, outline }, after)?;
+    }
+    Ok(ImportOutcome { pages: imported.pages, renamed_fields: imported.renamed_fields })
+}
+
+/// Add `mark` (a file's bookmark holding its own, collapsed) to the top level of `doc`'s outline,
+/// before the first top-level bookmark that points at page `after` (0-based) or later.
+fn insert_file_bookmark(doc: &mut Document, mark: &Mark, after: usize) -> Result<(), OrganizeError> {
+    let index = crate::outline::top_level_bookmarks(doc).iter().position(|b| b.page.is_some_and(|p| p >= after));
+    let root = crate::outline::container(doc, &[])?;
+    let item = doc.add(Object::Null);
+    let mut d = Dict::new();
+    d.set(b"Title".to_vec(), Object::String(pdfcraft_cos::PdfString::text(&mark.title)));
+    d.set(b"Dest".to_vec(), Object::Array(vec![Object::Ref(mark.page), Object::name("Fit")]));
+    if let Some((f, l, n)) = write_outline_level(doc, item, &mark.outline)? {
+        d.set(b"First".to_vec(), Object::Ref(f));
+        d.set(b"Last".to_vec(), Object::Ref(l));
+        d.set(b"Count".to_vec(), Object::Int(-(n as i64))); // collapsed
+    }
+    doc.set(item, Object::Dict(d));
+    let mut top = crate::outline::children(doc, root);
+    top.insert(index.unwrap_or(top.len()).min(top.len()), item);
+    crate::outline::relink_and_recount(doc, root, &top)?;
+    Ok(())
 }
 
 /// Copy pages `src_pages` (0-based, in the given order) of `src` into `dst`, inserting them at
@@ -268,7 +345,7 @@ fn import_pages_mapped(
     }
     let mut existing = walk(dst)?;
     let root = pages_root(dst)?;
-    let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     // Allocate every destination page first, so destinations between copied pages resolve.
     let targets: Vec<(ObjRef, ObjRef, Dict)> = src_pages
         .iter()
@@ -291,14 +368,7 @@ fn import_pages_mapped(
         // popup, a widget's place). Destinations still map to the pages copied.
         let repeat = done.contains_key(&page);
         let new = if repeat { dst.add(Object::Null) } else { new };
-        let mut own = repeat.then(|| Copier {
-            src,
-            map: HashMap::new(),
-            pages: copier.pages.clone(),
-            annots: Vec::new(),
-            fields: Vec::new(),
-            ocgs: Vec::new(),
-        });
+        let mut own = repeat.then(|| Copier::new(src, HashMap::new(), copier.pages.clone()));
         let src_dict = src.get(page).as_dict().cloned().unwrap_or_default();
         let resources = resources_with_ancestors(src, &src_dict);
         let mut d = Dict::new();
@@ -321,7 +391,7 @@ fn import_pages_mapped(
                         && let Some(copied) = copier.map.get(&parent).copied()
                     {
                         let r = dst.add(Object::Null);
-                        let c = copier.copy_value(dst, &resolved, Some(r));
+                        let c = copier.copy_value(dst, &resolved, Some(r))?;
                         dst.set(r, c);
                         // `/Kids` may be an array object of its own: add to it there, so the
                         // field keeps its other widgets.
@@ -348,10 +418,10 @@ fn import_pages_mapped(
                     // Direct (inline) annotation dictionaries become indirect objects, so every
                     // copied annotation can be fixed up the same way.
                     let r = match a {
-                        Object::Ref(r) => annots.copy_ref(dst, r),
+                        Object::Ref(r) => annots.copy_ref(dst, r)?,
                         Object::Dict(_) => {
                             let r = dst.add(Object::Null);
-                            let c = annots.copy_value(dst, &a, Some(r));
+                            let c = annots.copy_value(dst, &a, Some(r))?;
                             dst.set(r, c);
                             r
                         }
@@ -363,17 +433,17 @@ fn import_pages_mapped(
                 d.set(b"Annots".to_vec(), Object::Array(out));
                 continue;
             }
-            d.set(k.clone(), copier.copy_value(dst, v, None));
+            d.set(k.clone(), copier.copy_value(dst, v, None)?);
         }
         if let Some(r) = resources {
-            let r = copier.copy_value(dst, &r, None);
+            let r = copier.copy_value(dst, &r, None)?;
             d.set(b"Resources".to_vec(), r);
         }
         for k in INHERITABLE {
             if !d.contains(k)
                 && let Some(v) = inherited.get(k)
             {
-                let v = copier.copy_value(dst, v, None);
+                let v = copier.copy_value(dst, v, None)?;
                 d.set(k.to_vec(), v);
             }
         }
@@ -936,7 +1006,7 @@ impl Combiner {
             let outline = source_outline(src, imported.page_map);
             self.marks.push(Mark { title: title.to_string(), page: *first, outline });
         }
-        collect_attachments(&mut self.out, src, &mut self.attachments);
+        collect_attachments(&mut self.out, src, &mut self.attachments)?;
         let declared = crate::pdfx::PrintStandard::of(src);
         match self.standard.as_ref().map(|first| first.declared.same_as(&declared)) {
             Some(same) => self.agreed &= same,
@@ -1030,7 +1100,7 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
         if let Some(first) = imported.pages.first() {
             marks.push(Mark { title: file.title.to_string(), page: *first, outline: source_outline(file.src, imported.page_map) });
         }
-        collect_attachments(&mut out, file.src, &mut attachments);
+        collect_attachments(&mut out, file.src, &mut attachments)?;
         let declared = crate::pdfx::PrintStandard::of(file.src);
         match &standard {
             None => standard = Some((declared, file.src, imported.objects)),
@@ -1056,22 +1126,23 @@ pub fn combine_grouped_with(runs: &[Run<'_>], conflicts: FieldConflicts) -> Resu
 }
 
 /// Copy a source's document-level attachments (`/Names /EmbeddedFiles`) into `dst`.
-fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8>, Object)>) {
+fn collect_attachments(dst: &mut Document, src: &Document, out: &mut Vec<(Vec<u8>, Object)>) -> Result<(), OrganizeError> {
     let Some(tree) = src
         .root()
         .and_then(|r| src.get(r).as_dict().cloned())
         .and_then(|c| c.get(b"Names").map(|n| src.resolve(n)))
         .and_then(|n| n.as_dict().and_then(|d| d.get(b"EmbeddedFiles").cloned()))
     else {
-        return;
+        return Ok(());
     };
     let mut entries = Vec::new();
     name_tree_entries(src, &tree, 0, &mut entries);
-    let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
     for (k, v) in entries {
-        let v = copier.copy_value(dst, &v, None);
+        let v = copier.copy_value(dst, &v, None)?;
         out.push((k, v));
     }
+    Ok(())
 }
 
 /// Write attachments as a flat, sorted `/EmbeddedFiles` name tree; duplicate names get " (2)"…
@@ -1137,7 +1208,7 @@ fn source_outline(src: &Document, pages: HashMap<ObjRef, ObjRef>) -> Vec<Outline
         .and_then(|r| src.get(r).as_dict().cloned())
         .and_then(|c| c.get(b"Outlines").map(|o| src.resolve(o)))
         .and_then(|o| o.as_dict().and_then(|d| d.reference(b"First")));
-    let mapper = Copier { src, map: HashMap::new(), pages, annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
+    let mapper = Copier::new(src, HashMap::new(), pages);
     let mut budget = 10_000usize;
     outline_level(&mapper, first, 0, &mut budget)
 }
@@ -1288,8 +1359,11 @@ pub fn page_as_form(dst: &mut Document, src: &Document, page: usize) -> Result<(
             }
         }
     }
-    let mut copier = Copier { src, map: HashMap::new(), pages: HashMap::new(), annots: Vec::new(), fields: Vec::new(), ocgs: Vec::new() };
-    let resources = d.get(b"Resources").map(|r| copier.copy_value(dst, r, None)).unwrap_or(Object::Dict(Dict::new()));
+    let mut copier = Copier::new(src, HashMap::new(), HashMap::new());
+    let resources = match d.get(b"Resources") {
+        Some(r) => copier.copy_value(dst, r, None)?,
+        None => Object::Dict(Dict::new()),
+    };
     register_layers(dst, src, &copier.ocgs)?;
     let mut fd = Dict::new();
     fd.set(b"Type".to_vec(), Object::name("XObject"));
