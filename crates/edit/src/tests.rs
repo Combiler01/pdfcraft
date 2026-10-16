@@ -2059,6 +2059,39 @@ fn image_arrange_stacking_order_and_remove_crop() {
 }
 
 #[test]
+fn crop_rotated_image_preserves_angle_and_in_place_geometry() {
+    let content = "q 173.20508 100 -50 86.60254 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let img_before = &images::page_images(&doc, 0).unwrap()[0];
+    let m_before = img_before.matrix;
+    assert!((m_before[1] - 100.0).abs() < 1e-3);
+    assert!((m_before[2] - (-50.0)).abs() < 1e-3);
+
+    images::crop_image(&mut doc, 0, 0, [0.25, 0.25, 0.75, 0.75]).unwrap();
+    let doc = reopen(&doc);
+    let img_cropped = &images::page_images(&doc, 0).unwrap()[0];
+
+    let m_after = img_cropped.matrix;
+    assert!((m_after[0] - m_before[0]).abs() < 1e-3);
+    assert!((m_after[1] - m_before[1]).abs() < 1e-3);
+    assert!((m_after[2] - m_before[2]).abs() < 1e-3);
+    assert!((m_after[3] - m_before[3]).abs() < 1e-3);
+    assert!((m_after[4] - m_before[4]).abs() < 1e-3);
+    assert!((m_after[5] - m_before[5]).abs() < 1e-3);
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.contains("re") && str_content.contains("W\nn"), "{str_content}");
+    assert!(str_content.contains("/Im0 Do"), "{str_content}");
+
+    let mut doc = doc;
+    images::remove_image_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let img_restored = &images::page_images(&doc, 0).unwrap()[0];
+    assert_eq!(img_restored.matrix, m_before);
+}
+
+#[test]
 fn image_arrange_preserves_shared_group_drawings() {
     let content = "q 100 0 0 100 100 100 cm /Im0 Do /Im0 Do Q BT /F1 12 Tf 72 700 Td (End Text) Tj ET";
     let mut doc = image_page_with(content);
@@ -2250,6 +2283,108 @@ fn unwrapped_image_moves_successfully() {
     // 3. Preservation: Middle Text and CTM remain intact
     assert!(str_content.contains("BT /F1 12 Tf 72 700 Td (Middle Text) Tj ET"), "Preservation: text operation preserved");
     assert!(str_content.contains("100 0 0 100 50 50 cm"), "Preservation: original cm preserved");
+}
+
+#[test]
+fn test_arrange_unwrapped_image_extraction() {
+    let content = b"100 0 0 100 100 100 cm /Im0 Do /Im1 Do";
+    let ops = pdfcraft_content::parse(content).ops;
+    let target = ops.iter().position(|op| op.is("Do") && op.name(0) == Some(b"Im0")).expect("target /Im0 not found");
+
+    // Scope start for unwrapped image matches target because content_units isolates Do
+    let scope_start = target;
+
+    // Accumulate effective CTM prior to the image operation
+    let mut initial_ctm = pdfcraft_content::Matrix::IDENTITY;
+    for op in &ops[..target] {
+        if op.is("cm")
+            && let Some(m) = op.nums::<6>()
+        {
+            initial_ctm = pdfcraft_content::Matrix(m).then(&initial_ctm);
+        }
+    }
+    assert_eq!(initial_ctm, pdfcraft_content::Matrix([100.0, 0.0, 0.0, 100.0, 100.0, 100.0]));
+
+    let extracted = images::extract_scope_state(&ops, scope_start, target, initial_ctm)
+        .expect("extraction must not return Err")
+        .expect("extraction must return Some rather than None");
+
+    assert_eq!(extracted.do_op.op.as_slice(), b"Do");
+    assert_eq!(extracted.do_op.name(0), Some(b"Im0".as_slice()));
+    assert_eq!(extracted.effective_cm, pdfcraft_content::Matrix([100.0, 0.0, 0.0, 100.0, 100.0, 100.0]));
+}
+
+#[test]
+fn arrange_unwrapped_image_in_mixed_scope_succeeds() {
+    // Content unit contains text and an unwrapped image; scope extraction of unit fails on BT,
+    // so it safely falls back to extracting target Do directly.
+    let content = "q BT /F1 12 Tf 72 700 Td (Preceding Text) Tj ET 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 12 Tf 72 500 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 1);
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < do_pos, "moved image follows External Text");
+
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0]);
+}
+
+#[test]
+fn image_arrange_with_transformed_clipping_path_succeeds() {
+    // Nested graphics state: outer scope establishes a scaled clipping path (cm + path + W n),
+    // inner scope draws the image.
+    let content = "q 0.5 0 0 0.5 0 0 cm 100 100 m 300 100 l 300 300 l 100 300 l h W n q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    assert!(before[0].visible_rect.is_some());
+    let rect_before = before[0].rect;
+    let clip_before = before[0].visible_rect;
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, rect_before);
+    assert_eq!(after[0].visible_rect, clip_before);
+
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    let text_pos = str_content.find("External Text").unwrap();
+    let do_pos = str_content.rfind("/Im0 Do").unwrap();
+    assert!(text_pos < do_pos, "image moved after text: {str_content}");
+}
+
+#[test]
+fn biomolecules_image_arrange_with_inherited_clips_succeeds() {
+    let Ok(data) = std::fs::read("C:\\Users\\Harsh\\Downloads\\Biomolecules.pdf") else { return };
+    let mut doc = Document::open(std::sync::Arc::new(data)).unwrap();
+
+    // Page 0, image 1
+    images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::SendBackward).unwrap();
+    images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::SendToBack).unwrap();
+
+    // Page 6, images
+    let imgs_p6 = images::page_images(&doc, 6).unwrap();
+    for i in 0..imgs_p6.len() {
+        images::arrange_image(&mut doc, 6, i, images::ArrangeOrder::BringToFront).unwrap();
+        images::arrange_image(&mut doc, 6, i, images::ArrangeOrder::SendBackward).unwrap();
+    }
+
+    // Page 8, images
+    let imgs_p8 = images::page_images(&doc, 8).unwrap();
+    for i in 0..imgs_p8.len() {
+        images::arrange_image(&mut doc, 8, i, images::ArrangeOrder::BringToFront).unwrap();
+        images::arrange_image(&mut doc, 8, i, images::ArrangeOrder::SendBackward).unwrap();
+    }
 }
 
 #[test]
@@ -4844,4 +4979,38 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
             assert!(!row.starts_with(['、', '。', '」', 'っ']) && !row.ends_with('「'), "{row:?} in {rows:?}");
         }
     }
+}
+
+#[test]
+fn test_image_move_does_not_emit_whiteout() {
+    let mut doc = image_page();
+    let imgs = images::page_images(&doc, 0).unwrap();
+    assert_eq!(imgs.len(), 1);
+    let original_rect = imgs[0].rect;
+
+    // Move the image to a new location
+    let target_rect = [original_rect[0] + 50.0, original_rect[1] + 100.0, original_rect[2] + 50.0, original_rect[3] + 100.0];
+    let t = images::rect_to_rect(original_rect, target_rect);
+    images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(t)).unwrap();
+    let doc = reopen(&doc);
+
+    // Inspect the resulting PDF content stream
+    let bytes = page_content_bytes(&doc, 0);
+    let content = String::from_utf8_lossy(&bytes);
+
+    // Assert that no white fill operators were added
+    assert!(!content.contains("1 1 1 rg"), "must not emit white fill rgb: {content}");
+    assert!(!content.contains("1 g"), "must not emit white fill gray: {content}");
+    assert!(!content.contains("re\nf") && !content.contains("re f"), "must not emit whiteout rect fill: {content}");
+
+    // Assert that the image's cm was cleanly updated to the new position
+    let moved_imgs = images::page_images(&doc, 0).unwrap();
+    assert_eq!(moved_imgs.len(), 1);
+    assert!(close(moved_imgs[0].rect, target_rect), "rect matches target: {:?}", moved_imgs[0].rect);
+    assert!(
+        content.contains(&format!("{} {} cm", moved_imgs[0].matrix[4] as i64, moved_imgs[0].matrix[5] as i64))
+            || content.contains("cm\n /Im0 Do")
+            || content.contains("cm /Im0 Do"),
+        "cm cleanly updated: {content}"
+    );
 }

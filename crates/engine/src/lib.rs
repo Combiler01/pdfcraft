@@ -86,6 +86,8 @@ pub enum ImageEdit {
         name: String,
         bytes: Arc<Vec<u8>>,
     },
+    /// Apply an arbitrary 2D affine transform matrix in user space.
+    Transform([f64; 6]),
     Delete,
     /// Change the stacking order.
     Arrange(ArrangeOrder),
@@ -2003,6 +2005,7 @@ impl Edit {
             Edit::MoveObjects { objects, .. } => plural("Move object", "Move objects", objects.len()),
             Edit::EditPageImage { change, .. } => Label::of(match change {
                 ImageEdit::Move(_) => "Move image",
+                ImageEdit::Transform(_) => "Transform image",
                 ImageEdit::Rotate(_) => "Rotate image",
                 ImageEdit::Crop(_) => "Crop image",
                 ImageEdit::Flip { .. } => "Flip image",
@@ -2508,6 +2511,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1))))?;
             let c = match change {
                 ImageEdit::Move(to) => pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::rect_to_rect(img.rect, *to)),
+                ImageEdit::Transform(t) => pdfcraft_edit::ImageChange::Transform(*t),
                 ImageEdit::Rotate(q) => {
                     pdfcraft_edit::ImageChange::Transform(pdfcraft_edit::turn_about_centre(img.visible_rect.unwrap_or(img.rect), *q, false, false))
                 }

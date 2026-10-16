@@ -592,9 +592,12 @@ fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops
     units
 }
 
-struct ExtractedScopeState {
-    clip_ops: Vec<Op>,
-    state_ops: Vec<Op>,
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ExtractedScopeState {
+    pub clip_ops: Vec<Op>,
+    pub state_ops: Vec<Op>,
+    pub effective_cm: Matrix,
+    pub do_op: Op,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -711,12 +714,85 @@ impl ExtendedGStateTracker {
     }
 }
 
-fn extract_scope_state(ops: &[Op], start: usize, target: usize, initial_ctm: Matrix) -> Result<Option<ExtractedScopeState>, EditError> {
+fn clip_path_to_ops(clip: &ClipPath) -> Vec<Op> {
+    let mut ops = Vec::new();
+    let mut current_pt = Point::ZERO;
+    for el in clip.path.elements() {
+        match el {
+            kurbo::PathEl::MoveTo(p) => {
+                if !p.x.is_finite() || !p.y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p;
+                ops.push(Op::new("m", vec![pdfcraft_content::num(p.x), pdfcraft_content::num(p.y)]));
+            }
+            kurbo::PathEl::LineTo(p) => {
+                if !p.x.is_finite() || !p.y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p;
+                ops.push(Op::new("l", vec![pdfcraft_content::num(p.x), pdfcraft_content::num(p.y)]));
+            }
+            kurbo::PathEl::QuadTo(p1, p2) => {
+                if !p1.x.is_finite() || !p1.y.is_finite() || !p2.x.is_finite() || !p2.y.is_finite() {
+                    return Vec::new();
+                }
+                let c1_x = current_pt.x + (p1.x - current_pt.x) * (2.0 / 3.0);
+                let c1_y = current_pt.y + (p1.y - current_pt.y) * (2.0 / 3.0);
+                let c2_x = p2.x + (p1.x - p2.x) * (2.0 / 3.0);
+                let c2_y = p2.y + (p1.y - p2.y) * (2.0 / 3.0);
+                if !c1_x.is_finite() || !c1_y.is_finite() || !c2_x.is_finite() || !c2_y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p2;
+                ops.push(Op::new(
+                    "c",
+                    vec![
+                        pdfcraft_content::num(c1_x),
+                        pdfcraft_content::num(c1_y),
+                        pdfcraft_content::num(c2_x),
+                        pdfcraft_content::num(c2_y),
+                        pdfcraft_content::num(p2.x),
+                        pdfcraft_content::num(p2.y),
+                    ],
+                ));
+            }
+            kurbo::PathEl::CurveTo(p1, p2, p3) => {
+                if !p1.x.is_finite() || !p1.y.is_finite() || !p2.x.is_finite() || !p2.y.is_finite() || !p3.x.is_finite() || !p3.y.is_finite() {
+                    return Vec::new();
+                }
+                current_pt = *p3;
+                ops.push(Op::new(
+                    "c",
+                    vec![
+                        pdfcraft_content::num(p1.x),
+                        pdfcraft_content::num(p1.y),
+                        pdfcraft_content::num(p2.x),
+                        pdfcraft_content::num(p2.y),
+                        pdfcraft_content::num(p3.x),
+                        pdfcraft_content::num(p3.y),
+                    ],
+                ));
+            }
+            kurbo::PathEl::ClosePath => {
+                ops.push(Op::new("h", vec![]));
+            }
+        }
+    }
+    if !ops.is_empty() {
+        ops.push(Op::new(if clip.even_odd { "W*" } else { "W" }, vec![]));
+        ops.push(Op::new("n", vec![]));
+    }
+    ops
+}
+
+pub(crate) fn extract_scope_state(ops: &[Op], start: usize, target: usize, initial_ctm: Matrix) -> Result<Option<ExtractedScopeState>, EditError> {
     if target >= ops.len() || start > target {
         return Ok(None);
     }
+    let target_op = ops.get(target).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
     if start == target {
-        return Ok(Some(ExtractedScopeState { clip_ops: Vec::new(), state_ops: Vec::new() }));
+        return Ok(Some(ExtractedScopeState { clip_ops: Vec::new(), state_ops: Vec::new(), effective_cm: initial_ctm, do_op: target_op }));
     }
     let mut clip_ops = Vec::new();
     let mut state_ops = Vec::new();
@@ -807,7 +883,7 @@ fn extract_scope_state(ops: &[Op], start: usize, target: usize, initial_ctm: Mat
         return Ok(None);
     }
 
-    Ok(Some(ExtractedScopeState { clip_ops, state_ops }))
+    Ok(Some(ExtractedScopeState { clip_ops, state_ops, effective_cm: matrix, do_op: target_op }))
 }
 
 /// Change the stacking order of image `index` on `page`.
@@ -885,7 +961,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             )
     });
 
-    let (target_span, scope_start) = if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+    let (mut target_span, scope_start) = if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
         && sub_start >= target_unit.start
         && sub_end < target_unit.end
     {
@@ -947,14 +1023,30 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
     }
 
-    let is_clipped = (img.visible_rect.is_some() && img.visible_rect != Some(img.rect)) || !img.clips.is_empty();
-
-    let extracted = extract_scope_state(&ops, scope_start, target, scope_start_ctm)?;
-    let Some(extracted) = extracted else {
-        return Err(EditError::Invalid("unsupported graphics state: unable to cleanly extract image scope state".into()));
+    let mut extracted = match extract_scope_state(&ops, scope_start, target, scope_start_ctm)? {
+        Some(ext) => ext,
+        None if scope_start != target => {
+            let target_op = ops.get(target).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+            target_span = target_op.span.start..target_op.span.end;
+            extract_scope_state(&ops, target, target, Matrix(img.draw_matrix))?
+                .ok_or_else(|| EditError::Invalid("unsupported graphics state: unable to cleanly extract image scope state".into()))?
+        }
+        None => {
+            return Err(EditError::Invalid("unsupported graphics state: unable to cleanly extract image scope state".into()));
+        }
     };
 
-    if is_clipped && extracted.clip_ops.is_empty() {
+    if extracted.clip_ops.is_empty() && !img.clips.is_empty() {
+        for clip in &img.clips {
+            let ops = clip_path_to_ops(clip);
+            if !ops.is_empty() {
+                extracted.clip_ops.extend(ops);
+            }
+        }
+    }
+
+    let has_inherited_clip = !img.clips.is_empty() && extracted.clip_ops.is_empty();
+    if has_inherited_clip {
         return Err(EditError::Invalid("unsupported graphics state: inherited clipping path cannot be cleanly preserved".into()));
     }
 
@@ -1025,7 +1117,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             }
         }
     }
-    unit_ops.push(ops.get(target).cloned().unwrap_or_else(|| Op::new("Do", vec![Object::name(&img.name)])));
+    unit_ops.push(extracted.do_op);
     unit_ops.push(Op::new("Q", vec![]));
 
     let mut serialized = Vec::new();
@@ -1156,9 +1248,7 @@ fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize, scope_matrix:
             while ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")) {
                 k = k.saturating_add(1);
             }
-            if k > i
-                && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*"))
-                && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n"))
+            if k > i && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*")) && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n"))
             {
                 i = k.saturating_add(2);
                 if scope_matrix != Matrix::IDENTITY
@@ -1406,6 +1496,7 @@ fn transform_image(
     if !local.0.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
         return Err(EditError::Invalid("the image transform is too large".into()));
     }
+
     // Already alone in a `q cm … Q` (its own placement, or the wrapper an earlier edit added):
     // change that `cm` in place. The CTM inside is `local · cm · outer` either way.
     if let Some((at, cm)) = enclosing_transform(&ops, start, end) {
@@ -1456,10 +1547,43 @@ fn crop_image_impl(
     if !keep.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
         return Err(EditError::Invalid("the crop box must be finite and no larger than 1e12".into()));
     }
-    let [x0, y0, x1, y1] = [keep[0].min(keep[2]), keep[1].min(keep[3]), keep[0].max(keep[2]), keep[1].max(keep[3])];
-    if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
+    let is_normalized = keep[0] >= 0.0
+        && keep[1] >= 0.0
+        && keep[2] <= 1.0
+        && keep[3] <= 1.0
+        && keep[2] > keep[0]
+        && keep[3] > keep[1]
+        && ((image.rect[2] - image.rect[0]).abs() > 1.5 || (image.rect[3] - image.rect[1]).abs() > 1.5);
+
+    let (u0, v0, u1, v1) = if is_normalized {
+        (keep[0], keep[1], keep[2], keep[3])
+    } else {
+        let [x0, y0, x1, y1] = [keep[0].min(keep[2]), keep[1].min(keep[3]), keep[0].max(keep[2]), keep[1].max(keep[3])];
+        if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
+            return Err(EditError::Invalid("the crop box has no area".into()));
+        }
+        let inv = Matrix(image.matrix).invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
+        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inv.apply(x, y));
+        let min_u = corners.iter().map(|(u, _)| *u).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
+        let max_u = corners.iter().map(|(u, _)| *u).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
+        let min_v = corners.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
+        let max_v = corners.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
+        if max_u - min_u < 1e-6 || max_v - min_v < 1e-6 {
+            return Err(EditError::Invalid("the crop box has no area".into()));
+        }
+        (min_u, min_v, max_u, max_v)
+    };
+
+    if u1 - u0 < 1e-6 || v1 - v0 < 1e-6 {
         return Err(EditError::Invalid("the crop box has no area".into()));
     }
+
+    let m = Matrix(image.matrix);
+    let p00 = m.apply(u0, v0);
+    let p10 = m.apply(u1, v0);
+    let p11 = m.apply(u1, v1);
+    let p01 = m.apply(u0, v1);
+
     let mut offset = 0_usize;
     for (_, data) in streams.iter().take(image.stream) {
         offset = offset
@@ -1478,16 +1602,36 @@ fn crop_image_impl(
         .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
     let (start, end, placement) = image_transform_scope(&ops, target)?.unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
-    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inverse.apply(x, y));
+    let corners = [p00, p10, p11, p01].map(|(x, y)| inverse.apply(x, y));
     if !corners.iter().all(|(x, y)| x.is_finite() && y.is_finite() && x.abs() <= 1e12 && y.abs() <= 1e12) {
         return Err(EditError::Invalid("the crop box is too large for the image's placement".into()));
     }
-    let clip: Vec<Op> = corners
-        .iter()
-        .enumerate()
-        .map(|(i, (x, y))| Op::new(if i == 0 { "m" } else { "l" }, vec![Object::Real(*x), Object::Real(*y)]))
-        .chain([Op::new("h", vec![]), Op::new("W", vec![]), Op::new("n", vec![])])
-        .collect();
+    let is_axis_aligned = ((corners[0].1 - corners[1].1).abs() < 1e-4
+        && (corners[1].0 - corners[2].0).abs() < 1e-4
+        && (corners[2].1 - corners[3].1).abs() < 1e-4
+        && (corners[3].0 - corners[0].0).abs() < 1e-4)
+        || ((corners[0].0 - corners[1].0).abs() < 1e-4
+            && (corners[1].1 - corners[2].1).abs() < 1e-4
+            && (corners[2].0 - corners[3].0).abs() < 1e-4
+            && (corners[3].1 - corners[0].1).abs() < 1e-4);
+    let clip: Vec<Op> = if is_axis_aligned {
+        let min_x = corners.iter().map(|(x, _)| *x).fold(f64::INFINITY, f64::min);
+        let max_x = corners.iter().map(|(x, _)| *x).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = corners.iter().map(|(_, y)| *y).fold(f64::INFINITY, f64::min);
+        let max_y = corners.iter().map(|(_, y)| *y).fold(f64::NEG_INFINITY, f64::max);
+        vec![
+            Op::new("re", vec![Object::Real(min_x), Object::Real(min_y), Object::Real(max_x - min_x), Object::Real(max_y - min_y)]),
+            Op::new("W", vec![]),
+            Op::new("n", vec![]),
+        ]
+    } else {
+        corners
+            .iter()
+            .enumerate()
+            .map(|(i, (x, y))| Op::new(if i == 0 { "m" } else { "l" }, vec![Object::Real(*x), Object::Real(*y)]))
+            .chain([Op::new("h", vec![]), Op::new("W", vec![]), Op::new("n", vec![])])
+            .collect()
+    };
     // The image's own earlier crop (a clipping path right after the scope's `q`) gives way to
     // the new one, so a crop can grow again as well as shrink.
     let old_clip: Option<std::ops::Range<usize>> = (start != end)
@@ -1605,4 +1749,33 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let contents = crate::text::rewritten_contents(doc, &all, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
+}
+
+/// Post-multiplies the image's existing CTM `[a, b, c, d, e, f]` by the crop transform
+/// `[u_min, v_min, u_max, v_max]` to shrink the footprint without stretching.
+pub fn crop_ctm(ctm: [f64; 6], crop: [f64; 4]) -> [f64; 6] {
+    let [a, b, c, d, e, f] = ctm;
+    let [u_min, v_min, u_max, v_max] = crop;
+    let new_a = a * (u_max - u_min);
+    let new_b = b * (u_max - u_min);
+    let new_c = c * (v_max - v_min);
+    let new_d = d * (v_max - v_min);
+    let new_e = e + a * u_min + c * v_min;
+    let new_f = f + b * u_min + d * v_min;
+    [new_a, new_b, new_c, new_d, new_e, new_f]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_crop_ctm_standard_non_stretched() {
+        // Standard upright CTM: width=200, height=100 at origin (50, 100)
+        let ctm = [200.0, 0.0, 0.0, 100.0, 50.0, 100.0];
+        let crop = [0.25, 0.25, 0.75, 0.75];
+        let cropped = crop_ctm(ctm, crop);
+        let expected = [100.0, 0.0, 0.0, 50.0, 100.0, 125.0];
+        assert_eq!(cropped, expected);
+    }
 }

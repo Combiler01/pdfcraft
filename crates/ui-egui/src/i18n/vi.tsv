@@ -723,7 +723,7 @@ theme	Appearance	Giao diện
 	More options	Thêm tùy chọn
 	More options:	Thêm tùy chọn:
 	More ways to add files	Thêm cách để thêm tệp
-	Mouse wheel scroll speed	Tốc độ cuộn bánh xe chuột
+	Scroll speed (mouse wheel and arrow keys)	Tốc độ cuộn (bánh xe chuột và phím mũi tên)
 	Move down	Chuyển xuống
 	Move earlier	Chuyển lên trước
 	Move later	Chuyển ra sau
@@ -1176,7 +1176,7 @@ theme	Appearance	Giao diện
 	This document isn't password-protected	Tài liệu này không được bảo vệ bằng mật khẩu
 	This drawing exceeds the snapping limit; only the first paths are used.	Bản vẽ này vượt quá giới hạn bắt dính; chỉ các đường đầu tiên được sử dụng.
 	This field is locked. Unlock it to change its properties.	Trường này đã bị khóa. Hãy mở khóa để thay đổi thuộc tính của nó.
-	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Tệp này đã thay đổi trên đĩa. Hãy tải lại để xem phiên bản mới; các thay đổi chưa lưu của bạn sẽ bị mất.
+	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Tệp này đã thay đổi trên đĩa. Tải lại sẽ hiển thị phiên bản mới và hủy các thay đổi chưa lưu của bạn; Lưu sẽ thay thế bằng phiên bản này.
 	This file was damaged and has been repaired. Saving keeps the repaired version.	Tệp này bị hỏng và đã được sửa chữa. Việc lưu sẽ giữ phiên bản đã sửa.
 	This folder isn't available right now. It may have moved, or its drive or cloud sync is offline.	Thư mục này hiện không khả dụng. Nó có thể đã bị di chuyển, hoặc ổ đĩa hay đồng bộ đám mây của nó đang ngoại tuyến.
 	This form's scripts are turned off because one ran too long. Reopen the document to run them again.	Các script của biểu mẫu này đã bị tắt vì một script chạy quá lâu. Hãy mở lại tài liệu để chạy chúng lại.
@@ -2615,3 +2615,70 @@ key	Space	Space
 	Redact Image	Xóa nội dung nhạy cảm của hình ảnh
 	Create Link…	Tạo liên kết…
 	Recognize Text…	Nhận dạng văn bản…
+	Bring forward	Chuyển lên trước
+	Bring to front	Đưa lên trước cùng
+	Characters	Ký tự
+	Characters without spaces	Ký tự không tính dấu cách
+	Counting words… {n} pages read	Đang đếm từ… {n} trang đã đọc
+	Crop Image	Cắt hình ảnh
+	Crop image	Cắt hình ảnh
+	Current page only	Chỉ trang hiện tại
+	DN: 	DN: 
+	Date: 	Ngày: 
+	Digitally signed by	Được ký kỹ thuật số bởi
+	Exclude image/OCR text	Loại trừ văn bản hình ảnh/OCR
+	Exclude tagged code blocks	Loại trừ khối mã có gắn thẻ
+	Exclude tagged tables	Loại trừ bảng có gắn thẻ
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Loại trừ sử dụng thẻ PDF. Bảng và mã chưa gắn thẻ vẫn được bao gồm. Việc loại trừ hình ảnh cũng xóa văn bản ẩn.
+	Fill colour:	Màu tô:
+	Font size	Cỡ chữ
+	Full Screen	Toàn màn hình
+	Location: 	Địa điểm: 
+	Make properties default	Đặt thuộc tính làm mặc định
+	Mark as artifact	Đánh dấu là phần bổ trợ
+	Mark content as artifact	Đánh dấu nội dung là phần bổ trợ
+	Merge image fragments	Hợp nhất các đoạn hình ảnh
+	Mobile	Di động
+	New file only	Chỉ tệp mới
+	New file: {name}	Tệp mới: {name}
+	Next tab	Tab tiếp theo
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Không tìm thấy máy in nào. Hãy kiểm tra xem máy in đã được cài đặt và dịch vụ bộ đệm in đang chạy, rồi mở lại In.
+	Not now	Không phải bây giờ
+	Old file: {name}	Tệp cũ: {name}
+	Opacity:	Độ mờ:
+	Open in Full Screen mode?	Mở ở chế độ Toàn màn hình?
+	Optimizing… merging image fragments	Đang tối ưu hóa… hợp nhất các đoạn hình ảnh
+	Outline colour:	Màu viền:
+	Page properties	Thuộc tính trang
+	Pages counted	Số trang đã đếm
+	Pages selected	Các trang đã chọn
+	Previous tab	Tab trước
+	Print as image	In dưới dạng hình ảnh
+	Reason: 	Lý do: 
+	Redaction mark appearance	Diện mạo dấu xóa nội dung nhạy cảm
+	Remove Crop	Xóa cắt
+	Remove crop	Xóa cắt
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Xóa thẻ lá này khỏi thứ tự đọc và đánh dấu nội dung trực tiếp của nó là phần bổ trợ
+	Resolution:	Độ phân giải:
+	Save anyway	Vẫn lưu
+	Save over the changed file?	Lưu đè lên tệp đã thay đổi?
+	Send backward	Chuyển về sau
+	Send to back	Đưa về sau cùng
+	Set page transitions	Đặt hiệu ứng chuyển trang
+	Shown while the pointer is over a mark.	Hiển thị khi con trỏ ở trên một dấu.
+	Side by side	Cạnh nhau
+	Some content could not be classified safely and was kept in the count.	Một số nội dung không thể phân loại an toàn và đã được giữ lại trong số đếm.
+	Some pages contain no countable text. Scanned images need OCR first.	Một số trang không chứa văn bản có thể đếm. Hình ảnh quét cần OCR trước.
+	Standard	Tiêu chuẩn
+	The labels are in English: the signature's font can't draw them in this language.	Các nhãn bằng tiếng Anh: phông chữ của chữ ký không thể vẽ chúng bằng ngôn ngữ này.
+	The password must have at least 8 characters.	Mật khẩu phải có ít nhất 8 ký tự.
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Tài liệu này yêu cầu mở ở chế độ Toàn màn hình: trang lấp đầy màn hình và không hiển thị gì khác. Nhấn Esc bất kỳ lúc nào để thoát.
+	Trim the picture with its handles; Enter or Done applies	Cắt hình ảnh bằng các tay cầm; nhấn Enter hoặc Xong để áp dụng
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Dùng khi máy in bỏ qua văn bản, đổ bóng hoặc độ trong suốt. Bản in sẽ không còn là văn bản có thể tìm kiếm; với In thang độ xám, hình ảnh sẽ có màu xám.
+	What takes up the space in this file, by kind of content.	Những gì chiếm dung lượng trong tệp này, theo loại nội dung.
+	Word count	Đếm từ
+	Word counting stopped unexpectedly.	Quá trình đếm từ đã dừng đột ngột.
+	Word count…	Đếm từ…
+	Words	Từ
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi mở hoặc lưu lần cuối. Lưu bây giờ sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
+@id	file.word_count	Đếm từ…

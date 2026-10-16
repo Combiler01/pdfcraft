@@ -35,7 +35,9 @@ mod appearance;
 pub mod canvas;
 mod chrome;
 mod combine_grid;
+pub mod image_engine;
 mod image_pick;
+pub use image_engine::{HandleId, MIN_RECT_SIZE, apply_crop, apply_resize, apply_resize_proportional, reset_crop};
 mod tags_ui;
 pub use combine_grid::ThumbState as CombineThumb;
 mod combine_ui;
@@ -68,7 +70,7 @@ mod zoom_snap;
 pub mod marks {
     pub use crate::marks_ui::{MarksDraft, PageRange, Subset};
 }
-mod content_ui;
+pub mod content_ui;
 mod link_ui;
 mod object_ui;
 pub use create_ui::Clip;
@@ -2923,14 +2925,13 @@ impl PdfCraftApp {
         let paste = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
 
-        if copy {
-            if !self.copy_selected_text(i, ctx)
-                && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
-                && let Some(id) = self.views.get(i).map(|v| v.id)
-                && self.may_copy(id)
-            {
-                self.copy_page_image(sel.page, sel.index);
-            }
+        if copy
+            && !self.copy_selected_text(i, ctx)
+            && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())
+            && let Some(id) = self.views.get(i).map(|v| v.id)
+            && self.may_copy(id)
+        {
+            self.copy_page_image(sel.page, sel.index);
         }
         if cut
             && let Some(sel) = self.views.get(i).and_then(|v| v.image_selection.clone())

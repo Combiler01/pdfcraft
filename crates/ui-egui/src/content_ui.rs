@@ -7,7 +7,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlign};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, PageXform};
+use crate::canvas::{DocView, ImageObb, PageXform, PainterExt};
 use crate::theme::Tokens;
 use crate::widgets;
 
@@ -447,10 +447,40 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
         {
             r = dragged(r, g, p - start, matches!(a.content, AddedContent::Image(_)));
         }
-        if selected {
+        let is_rotated_image = match &a.content {
+            AddedContent::Image(img) => img.rotation != 0,
+            _ => false,
+        };
+        if is_rotated_image {
+            let theta = match &a.content {
+                AddedContent::Image(img) => (img.rotation as f32) * std::f32::consts::FRAC_PI_2,
+                _ => 0.0,
+            };
+            let obb = ImageObb::from_center_size_angle(r.center(), r.width(), r.height(), theta);
+            if selected {
+                painter.polygon(obb.corners().to_vec(), Color32::TRANSPARENT, Stroke::new(1.5, SELECT_BLUE));
+                for (_, c) in obb.handles() {
+                    painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
+                }
+            } else if pointer.is_some_and(|p| r.expand(2.0).contains(p)) {
+                painter.polygon(obb.corners().to_vec(), Color32::TRANSPARENT, Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)));
+            }
+        } else if selected {
             painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.5, SELECT_BLUE), egui::StrokeKind::Outside);
-            for (c, ..) in handles(r.expand(1.0)) {
-                painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
+            let er = r.expand(1.0);
+            if matches!(a.content, AddedContent::Image(_)) {
+                let (tl, tr, br, bl) = (er.left_top(), er.right_top(), er.right_bottom(), er.left_bottom());
+                let tm = Pos2::new((tl.x + tr.x) * 0.5, tl.y);
+                let rm = Pos2::new(tr.x, (tr.y + br.y) * 0.5);
+                let bm = Pos2::new((bl.x + br.x) * 0.5, bl.y);
+                let lm = Pos2::new(tl.x, (tl.y + bl.y) * 0.5);
+                for c in [tl, tm, tr, rm, br, bm, bl, lm] {
+                    painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
+                }
+            } else {
+                for (c, ..) in handles(er) {
+                    painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
+                }
             }
         } else if pointer.is_some_and(|p| r.expand(2.0).contains(p)) {
             painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
@@ -609,9 +639,9 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
 /// Returns the changed style; for a selected item the caller turns it into an update.
 pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> Option<AddedText> {
     let mut s = style.clone();
-    widgets::section_title(ui, tl!("FORMAT TEXT"));
+    widgets::section_title(ui, "FORMAT TEXT");
     egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(ui.available_width().max(180.0)).show_ui(ui, |ui| {
-        ui.label(egui::RichText::new(tl!("Standard fonts")).weak().small());
+        ui.label(egui::RichText::new("Standard fonts").weak().small());
         for f in [FontFamily::Helvetica, FontFamily::Times, FontFamily::Courier] {
             ui.selectable_value(&mut s.family, f, f.label());
         }
@@ -628,17 +658,17 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
         ui.painter().rect_stroke(color_rect, t.radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
         let show_palette_id = ui.id().with("show-palette-added");
         let mut show_palette = ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false);
-        if color_resp.on_hover_text(tl!("Text color")).clicked() {
+        if color_resp.on_hover_text("Text color").clicked() {
             show_palette = !show_palette;
             ui.data_mut(|d| d.insert_temp(show_palette_id, show_palette));
         }
         ui.add_space(2.0);
         let is_bullet = crate::edit_text_ui::is_bulleted(&s.text);
-        if crate::icons::button(ui, "list", 24.0, is_bullet, tl!("Bullet list")).clicked() {
+        if crate::icons::button(ui, "list", 24.0, is_bullet, "Bullet list").clicked() {
             crate::edit_text_ui::toggle_bullet_list(&mut s.text);
         }
         let is_num = crate::edit_text_ui::is_numbered(&s.text);
-        if crate::icons::button(ui, "list-ordered", 24.0, is_num, tl!("Numbered list")).clicked() {
+        if crate::icons::button(ui, "list-ordered", 24.0, is_num, "Numbered list").clicked() {
             crate::edit_text_ui::toggle_numbered_list(&mut s.text);
         }
         ui.add_space(2.0);
@@ -660,18 +690,18 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
         s.color = picked;
     }
     ui.horizontal(|ui| {
-        let b_resp = ui.selectable_label(s.bold, egui::RichText::new("T").strong().size(14.0));
+        let b_resp = ui.selectable_label(s.bold, egui::RichText::new("B").strong().size(14.0));
         if b_resp.on_hover_text(tl!("Bold")).clicked() {
             s.bold = !s.bold;
         }
-        let i_resp = ui.selectable_label(s.italic, egui::RichText::new("T").italics().size(14.0));
+        let i_resp = ui.selectable_label(s.italic, egui::RichText::new("I").italics().size(14.0));
         if i_resp.on_hover_text(tl!("Italic")).clicked() {
             s.italic = !s.italic;
         }
-        let u_resp = ui.selectable_label(false, egui::RichText::new("T̲").size(14.0));
+        let u_resp = ui.selectable_label(false, egui::RichText::new("U̲").size(14.0));
         let _ = u_resp;
         let sup_resp = ui.selectable_label(false, egui::RichText::new("T¹").size(13.0));
-        if sup_resp.on_hover_text(tl!("Superscript")).clicked() {
+        if sup_resp.on_hover_text("Superscript").clicked() {
             let all_sup = !s.text.is_empty() && s.text.chars().all(|c| crate::edit_text_ui::char_from_superscript(c) != c);
             s.text = if all_sup {
                 s.text.chars().map(crate::edit_text_ui::char_from_superscript).collect()
@@ -680,7 +710,7 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
             };
         }
         let sub_resp = ui.selectable_label(false, egui::RichText::new("T₁").size(13.0));
-        if sub_resp.on_hover_text(tl!("Subscript")).clicked() {
+        if sub_resp.on_hover_text("Subscript").clicked() {
             let all_sub = !s.text.is_empty() && s.text.chars().all(|c| crate::edit_text_ui::char_from_subscript(c) != c);
             s.text = if all_sub {
                 s.text.chars().map(crate::edit_text_ui::char_from_subscript).collect()
@@ -787,7 +817,9 @@ impl crate::PdfCraftApp {
             let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
             self.last_copied_file = Some((name, bytes));
         }
-        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return false; };
+        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else {
+            return false;
+        };
         let copied = pixels.and_then(|(w, h, rgba)| {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
@@ -813,7 +845,7 @@ impl crate::PdfCraftApp {
         }
     }
 
-/// The picture's visible box on its page, in user space.
+    /// The picture's visible box on its page, in user space.
     fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
         let (_, id) = self.active_ids()?;
         let image = self.session.get(id)?.page_images(page).into_iter().nth(index)?;
@@ -825,7 +857,10 @@ impl crate::PdfCraftApp {
         if self.copy_page_image(page, index) {
             self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
             for v in &mut self.views {
-                if let Some(sel) = &v.image_selection && sel.page == page && sel.index == index {
+                if let Some(sel) = &v.image_selection
+                    && sel.page == page
+                    && sel.index == index
+                {
                     v.image_selection = None;
                 }
             }
@@ -879,7 +914,7 @@ impl crate::PdfCraftApp {
         if let Some(doc) = self.session.get(id)
             && !doc.allows_modification()
         {
-            self.notify_error(tl!("The document's security settings don't allow changes"));
+            self.notify_error("The document's security settings don't allow changes");
             return false;
         }
 
@@ -953,7 +988,8 @@ impl crate::PdfCraftApp {
         if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
             if let Some(v) = self.views.get_mut(i) {
                 v.current = page;
-                v.image_selection = Some(crate::edit_text_ui::ImageSelection { page, index: before, crop_mode: false, crop_rect: None, drag: None, crop: None });
+                v.image_selection =
+                    Some(crate::edit_text_ui::ImageSelection { page, index: before, crop_mode: false, crop_rect: None, drag: None, crop: None });
             }
             self.quick_tool = crate::QuickTool::EditText;
             self.notify_tr("Image pasted");
@@ -1065,18 +1101,79 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
         for (k, label) in ["L", "B", "R", "T"].into_iter().enumerate() {
             ui.label(label);
             // Applied when the drag ends, so a drag is one undo step.
-            let r = ui.add(egui::DragValue::new(&mut crop[k]).range(0.0..=45.0).speed(0.5).suffix("%"));
+            let r = ui.add(egui::DragValue::new(&mut crop[k]).range(0.0..=95.0).speed(0.5).suffix("%"));
             changed |= r.drag_stopped() || (r.changed() && !r.dragged());
         }
     });
     if changed {
         let mut i = img.clone();
-        i.crop = crop.map(|v| v / 100.0);
-        if i.crop != img.crop {
+        let new_crop = crop.map(|v| (v / 100.0).clamp(0.0, 0.95));
+        if new_crop != img.crop {
+            update_image_crop(&mut i, new_crop);
+            ui.ctx().request_repaint();
             out = Some(ImageAction::Update(AddedContent::Image(i)));
         }
     }
     out
+}
+
+/// Update an added image's crop box and adjust its rect dimensions immediately.
+pub fn update_image_crop(img: &mut pdfcraft_engine::AddedImage, new_crop: [f64; 4]) {
+    let new_crop = [new_crop[0].clamp(0.0, 0.95), new_crop[1].clamp(0.0, 0.95), new_crop[2].clamp(0.0, 0.95), new_crop[3].clamp(0.0, 0.95)];
+    if new_crop != img.crop {
+        let [old_l, old_b, old_r, old_t] = img.crop.map(|v| v.clamp(0.0, 0.95));
+        let old_cw = (1.0 - old_l - old_r).max(0.05);
+        let old_ch = (1.0 - old_b - old_t).max(0.05);
+
+        let [new_l, new_b, new_r, new_t] = new_crop;
+        let new_cw = (1.0 - new_l - new_r).max(0.05);
+        let new_ch = (1.0 - new_b - new_t).max(0.05);
+
+        let [x0, y0, x1, y1] =
+            [img.rect[0].min(img.rect[2]), img.rect[1].min(img.rect[3]), img.rect[0].max(img.rect[2]), img.rect[1].max(img.rect[3])];
+        let current_w = x1 - x0;
+        let current_h = y1 - y0;
+
+        let base_w = current_w / old_cw;
+        let base_h = current_h / old_ch;
+
+        let new_w = base_w * new_cw;
+        let new_h = base_h * new_ch;
+
+        let (ux, uy, vx, vy): (f64, f64, f64, f64) = match img.rotation % 4 {
+            1 => (0.0, 1.0, -1.0, 0.0),
+            2 => (-1.0, 0.0, 0.0, -1.0),
+            3 => (0.0, -1.0, 1.0, 0.0),
+            _ => (1.0, 0.0, 0.0, 1.0),
+        };
+        let (ux, uy) = if img.flip_h { (-ux, -uy) } else { (ux, uy) };
+        let (vx, vy) = if img.flip_v { (-vx, -vy) } else { (vx, vy) };
+
+        let base_ox = x0
+            - (base_w * old_l) * ux.max(0.0)
+            - (base_w * old_r) * (-ux).max(0.0)
+            - (base_h * old_b) * vx.max(0.0)
+            - (base_h * old_t) * (-vx).max(0.0);
+        let base_oy = y0
+            - (base_w * old_l) * uy.max(0.0)
+            - (base_w * old_r) * (-uy).max(0.0)
+            - (base_h * old_b) * vy.max(0.0)
+            - (base_h * old_t) * (-vy).max(0.0);
+
+        let new_ox = base_ox
+            + (base_w * new_l) * ux.max(0.0)
+            + (base_w * new_r) * (-ux).max(0.0)
+            + (base_h * new_b) * vx.max(0.0)
+            + (base_h * new_t) * (-vx).max(0.0);
+        let new_oy = base_oy
+            + (base_w * new_l) * uy.max(0.0)
+            + (base_w * new_r) * (-uy).max(0.0)
+            + (base_h * new_b) * vy.max(0.0)
+            + (base_h * new_t) * (-vy).max(0.0);
+
+        img.crop = new_crop;
+        img.rect = [new_ox, new_oy, new_ox + new_w, new_oy + new_h];
+    }
 }
 
 #[cfg(test)]

@@ -160,7 +160,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, is_pinned: bool) -> (e
             t.text_faint
         };
         icons::paint(ui, pin_rect.shrink(3.0), "pin", 15.0, pin_tint);
-        let tip = if is_pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
+        let tip = if is_pinned { "Unpin from Home" } else { "Pin to Home" };
         pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
         if theme::hand(pin_resp).on_hover_text(tip).clicked() {
             pin_clicked = true;
@@ -422,7 +422,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             tl!("Keep source fonts").to_string()
         };
 
-        crate::widgets::section_title(ui, tl!("FORMAT TEXT"));
+        crate::widgets::section_title(ui, "FORMAT TEXT");
         egui::ComboBox::from_id_salt("text-font-dropdown").selected_text(current_font_label).width(ui.available_width().max(180.0)).show_ui(
             ui,
             |ui| {
@@ -432,7 +432,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 }
                 if !font_choices.is_empty() {
                     ui.separator();
-                    ui.label(egui::RichText::new(tl!("Document fonts")).weak().small());
+                    ui.label(egui::RichText::new("Document fonts").weak().small());
                     for font in font_choices.iter().filter(|f| !f.resource.starts_with("PCApproved")) {
                         let is_current = ed.font_resource.as_ref() == Some(&font.resource);
                         if ui.selectable_label(is_current, &font.face).clicked() {
@@ -442,7 +442,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                     }
                 }
                 ui.separator();
-                ui.label(egui::RichText::new(tl!("Standard fonts")).weak().small());
+                ui.label(egui::RichText::new("Standard fonts").weak().small());
                 for f in [pdfcraft_engine::FontFamily::Helvetica, pdfcraft_engine::FontFamily::Times, pdfcraft_engine::FontFamily::Courier] {
                     let is_current = ed.font_resource.is_none() && ed.look.family == f;
                     if ui.selectable_label(is_current, f.label()).clicked() {
@@ -454,10 +454,10 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
                     ui.separator();
-                    ui.label(egui::RichText::new(tl!("Installed fonts")).weak().small());
+                    ui.label(egui::RichText::new("Installed fonts").weak().small());
                     if let Some(installed) = crate::files::installed_font_files(ui.ctx()) {
                         if installed.is_empty() {
-                            ui.label(egui::RichText::new(tl!("No installed fonts found.")).weak().small());
+                            ui.label(egui::RichText::new("No installed fonts found.").weak().small());
                         } else {
                             for font in &installed {
                                 let is_current =
@@ -479,11 +479,11 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                             }
                         }
                     } else {
-                        ui.label(egui::RichText::new(tl!("Finding installed fonts…")).weak().small());
+                        ui.label(egui::RichText::new("Finding installed fonts…").weak().small());
                     }
                 }
                 ui.separator();
-                if ui.button(tl!("Load font from file…")).clicked() {
+                if ui.button("Load font from file…").clicked() {
                     app.pick_files(crate::files::FilePurpose::TextFont { page: ed.page }, false);
                 }
             },
@@ -503,19 +503,19 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             ui.painter().rect_stroke(color_rect, t.radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
             let show_palette_id = ui.id().with("show-palette");
             let mut show_palette = ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false);
-            if color_resp.on_hover_text(tl!("Text color")).clicked() {
+            if color_resp.on_hover_text("Text color").clicked() {
                 show_palette = !show_palette;
                 ui.data_mut(|d| d.insert_temp(show_palette_id, show_palette));
             }
             ui.add_space(2.0);
             // Bullet list button
             let is_bullet = crate::edit_text_ui::is_bulleted(&ed.text);
-            if crate::icons::button(ui, "list", 24.0, is_bullet, tl!("Bullet list")).clicked() {
+            if crate::icons::button(ui, "list", 24.0, is_bullet, "Bullet list").clicked() {
                 changed |= crate::edit_text_ui::toggle_bullet_list(&mut ed.text);
             }
             // Numbered list button
             let is_num = crate::edit_text_ui::is_numbered(&ed.text);
-            if crate::icons::button(ui, "list-ordered", 24.0, is_num, tl!("Numbered list")).clicked() {
+            if crate::icons::button(ui, "list-ordered", 24.0, is_num, "Numbered list").clicked() {
                 changed |= crate::edit_text_ui::toggle_numbered_list(&mut ed.text);
             }
             ui.add_space(2.0);
@@ -554,11 +554,11 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 ed.look.italic = !ed.look.italic;
                 changed = true;
             }
-            let sup_resp = ui.selectable_label(false, egui::RichText::new("T¹").size(13.0)).on_hover_text(tl!("Superscript"));
+            let sup_resp = ui.selectable_label(false, egui::RichText::new("T¹").size(13.0)).on_hover_text("Superscript");
             if sup_resp.clicked() {
                 changed |= crate::edit_text_ui::toggle_superscript(&mut ed);
             }
-            let sub_resp = ui.selectable_label(false, egui::RichText::new("T₁").size(13.0)).on_hover_text(tl!("Subscript"));
+            let sub_resp = ui.selectable_label(false, egui::RichText::new("T₁").size(13.0)).on_hover_text("Subscript");
             if sub_resp.clicked() {
                 changed |= crate::edit_text_ui::toggle_subscript(&mut ed);
             }

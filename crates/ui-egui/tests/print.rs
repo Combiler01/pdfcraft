@@ -244,14 +244,17 @@ fn print_dialog_shows_the_printer_driver_options() {
     h.get_by_label("Printer properties");
     h.get_by_label("Media");
     h.get_by_label("Paper tray");
-    assert_eq!(h.state().print_draft.job("form.pdf").options, [("InputSlot".to_string(), "Tray2".to_string())]);
+    assert_eq!(
+        h.state().print_draft.job("form.pdf").options,
+        [("InputSlot".to_string(), "Tray2".to_string()), ("media".to_string(), "Letter".to_string())]
+    );
     h.get_by_label("Reset to printer defaults").click();
     h.run_steps(2);
-    assert!(h.state().print_draft.job("form.pdf").options.is_empty(), "defaults are not sent");
+    assert_eq!(h.state().print_draft.job("form.pdf").options, [("media".to_string(), "Letter".to_string())], "defaults are not sent");
     // Options read for another printer never go with this one's job.
     h.state_mut().print_draft.driver_choices.insert("InputSlot".into(), "Tray2".into());
     h.state_mut().print_draft.printer = Some("Other_Queue".into());
-    assert!(h.state().print_draft.job("form.pdf").options.is_empty());
+    assert_eq!(h.state().print_draft.job("form.pdf").options, [("media".to_string(), "Letter".to_string())]);
 }
 
 /// The desktop app lists printers in the background (PowerShell on Windows takes a second or
