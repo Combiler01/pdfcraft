@@ -1740,6 +1740,60 @@ mod tests {
         }
     }
 
+    /// One page per `(encoding, content)`, in Helvetica (`/F1`).
+    fn encoded_pages(pages: &[(lopdf::Object, &[u8])]) -> Pdf {
+        use lopdf::{Document, Object, Stream, dictionary};
+        let mut doc = Document::with_version("1.7");
+        let pages_id = doc.new_object_id();
+        let mut kids = Vec::new();
+        for (encoding, content) in pages {
+            let font =
+                doc.add_object(dictionary! { "Type" => "Font", "Subtype" => "Type1", "BaseFont" => "Helvetica", "Encoding" => encoding.clone() });
+            let content = doc.add_object(Stream::new(dictionary! {}, content.to_vec()));
+            let page = doc.add_object(dictionary! { "Type" => "Page", "Parent" => pages_id, "MediaBox" => vec![Object::Integer(0), Object::Integer(0), Object::Integer(300), Object::Integer(300)], "Resources" => dictionary! {"Font" => dictionary! {"F1" => font}}, "Contents" => content });
+            kids.push(Object::Reference(page));
+        }
+        let count = kids.len() as i64;
+        doc.objects.insert(pages_id, dictionary! {"Type" => "Pages", "Kids" => kids, "Count" => count}.into());
+        let catalog = doc.add_object(dictionary! {"Type" => "Catalog", "Pages" => pages_id});
+        doc.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        doc.save_to(&mut bytes).unwrap();
+        Pdf::new(std::sync::Arc::new(bytes)).unwrap()
+    }
+
+    /// The Annex D.2 alias codes extract as the ink they draw, not as formatting characters.
+    ///
+    /// WinAnsiEncoding gives 0xAD and 0xA0 the glyph names `hyphen` and `space`, the names it
+    /// also gives 0x2D and 0x20, and MacRomanEncoding gives 0xCA `space`. Reporting the Adobe
+    /// Glyph List values U+00AD and U+00A0 for them hid visible text: a soft hyphen is invisible,
+    /// so "well-known" written that way matched no search and no redaction pattern.
+    /// `XiaoBiaoSong.pdf` in the pdf.js corpus drew 104 of them.
+    ///
+    /// A `/Differences` entry naming `sfthyphen` or `nbspace` is a deliberate statement about one
+    /// code and keeps its glyph list value. pdftotext draws the same line: on this fixture it
+    /// reads the base-encoded codes as "a-b a b" and the named ones as U+00AD.
+    #[test]
+    fn the_annex_d2_alias_codes_read_as_an_ordinary_hyphen_and_space() {
+        use lopdf::{Object, dictionary};
+        let name = |n: &str| Object::Name(n.as_bytes().to_vec());
+        let differences = Object::Dictionary(dictionary! {
+            "Type" => "Encoding",
+            "BaseEncoding" => "WinAnsiEncoding",
+            "Differences" => vec![Object::Integer(88), name("sfthyphen"), Object::Integer(89), name("nbspace")],
+        });
+        let pdf = encoded_pages(&[
+            (name("WinAnsiEncoding"), &b"BT /F1 20 Tf 1 0 0 1 20 150 Tm (a\xadb\xa0c) Tj ET"[..]),
+            (name("MacRomanEncoding"), &b"BT /F1 20 Tf 1 0 0 1 20 150 Tm (a\xcab) Tj ET"[..]),
+            (differences, &b"BT /F1 20 Tf 1 0 0 1 20 150 Tm (aXbYc) Tj ET"[..]),
+        ]);
+        let texts =
+            |page| extract_page(&pdf, page, &InterpreterSettings::default()).unwrap().glyphs.iter().map(|g| g.text.clone()).collect::<Vec<_>>();
+        assert_eq!(texts(0), ["a", "-", "b", " ", "c"], "WinAnsi 0xAD and 0xA0");
+        assert_eq!(texts(1), ["a", " ", "b"], "MacRoman 0xCA");
+        assert_eq!(texts(2), ["a", "\u{ad}", "b", "\u{a0}", "c"], "a named glyph keeps its glyph list value");
+    }
+
     #[test]
     fn narrow_ligatures_keep_every_letter() {
         // Split evenly, this "ffi" put its two "f"s so close that the second was dropped as a

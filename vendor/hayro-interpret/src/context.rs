@@ -140,6 +140,12 @@ impl<'a> InterpreterCache<'a> {
             decoded_cache: DecodedImageCache::new(),
         }
     }
+
+    /// PdfCraft patch (32): how many images were decoded through this cache (its misses, not
+    /// counting images that are never cached), for diagnostics and tests.
+    pub fn decoded_image_decodes(&self) -> usize {
+        self.decoded_cache.decodes()
+    }
 }
 
 /// A per-page interpretation context that borrows shared data from an [`InterpreterCache`].

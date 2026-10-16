@@ -291,12 +291,16 @@ fn ui_fonts_work_without_craft_fonts() {
 }
 
 /// Latin- and Cyrillic-script catalogs (Czech, Brazilian Portuguese, German, Spanish, French, Russian, Bulgarian, Hungarian, Ukrainian, Italian, Slovene) are drawn entirely by the app's own faces
-/// (Inter, JetBrains Mono): no letter falls through to egui's defaults or a CJK fallback. (egui's
+/// (Inter, JetBrains Mono with Inter fallback): no letter falls through to egui's defaults or a CJK fallback. (egui's
 /// `has_glyphs` can't answer this: with only the primary face it is also the replacement face.)
 #[test]
 fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
     use skrifa::MetadataProvider as _;
     let defs = theme::font_definitions();
+    assert_eq!(&defs.families[&FontFamily::Monospace][..2], ["JetBrainsMono", "Inter"]);
+    let fallback = &defs.font_data["Inter"];
+    let fallback_font = skrifa::FontRef::from_index(&fallback.font, fallback.index).unwrap();
+    let fallback_charmap = fallback_font.charmap();
     for (code, catalog) in [
         ("cs", include_str!("../src/i18n/cs.tsv")),
         ("el", include_str!("../src/i18n/el.tsv")),
@@ -325,7 +329,8 @@ fn primary_ui_fonts_cover_latin_and_cyrillic_catalogs() {
             let data = &defs.font_data[name];
             let font = skrifa::FontRef::from_index(&data.font, data.index).unwrap();
             let charmap = font.charmap();
-            let mut missing: Vec<char> = text.chars().filter(|c| charmap.map(*c).is_none()).collect();
+            let mut missing: Vec<char> =
+                text.chars().filter(|c| charmap.map(*c).is_none() && (name != "JetBrainsMono" || fallback_charmap.map(*c).is_none())).collect();
             missing.sort_unstable();
             missing.dedup();
             assert!(missing.is_empty(), "{code}: {name} lacks {missing:?}");

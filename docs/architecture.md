@@ -101,7 +101,7 @@ Every user-facing feature is reachable headlessly (`AGENTS.md` §3):
 `cargo xtask ci` runs fmt, clippy (`-D warnings`), tests, the layering check, the WASM check,
 `xtask assets` (asset licences and hashes), `xtask parity` (checklist claims must cite real commands,
 tools and tests) and `xtask deny` (dependency licences). Other tasks: `xtask fuzz`, `xtask corpus` and `xtask check` (robustness
-sweep over the pinned pdf.js corpus), `xtask text-oracle` (word F1 against `pdftotext`),
+sweep over the pinned pdf.js corpus), `xtask text-oracle` (word F1 and reading order against `pdftotext`),
 `xtask demo-pdf`, `xtask screenshots`, `xtask models` (OCR models), `xtask version`. Releases are
 built by `.github/workflows/release.yml` ([releasing.md](releasing.md)).
 

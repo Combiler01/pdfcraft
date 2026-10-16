@@ -132,7 +132,7 @@ fn reading_colours_seed_on_open() {
     assert_ne!(revision, id);
     assert_eq!(h.state().session.reading_colors(revision), Some(ReadingColors::YELLOW_ON_BLACK));
     let len = h.state().session.get(id).unwrap().bytes.len();
-    h.state_mut().view_signed_version(len);
+    h.state_mut().view_signed_version(len, 1);
     let signed = h.state().views.last().unwrap().id;
     assert_ne!(signed, id);
     assert_eq!(h.state().session.reading_colors(signed), Some(ReadingColors::YELLOW_ON_BLACK));

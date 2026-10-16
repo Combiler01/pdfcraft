@@ -367,6 +367,9 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
     add(&mut fonts, "JetBrainsMono", include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"));
     fonts.families.entry(FontFamily::Proportional).or_default().insert(0, "Inter".to_owned());
     fonts.families.entry(FontFamily::Monospace).or_default().insert(0, "JetBrainsMono".to_owned());
+    // Keep missing Latin/Cyrillic letters in the app's own faces (for example Bulgarian ѝ,
+    // absent from JetBrains Mono), before egui's defaults or optional system/CJK fallbacks.
+    fonts.families.entry(FontFamily::Monospace).or_default().insert(1, "Inter".to_owned());
     // The same static bytes pdfcraft-fonts uses for Japanese/Chinese text in PDFs: one copy, not two.
     for face in pdfcraft_fonts::ui_cjk_fonts(prefer_hans) {
         let name = face.name();

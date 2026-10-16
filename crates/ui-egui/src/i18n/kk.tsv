@@ -2378,6 +2378,10 @@ animation effects	Off	Өшірулі
 	This document is trying to open a local file:	Бұл құжат жергілікті файлды ашуға әрекеттеніп жатыр:
 	Move tag earlier	Тегті ертерек жылжыту
 	Move tag later	Тегті кейінірек жылжыту
+
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының қол қойылған нұсқасын ({rev} нұсқа) қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Сіз „{from}“ құжатының {rev} нұсқасын қарап отырсыз. Бұл сақталған көшірме: мұндағы өзгерістер түпнұсқаға әсер етпейді.
 	Turn upside down (180°)	Төңкеру (180°)
 	4 x 6 in label (101.6 x 152.4 mm)	4 × 6 дюйм жапсырма (101,6 × 152,4 мм)
 	Cuts each page to its printed area, turns it upright and fits it to the sheet without stretching. One label per sheet.	Әр бетті басылған аймағына дейін қиып, тік бұрып, созбай параққа сыйғызады. Әр параққа бір жапсырма.

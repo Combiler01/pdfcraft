@@ -86,7 +86,7 @@ features total).
 | PowerPoint (`.pptx`) | yes | slides per page: title from largest text, body text, images, tables (no slide overflow reflow / normAutofit; first page sets presentation dimensions) | basic | `create.export-pptx` partial |
 | RTF | yes | yes | basic | `create.export-rtf` |
 | HTML (single page, multiple pages) | yes | single file with headings, paragraphs, images, tables | basic | `create.export-html` partial |
-| Plain text | yes | yes (reading order) | good (word-F1 0.98 vs `pdftotext`) | `create.export-text`, `xtask text-oracle` |
+| Plain text | yes | yes (reading order) | good (word-F1 0.98 vs `pdftotext`; reading order is scored separately, because F1 cannot see it) | `create.export-text`, `xtask text-oracle` |
 | Accessible text (from tags) | yes | no | none | `create.export-accessible-text` planned |
 | PNG, JPEG, TIFF | yes | yes | good | `create.export-png`, `create.export-jpeg-tiff` |
 | JPEG 2000 | yes | no | none | `create.export-jpeg2000` planned |

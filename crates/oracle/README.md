@@ -38,7 +38,7 @@ match pdfcraft_oracle::pdftotext() {
 |---|---|---|
 | `qpdf()` | qpdf | `--check` structural validation; the independent owner-password oracle |
 | `pdftoppm()` | Poppler | page pixels, for comparing against our own raster output |
-| `pdftotext()` | Poppler | text extraction (`cargo xtask text-oracle` scores word F1 against it) |
+| `pdftotext()` | Poppler | text extraction (`cargo xtask text-oracle` scores word F1 and reading order against it) |
 
 Each returns `Result<Oracle, Absent>`. `Oracle::command()` hands back a fresh `Command`;
 `Absent` renders as an actionable sentence naming the install command.
@@ -91,6 +91,30 @@ appearance we do draw.
 picture through every corner of the format, so a correct decoder renders them all identically. We
 render 1 distinct image across all 96; Poppler renders 8, drawing a blank page for seven of them.
 `crates/render/tests/jbig2_invariants.rs` pins that invariant, and needs no oracle to do it.
+
+## Comparing text
+
+`cargo xtask text-oracle` scores two different things against `pdftotext`, because one number
+hides the other.
+
+**Word F1** is a bag of words: how much of what each side extracted the other also extracted,
+with multiplicity. It catches a character read wrong, a glyph not read at all, a font we cannot
+map. It is blind to *order* — a page emitted back to front scores 1.000.
+
+**Reading order** is the longest common subsequence of the two word sequences, as a share of the
+longer one. It catches the failures F1 cannot see: a column read into the middle of its
+neighbour, a figure's labels threaded through a paragraph, a form's value parted from its label.
+Both sides are cut to the first 3,000 words, because the comparison is quadratic and three pages
+is plenty of signal; the run says how many files that bit.
+
+The second score exists because of a measurement. Reviewing #2431, a change that moves text and
+alters nothing else, word F1 called 26 of the 29 files whose output changed *identical*, while
+the order score separated 18 improvements from 6 regressions — the regressions on forms, where
+a checkbox's number was parted from its label.
+
+Read it the same way as the pixel score, and then once more: Poppler's reading order is a second
+opinion, not the truth, and the same split can score as a win on one file and a loss on another
+purely because `pdftotext` happens to make it in one place and not the other.
 
 ## Still to do
 

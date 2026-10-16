@@ -434,9 +434,26 @@ impl<'a> ImageXObject<'a> {
             is_mask: self.is_mask,
             is_stencil_mask: self.is_stencil_mask,
             interpolate: self.interpolate,
-            target: target_dimension,
+            // PdfCraft patch (32): see `decode_reads_target`.
+            target: if self.decode_reads_target() {
+                target_dimension
+            } else {
+                None
+            },
             preview: cache.preview,
         })
+    }
+
+    /// PdfCraft patch (32): whether decoding this image depends on the size it is drawn at.
+    /// Only the JPX filter decodes at a reduced resolution for a target size, in the image
+    /// itself or in the soft mask or mask decoded with it; every other filter decodes the whole
+    /// image whatever the target. Keyed by the target, a scan was decoded again at every zoom
+    /// step and kept once per zoom level; without it, one decode serves them all.
+    fn decode_reads_target(&self) -> bool {
+        let dict = self.stream.dict();
+        uses_jpx(&self.stream)
+            || dict.get::<Stream<'_>>(SMASK).is_some_and(|s| uses_jpx(&s))
+            || dict.get::<Stream<'_>>(MASK).is_some_and(|s| uses_jpx(&s))
     }
 
     pub(crate) fn width(&self) -> u32 {
@@ -465,6 +482,20 @@ const MAX_DECODED_IMAGE_BYTES: usize = 64 << 20;
 /// PdfCraft patch: pixel bytes held by a decoded mask.
 fn decoded_mask_size(mask: &DecodedMask) -> usize {
     mask.luma.width as usize * mask.luma.height as usize
+}
+
+/// PdfCraft patch (32): whether `stream` names the JPX filter, as a name or in an array, under
+/// `/Filter` or its inline abbreviation `/F`. Errs towards `true`: a name the decoder would
+/// ignore still counts, which only keeps the target in the key as before.
+fn uses_jpx(stream: &Stream<'_>) -> bool {
+    let dict = stream.dict();
+    let is_jpx = |name: &Name<'_>| name.deref() == JPX_DECODE;
+    [F, FILTER].into_iter().any(|key| {
+        dict.get::<Name<'_>>(key).is_some_and(|name| is_jpx(&name))
+            || dict
+                .get::<Array<'_>>(key)
+                .is_some_and(|filters| filters.iter::<Name<'_>>().any(|name| is_jpx(&name)))
+    })
 }
 
 /// PdfCraft patch: pixel bytes held by a decoded raster image and its mask.

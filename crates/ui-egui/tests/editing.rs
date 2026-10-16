@@ -1777,9 +1777,12 @@ fn files_dropped_beside_the_pages_panel_still_open_as_documents() {
     h.hover_at(egui::pos2(thumb.left() - 300.0, thumb.center().y));
     h.run_steps(2);
     drop_files(&mut h, vec![Dropped("other.pdf", fixture(1))]);
-    support::wait_until(&mut h, "dropped document", |app| app.views.len() == 2 && app.password_prompt.is_none());
+    // Native opening prepares the document on a worker; three UI frames need not give it
+    // any CPU time. Wait for the result, as the other dropped-document regression does.
+    support::wait_until(&mut h, "document dropped beside the Pages panel", |app| app.views.len() == 2 && app.password_prompt.is_none());
     assert_eq!(h.state().views.len(), 2);
     assert_eq!(texts_of(h.state(), 0), ["Page 1", "Page 2"]);
+    assert_eq!(texts_of(h.state(), 1), ["Page 1"], "the dropped PDF opens as its own document");
 }
 
 fn grid_zoom(h: &Harness<'static, PdfCraftApp>) -> f32 {

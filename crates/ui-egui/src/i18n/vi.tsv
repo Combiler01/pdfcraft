@@ -1,7 +1,7 @@
 # Vietnamese (vi) catalog. Columns, separated by a TAB: context <TAB> source <TAB> translation
 #
 # Clean-room translations from PdfCraft's English UI labels. Reviewed by a native
-# Vietnamese-speaking contributor. PhotoCraft/VectorCraft Vietnamese catalogs were used only as
+# Vietnamese-speaking contributor for the original catalog; later additions are marked below. PhotoCraft/VectorCraft Vietnamese catalogs were used only as
 # translation memory when the English source and its meaning in context matched. Product and
 # format names (PdfCraft, PDF, PDF/A, OCR, XFA, Word…) remain names where appropriate.
 # Plural rule: `plural_none` — every @plural row lists exactly one form.
@@ -2617,68 +2617,75 @@ key	Space	Space
 	Recognize Text…	Nhận dạng văn bản…
 	Bring forward	Chuyển lên trước
 	Bring to front	Đưa lên trước cùng
+	Crop image	Cắt hình ảnh
+	Remove crop	Xóa cắt
+	Send backward	Chuyển về sau
+	Send to back	Đưa về sau cùng
+
+# AI-assisted additions for concurrently merged UI features (2026-10-15).
+# These additions have not had separate native-speaker review.
 	Characters	Ký tự
 	Characters without spaces	Ký tự không tính dấu cách
-	Counting words… {n} pages read	Đang đếm từ… {n} trang đã đọc
-	Crop Image	Cắt hình ảnh
-	Crop image	Cắt hình ảnh
+	Counting words… {n} pages read	Đang đếm từ… đã đọc {n} trang
+	Crop Image	Xén hình ảnh
 	Current page only	Chỉ trang hiện tại
-	DN: 	DN: 
+	DN: 	Tên phân biệt: 
 	Date: 	Ngày: 
-	Digitally signed by	Được ký kỹ thuật số bởi
-	Exclude image/OCR text	Loại trừ văn bản hình ảnh/OCR
-	Exclude tagged code blocks	Loại trừ khối mã có gắn thẻ
-	Exclude tagged tables	Loại trừ bảng có gắn thẻ
-	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Loại trừ sử dụng thẻ PDF. Bảng và mã chưa gắn thẻ vẫn được bao gồm. Việc loại trừ hình ảnh cũng xóa văn bản ẩn.
+	Digitally signed by	Được ký số bởi
+	Exclude image/OCR text	Loại trừ văn bản trong ảnh/OCR
+	Exclude tagged code blocks	Loại trừ khối mã đã gắn thẻ
+	Exclude tagged tables	Loại trừ bảng đã gắn thẻ
+	Exclusions use PDF tags. Untagged tables and code remain included. Image exclusion also removes invisible text.	Việc loại trừ dựa trên thẻ PDF. Bảng và mã chưa gắn thẻ vẫn được tính. Loại trừ hình ảnh cũng loại bỏ văn bản ẩn.
 	Fill colour:	Màu tô:
 	Font size	Cỡ chữ
 	Full Screen	Toàn màn hình
-	Location: 	Địa điểm: 
+	Location: 	Vị trí: 
 	Make properties default	Đặt thuộc tính làm mặc định
-	Mark as artifact	Đánh dấu là phần bổ trợ
-	Mark content as artifact	Đánh dấu nội dung là phần bổ trợ
-	Merge image fragments	Hợp nhất các đoạn hình ảnh
+	Mark as artifact	Đánh dấu là thành phần trang trí
+	Mark content as artifact	Đánh dấu nội dung là thành phần trang trí
+	Merge image fragments	Gộp các mảnh hình ảnh
 	Mobile	Di động
 	New file only	Chỉ tệp mới
 	New file: {name}	Tệp mới: {name}
-	Next tab	Tab tiếp theo
-	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Không tìm thấy máy in nào. Hãy kiểm tra xem máy in đã được cài đặt và dịch vụ bộ đệm in đang chạy, rồi mở lại In.
-	Not now	Không phải bây giờ
+	Next tab	Thẻ tiếp theo
+	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Không tìm thấy máy in. Kiểm tra xem máy in đã được cài đặt và dịch vụ hàng đợi in đang chạy, rồi mở lại hộp thoại In.
+	Not now	Để sau
 	Old file: {name}	Tệp cũ: {name}
 	Opacity:	Độ mờ:
-	Open in Full Screen mode?	Mở ở chế độ Toàn màn hình?
-	Optimizing… merging image fragments	Đang tối ưu hóa… hợp nhất các đoạn hình ảnh
-	Outline colour:	Màu viền:
+	Open in Full Screen mode?	Mở ở chế độ toàn màn hình?
+	Optimizing… merging image fragments	Đang tối ưu hóa… gộp các mảnh hình ảnh
+	Outline colour:	Màu đường viền:
 	Page properties	Thuộc tính trang
 	Pages counted	Số trang đã đếm
-	Pages selected	Các trang đã chọn
-	Previous tab	Tab trước
+	Pages selected	Số trang đã chọn
+	Previous tab	Thẻ trước
 	Print as image	In dưới dạng hình ảnh
 	Reason: 	Lý do: 
-	Redaction mark appearance	Diện mạo dấu xóa nội dung nhạy cảm
-	Remove Crop	Xóa cắt
-	Remove crop	Xóa cắt
-	Remove this leaf tag from reading order and mark its direct content as an artifact	Xóa thẻ lá này khỏi thứ tự đọc và đánh dấu nội dung trực tiếp của nó là phần bổ trợ
+	Redaction mark appearance	Hình thức dấu xóa nội dung nhạy cảm
+	Remove Crop	Bỏ xén
+	Remove this leaf tag from reading order and mark its direct content as an artifact	Xóa thẻ lá này khỏi thứ tự đọc và đánh dấu nội dung trực tiếp của nó là thành phần trang trí
 	Resolution:	Độ phân giải:
 	Save anyway	Vẫn lưu
 	Save over the changed file?	Lưu đè lên tệp đã thay đổi?
-	Send backward	Chuyển về sau
-	Send to back	Đưa về sau cùng
 	Set page transitions	Đặt hiệu ứng chuyển trang
-	Shown while the pointer is over a mark.	Hiển thị khi con trỏ ở trên một dấu.
+	Shown while the pointer is over a mark.	Hiển thị khi con trỏ nằm trên một dấu.
 	Side by side	Cạnh nhau
-	Some content could not be classified safely and was kept in the count.	Một số nội dung không thể phân loại an toàn và đã được giữ lại trong số đếm.
-	Some pages contain no countable text. Scanned images need OCR first.	Một số trang không chứa văn bản có thể đếm. Hình ảnh quét cần OCR trước.
+	Some content could not be classified safely and was kept in the count.	Một số nội dung không thể được phân loại an toàn và vẫn được tính.
+	Some pages contain no countable text. Scanned images need OCR first.	Một số trang không có văn bản có thể đếm. Ảnh quét cần được nhận dạng văn bản (OCR) trước.
 	Standard	Tiêu chuẩn
-	The labels are in English: the signature's font can't draw them in this language.	Các nhãn bằng tiếng Anh: phông chữ của chữ ký không thể vẽ chúng bằng ngôn ngữ này.
+	The labels are in English: the signature's font can't draw them in this language.	Các nhãn được hiển thị bằng tiếng Anh: phông chữ của chữ ký không thể hiển thị chúng bằng ngôn ngữ này.
 	The password must have at least 8 characters.	Mật khẩu phải có ít nhất 8 ký tự.
-	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Tài liệu này yêu cầu mở ở chế độ Toàn màn hình: trang lấp đầy màn hình và không hiển thị gì khác. Nhấn Esc bất kỳ lúc nào để thoát.
-	Trim the picture with its handles; Enter or Done applies	Cắt hình ảnh bằng các tay cầm; nhấn Enter hoặc Xong để áp dụng
-	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Dùng khi máy in bỏ qua văn bản, đổ bóng hoặc độ trong suốt. Bản in sẽ không còn là văn bản có thể tìm kiếm; với In thang độ xám, hình ảnh sẽ có màu xám.
-	What takes up the space in this file, by kind of content.	Những gì chiếm dung lượng trong tệp này, theo loại nội dung.
-	Word count	Đếm từ
-	Word counting stopped unexpectedly.	Quá trình đếm từ đã dừng đột ngột.
+	This document asks to open in Full Screen mode: the page fills the screen and nothing else shows. Press Esc at any time to leave it.	Tài liệu này yêu cầu mở ở chế độ toàn màn hình: trang chiếm toàn bộ màn hình và không hiển thị nội dung nào khác. Nhấn Esc bất kỳ lúc nào để thoát.
+	Trim the picture with its handles; Enter or Done applies	Xén hình bằng các tay nắm; nhấn Enter hoặc Xong để áp dụng
+	Use it when a printer skips text, shading or transparency. The print is no longer searchable text; with Print in grayscale, the pictures are grey.	Dùng khi máy in bỏ sót văn bản, chuyển sắc hoặc độ trong suốt. Bản in không còn chứa văn bản có thể tìm kiếm; với In thang độ xám, hình ảnh sẽ có màu xám.
+	What takes up the space in this file, by kind of content.	Dung lượng mà từng loại nội dung chiếm trong tệp này.
+	Word count	Số từ
+	Word counting stopped unexpectedly.	Việc đếm từ đã dừng đột ngột.
 	Word count…	Đếm từ…
 	Words	Từ
-	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi mở hoặc lưu lần cuối. Lưu bây giờ sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
+	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi được mở hoặc lưu lần cuối. Lưu lúc này sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
 @id	file.word_count	Đếm từ…
+
+# Historical snapshot notice bar (View signed version / View revision).
+	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.

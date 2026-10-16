@@ -305,31 +305,45 @@ mod tests {
         assert_eq!(literal(b"a(b)\\c"), b"(a\\(b\\)\\\\c)");
     }
 
-    /// WinAnsiEncoding's 0xAD is the `hyphen` glyph, not U+00AD.
+    /// WinAnsiEncoding's 0xAD is the `hyphen` glyph and its 0xA0 is `space`, not U+00AD and
+    /// U+00A0; MacRomanEncoding's 0xCA is `space` too.
     ///
-    /// Annex D.2 gives codes 0x2D and 0xAD the same glyph name, so the byte a Windows codepage
-    /// calls a soft hyphen draws an ordinary hyphen and must extract as one. Reading it as U+00AD
-    /// hid the character: a soft hyphen is invisible, so a search for "well-known" missed text
-    /// that drew exactly that, and `redact`'s pattern matching missed it too. One corpus fixture
-    /// alone extracted 104 of them.
+    /// Annex D.2 gives each of those codes the same glyph name as the ordinary one (0x2D, 0x20),
+    /// so the bytes a Windows codepage calls a soft hyphen and a non-breaking space draw ordinary
+    /// ink and must extract as it. Reading them as the formatting characters hid them: a soft
+    /// hyphen is invisible, so a search for "well-known" missed text that drew exactly that, and
+    /// `redact`'s pattern matching missed it too; a non-breaking space does not match the space a
+    /// reader types. Over the 989-file pdf.js corpus this takes the soft hyphens we extract from
+    /// 117 to 13 (104 of them in `XiaoBiaoSong.pdf` alone) and the non-breaking spaces from 30 to
+    /// 26; what remains comes from `/ToUnicode` maps, which say so explicitly and are not touched.
+    /// pdftotext reads both codes as the ordinary character.
     #[test]
-    fn win_ansi_soft_hyphen_byte_reads_as_an_ordinary_hyphen() {
+    fn the_alias_codes_read_as_the_glyph_they_draw() {
         assert_eq!(encodings::WIN_ANSI.get(0xAD), Some(&u32::from('-')));
         assert_eq!(encodings::WIN_ANSI.get(0x2D), Some(&u32::from('-')));
-        // Writing is unaffected: '-' takes the canonical low code, and a caller holding a literal
-        // U+00AD still writes the 0xAD byte, which is the one that draws a hyphen.
+        assert_eq!(encodings::WIN_ANSI.get(0xA0), Some(&u32::from(' ')));
+        assert_eq!(encodings::WIN_ANSI.get(0x20), Some(&u32::from(' ')));
+        assert_eq!(encodings::MAC_ROMAN.get(0xCA), Some(&u32::from(' ')));
+        assert_eq!(encodings::MAC_ROMAN.get(0x20), Some(&u32::from(' ')));
+        // MacRoman has no soft hyphen; 0xAD there is `notequal`, and keeps it.
+        assert_eq!(encodings::MAC_ROMAN.get(0xAD), Some(&0x2260));
+        // Writing is unaffected: '-' and ' ' take the canonical low codes, and a caller holding a
+        // literal U+00AD or U+00A0 still writes the high byte, which is the one that draws them.
         assert_eq!(win_ansi_byte('-'), Some(0x2D));
+        assert_eq!(win_ansi_byte(' '), Some(0x20));
         assert_eq!(win_ansi_byte('\u{00ad}'), Some(0xAD));
-        assert_eq!(win_ansi("a-b"), b"a-b");
+        assert_eq!(win_ansi_byte('\u{00a0}'), Some(0xA0));
+        assert_eq!(win_ansi("a-b c"), b"a-b c");
     }
 
     #[test]
     fn win_ansi_covers_the_0x80_to_0x9f_glyphs() {
         // Every character in the WinAnsiEncoding table encodes to its code and back (#347), except
-        // where two codes share one glyph: 0xAD is `hyphen`, the same glyph as 0x2D, so it decodes
-        // to '-' and '-' encodes back to the canonical 0x2D. Round-tripping the *code* is what
+        // where two codes share one glyph: 0xAD is `hyphen`, the same glyph as 0x2D, and 0xA0 is
+        // `space`, the same glyph as 0x20, so each decodes to the ordinary character and that
+        // character encodes back to the canonical low code. Round-tripping the *code* is what
         // cannot hold there; round-tripping the character still does.
-        const ALIASES: &[u8] = &[0xAD];
+        const ALIASES: &[u8] = &[0xA0, 0xAD];
         for (code, &u) in encodings::WIN_ANSI.iter().enumerate() {
             let Some(c) = char::from_u32(u).filter(|_| u != 0) else { continue };
             if ALIASES.contains(&(code as u8)) {

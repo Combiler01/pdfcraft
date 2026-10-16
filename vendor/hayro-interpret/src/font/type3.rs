@@ -108,6 +108,9 @@ impl<'a> Type3<'a> {
                     .encodings
                     .get(&code)
                     .map(|s| s.as_str())
+                    // PdfCraft patch: an Annex D.2 alias code reads as the ordinary character;
+                    // see `Encoding::text_alias`.
+                    .or_else(|| self.encoding.text_alias(code))
                     .or_else(|| self.encoding.map_code(code));
                 name.and_then(crate::font::glyph_name_to_unicode)
                     .or_else(|| (0x20..0x7f).contains(&code).then_some(code as char))

@@ -937,11 +937,24 @@ impl Automation {
         // A save that adds or removes encryption, or must not keep the old revision (Sanitize,
         // redaction), is rewritten in full even when an incremental save was asked for.
         let incremental = !full && bytes.starts_with(&self.doc(a)?.saved_bytes());
+        self.publish_save(id, &target, bytes, incremental, write)
+    }
+
+    /// Validate the prepared bytes before publishing them or marking the document saved.
+    fn publish_save(
+        &mut self,
+        id: DocId,
+        target: &Path,
+        bytes: Arc<Vec<u8>>,
+        incremental: bool,
+        write: impl FnOnce(&Path, &[u8]) -> Result<()>,
+    ) -> Result<Value> {
         self.session.check_save(id, &bytes).map_err(failed)?;
-        write(&target, &bytes)?;
+        write(target, &bytes)?;
         let path = target.to_string_lossy().into_owned();
         self.session.mark_saved(id, bytes.clone(), Some(path.clone())).map_err(failed)?;
-        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(self.doc(a)?) }))
+        let doc = self.session.get(id).ok_or_else(|| failed("the saved document is no longer open"))?;
+        Ok(json!({ "path": path, "bytes": bytes.len(), "incremental": incremental, "document": summary(doc) }))
     }
 
     fn doc_revisions(&mut self, a: &Args) -> Result<Value> {
@@ -2961,6 +2974,37 @@ mod tests {
             }
             std::fs::remove_dir_all(dir).unwrap();
         }
+    }
+
+    #[test]
+    fn invalid_save_bytes_never_reach_publication_or_mark_saved() {
+        let dir = staging_dir("invalid-save-bytes");
+        let target = dir.join("out.pdf");
+        let mut a = Automation::new().with_root(&dir).unwrap();
+        let id = search_document(&mut a, 2);
+        json(&mut a, "doc_save", json!({"doc": id.0, "path": "out.pdf"}));
+        let old = std::fs::read(&target).unwrap();
+        json(&mut a, "page_rotate", json!({"doc": id.0, "pages": [1], "degrees": 90}));
+        let before = summary(a.session.get(id).unwrap());
+        // Exercise both parse failure and a valid PDF that loses a page. This does not
+        // depend on a malformed input remaining unrepaired by future reader improvements.
+        for bytes in [b"not a PDF".to_vec(), numbered_pages(1)] {
+            let mut published = false;
+            let result = a.publish_save(id, &target, Arc::new(bytes), false, |_, _| {
+                published = true;
+                Ok(())
+            });
+            assert!(result.is_err(), "invalid output must be refused");
+            assert!(result.unwrap_err().to_string().contains("could not be reopened"));
+            assert!(!published, "validation must precede the writer");
+            assert_eq!(summary(a.session.get(id).unwrap()), before, "failed validation must preserve document state");
+            assert_eq!(std::fs::read(&target).unwrap(), old);
+            assert_eq!(listing(&dir), ["out.pdf"]);
+        }
+        json(&mut a, "doc_save", json!({"doc": id.0}));
+        assert!(!a.session.get(id).unwrap().dirty);
+        assert_ne!(std::fs::read(&target).unwrap(), old);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

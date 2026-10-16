@@ -4651,6 +4651,76 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "the rest of the page draws");
     }
 
+    /// A sampled function kept its samples in a hash map keyed by each point of its grid, built
+    /// again every time a shading using it was painted (vendored hayro-interpret patch 31).
+    /// InDesign pages paint 4096-sample gradient ramps dozens of times, and `bug1721218` in the
+    /// pdf.js corpus spent most of its 1.5 s hashing them. The samples are now one flat array
+    /// indexed by strides: this page paints a 2,097,152-sample ramp (the most a table may hold)
+    /// 30 times, which took 38 seconds through the hash map.
+    #[test]
+    fn shadings_with_large_sampled_functions_paint_quickly() {
+        const SAMPLES: usize = 1 << 21;
+        let samples = zlib_zeros(SAMPLES);
+        // Black ramp on the left half, 30 times over; a red square after it.
+        let content = "q 0 0 20 40 re W n /Sh0 sh Q\n".repeat(30) + "1 0 0 rg 36 36 4 4 re f";
+        let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj\n".to_vec();
+        pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
+        pdf.extend_from_slice(b"5 0 obj << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 40 0] /Function 6 0 R >> endobj\n");
+        pdf.extend_from_slice(
+            format!("6 0 obj << /FunctionType 0 /Domain [0 1] /Range [0 1] /Size [{SAMPLES}] /BitsPerSample 8 /Filter /FlateDecode /Length {} >> stream\n", samples.len())
+                .as_bytes(),
+        );
+        pdf.extend_from_slice(&samples);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(render_first_page(pdf));
+        });
+        let page =
+            rx.recv_timeout(std::time::Duration::from_secs(10)).expect("painting a large sampled function must not rebuild a hash map each time");
+        assert_eq!(rgb_at(&page.rgba, 40, 5, 20), [0, 0, 0], "the ramp is drawn");
+        assert_eq!(rgb_at(&page.rgba, 40, 30, 20), [255, 255, 255], "outside the clip");
+        assert_eq!(rgb_at(&page.rgba, 40, 38, 2), [255, 0, 0], "the rest of the page draws");
+    }
+
+    /// Patch 31's flat table gives every sampled function the values the hash map gave: points
+    /// on the grid, multilinear interpolation between them (first input varying fastest), and no
+    /// value where a sample the interpolation needs is missing from a short stream.
+    #[test]
+    fn sampled_functions_interpolate_their_grid_as_before() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::object::{FromBytes, Object};
+
+        // Size [3 2], two outputs: out0 = 40 i + 60 j (linear), out1 = 100 i j (bilinear only).
+        let mut samples = Vec::new();
+        for j in 0..2u8 {
+            for i in 0..3u8 {
+                samples.extend_from_slice(&[40 * i + 60 * j, 100 * i * j]);
+            }
+        }
+        let function = |data: &[u8]| {
+            let mut bytes =
+                format!("<< /FunctionType 0 /Domain [0 1 0 1] /Range [0 1 0 1] /Size [3 2] /BitsPerSample 8 /Length {} >> stream\n", data.len())
+                    .into_bytes();
+            bytes.extend_from_slice(data);
+            bytes.extend_from_slice(b"\nendstream");
+            bytes
+        };
+        let whole = function(&samples);
+        let f = Function::new(&Object::from_bytes(&whole).expect("a stream object")).expect("a sampled function");
+        for (x, y) in [(0.0, 0.0), (1.0, 1.0), (0.5, 0.0), (0.25, 0.5), (0.75, 0.25), (0.1, 0.9), (1.0, 0.3)] {
+            let (gi, gj) = (2.0 * x, y);
+            let got = f.eval([x, y].into_iter().collect()).expect("every sample is present");
+            let want = [(40.0 * gi + 60.0 * gj) / 255.0, 100.0 * gi.min(1.0) * gj / 255.0 + 100.0 * (gi - 1.0).max(0.0) * gj / 255.0];
+            assert!(got.len() == 2 && got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-5), "({x}, {y}): got {got:?}, want {want:?}");
+        }
+        // Only the j = 0 row: points on it evaluate, points needing j = 1 have no value.
+        let short = function(&samples[..6]);
+        let f = Function::new(&Object::from_bytes(&short).expect("a stream object")).expect("a sampled function");
+        assert_eq!(f.eval([0.5, 0.0].into_iter().collect()).map(|v| v.to_vec()), Some(vec![40.0 / 255.0, 0.0]));
+        assert_eq!(f.eval([0.5, 0.5].into_iter().collect()), None);
+    }
+
     /// From `cargo xtask fuzz`: a mesh shading whose points lie far off the page (a 147-byte
     /// Coons patch stream decoded onto ±40000) was sampled pixel by pixel over its whole
     /// bounding box, up to 65536 × 65536 entries: a synthetic page passed 6 GB in six seconds.
@@ -4741,6 +4811,54 @@ trailer << /Root 1 0 R >>
         assert!(page.error.is_none(), "{:?}", page.error);
         let middle = &page.rgba[((28 * 40 + 12) * 4)..][..4];
         assert!(middle != [255, 255, 255, 255] && middle[3] == 255, "a small patch is shaded: {middle:?}");
+    }
+
+    /// Coons and tensor-product patches put each corner's colour at its corner and blend them
+    /// in between. Patch 33 interpolates each point of a patch's 20 × 20 triangle grid once
+    /// instead of once per cell touching it, and moves vertices instead of copying them; these
+    /// colours (taken before that change) pin that every vertex still gets its own point's colour.
+    #[test]
+    fn patch_meshes_keep_their_corner_colours() {
+        // Points on a 4 × 4 grid over the 40 pt page, in stream order: the 12 boundary points
+        // (both patch types), then a tensor patch's four interior ones.
+        let grid = |x: u8, y: u8| [x * 85, y * 85];
+        let boundary = [(0, 0), (0, 1), (0, 2), (0, 3), (1, 3), (2, 3), (3, 3), (3, 2), (3, 1), (3, 0), (2, 0), (1, 0)];
+        let interior = [(1, 1), (1, 2), (2, 2), (2, 1)];
+        let colours = [255u8, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 0];
+        let patch = |points: &[(u8, u8)]| {
+            let mut data = vec![0u8];
+            data.extend(points.iter().flat_map(|(x, y)| grid(*x, *y)));
+            data.extend_from_slice(&colours);
+            data
+        };
+        let render = |shading_type: u8, data: Vec<u8>| {
+            let content = b"/Sh0 sh";
+            let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj\n".to_vec();
+            pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n", content.len()).as_bytes());
+            pdf.extend_from_slice(content);
+            pdf.extend_from_slice(format!("\nendstream endobj\n5 0 obj << /ShadingType {shading_type} /ColorSpace /DeviceRGB /BitsPerCoordinate 8 /BitsPerComponent 8 /BitsPerFlag 8 /Decode [0 40 0 40 0 1 0 1 0 1] /Length {} >> stream\n", data.len()).as_bytes());
+            pdf.extend_from_slice(&data);
+            pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+            render_first_page(pdf)
+        };
+        let coons = render(6, patch(&boundary));
+        let tensor = render(7, patch(&[&boundary[..], &interior[..]].concat()));
+        // Near each corner (top-left, bottom-left, bottom-right, top-right in the raster), the
+        // centre, and a point between them.
+        let want = [
+            ((5, 5), [32, 199, 28]),
+            ((5, 34), [217, 61, 5]),
+            ((34, 34), [217, 190, 32]),
+            ((34, 5), [32, 61, 190]),
+            ((20, 20), [127, 128, 64]),
+            ((12, 27), [172, 110, 25]),
+        ];
+        for (what, page) in [("Coons", &coons), ("tensor", &tensor)] {
+            for ((x, y), colour) in want {
+                let got = rgb_at(&page.rgba, 40, x, y);
+                assert!(got.iter().zip(colour).all(|(g, w)| g.abs_diff(w) <= 1), "{what} patch at ({x}, {y}): got {got:?}, want {colour:?}");
+            }
+        }
     }
 
     /// The other half of the mesh-shading patch: ten thousand triangles that each cover half
@@ -5977,6 +6095,81 @@ endstream endobj
         let w = out.width as usize;
         assert_eq!(rgb_at(&out.rgba, w, 35, 35), [0, 255, 255], "the transfer function was not applied to a cached image");
         assert_eq!(rgb_at(&out.rgba, w, 100, 35), [255, 0, 0]);
+    }
+
+    /// The decoded-image cache keyed every decode by the size the image is drawn at, but only
+    /// a JPX stream decodes differently for a size: a scan was decoded again at every zoom step
+    /// and kept once per zoom level (vendored hayro-interpret patch 32). An image drawn at five
+    /// sizes is now decoded once, unless JPX decodes it or its soft mask.
+    #[test]
+    fn decoded_images_serve_every_size_they_are_drawn_at() {
+        use hayro::hayro_interpret::font::Glyph;
+        use hayro::hayro_interpret::hayro_syntax::Pdf;
+        use hayro::hayro_interpret::{
+            BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, Paint, PathDrawMode, SoftMask, TransformExt, interpret_page,
+        };
+        use kurbo::{Affine, BezPath, Rect};
+        use std::io::Write;
+
+        /// Asks for every raster image at the size it is drawn at, as the renderer does, and
+        /// counts the decoded images it was handed.
+        #[derive(Default)]
+        struct Draws(usize);
+        impl<'a> Device<'a> for Draws {
+            fn set_soft_mask(&mut self, _: Option<SoftMask<'a>>) {}
+            fn set_blend_mode(&mut self, _: BlendMode) {}
+            fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'a>, _: &PathDrawMode) {}
+            fn push_clip_path(&mut self, _: &ClipPath) {}
+            fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
+            fn draw_glyph(&mut self, _: &Glyph<'a>, _: Affine, _: Affine, _: &Paint<'a>, _: &GlyphDrawMode) {}
+            fn draw_image(&mut self, image: Image<'a, '_>, transform: Affine) {
+                let [a, b, c, d, ..] = transform.as_coeffs();
+                let target = ((a.hypot(b) * f64::from(image.width())).ceil() as u32, (c.hypot(d) * f64::from(image.height())).ceil() as u32);
+                if let Image::Raster(r) = image {
+                    r.with_rgba(|_, _| self.0 += 1, Some(target));
+                }
+            }
+            fn pop_clip_path(&mut self) {}
+            fn pop_transparency_group(&mut self) {}
+        }
+
+        let flate = |data: &[u8]| {
+            let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+            z.write_all(data).unwrap();
+            z.finish().unwrap()
+        };
+        let pixels = flate(&(0..64 * 64 * 3).map(|i| (i % 251) as u8).collect::<Vec<_>>());
+        let image = |extra: &str| {
+            format!(
+                "<< /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode {extra}/Length {} >>",
+                pixels.len()
+            )
+        };
+        let (plain, jpx_masked) = (image(""), image("/SMask 7 0 R "));
+        let jpx_mask =
+            "<< /Type /XObject /Subtype /Image /Width 64 /Height 64 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode /Length 4 >>";
+        // `name` drawn at five sizes, from 10 to 40 pt square.
+        let decodes = |name: &str| {
+            let content = [(10, 0, 0), (20, 12, 0), (30, 34, 0), (40, 66, 0), (25, 100, 40)]
+                .map(|(s, x, y)| format!("q {s} 0 0 {s} {x} {y} cm /{name} Do Q"))
+                .join(" ");
+            let bytes = image_cache_pdf(
+                &content,
+                "<< /XObject << /A 5 0 R /B 6 0 R >> >>",
+                &[(&plain, &pixels), (&jpx_masked, &pixels), (jpx_mask, b"\0\0\0\0")],
+            );
+            let parsed = Pdf::new(Arc::new(bytes)).expect("parses");
+            let page = &parsed.pages()[0];
+            let cache = InterpreterCache::new();
+            let initial = page.initial_transform(true).to_kurbo();
+            let mut ctx = Context::new(initial, Rect::new(0.0, 0.0, 130.0, 70.0), &cache, page.xref(), InterpreterSettings::default());
+            let mut device = Draws::default();
+            interpret_page(page, &mut ctx, &mut device);
+            assert_eq!(device.0, 5, "every draw of /{name} was handed its pixels");
+            cache.decoded_image_decodes()
+        };
+        assert_eq!(decodes("A"), 1, "a Flate image decodes the same at every size");
+        assert_eq!(decodes("B"), 5, "a JPX soft mask decodes for the size it is drawn at");
     }
 
     /// Render `pdf`'s first page at 72 dpi with no time limit beyond the test's own.

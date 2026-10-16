@@ -347,6 +347,8 @@ fn precise_touchpad_wheel_scrolls_one_to_one() {
 
 /// Steps `frames` frames and returns how far the document scrolled down over them, from the
 /// pages on screen in each pair of consecutive frames (a page can leave the screen on the way).
+/// Only the non-macOS glide tests below use it, hence the matching gate.
+#[cfg(not(target_os = "macos"))]
 fn scroll_over(h: &mut Harness<'static, PdfCraftApp>, frames: usize) -> f32 {
     let tops = |h: &Harness<'static, PdfCraftApp>| (0..3).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
     let mut moved = 0.0;
@@ -363,6 +365,8 @@ fn scroll_over(h: &mut Harness<'static, PdfCraftApp>, frames: usize) -> f32 {
 /// A two-finger swipe down the page, 25 points a frame for six frames, lifted the frame after
 /// (the axis stop Wayland sends), at 300 % so the document is long enough to glide in: how far
 /// it scrolled by the frame after the lift (the page is drawn a frame behind its scroll).
+/// Same gate as its callers below.
+#[cfg(not(target_os = "macos"))]
 fn swipe_and_lift(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
     let at = h.state().views[0].viewport_rect().center();
     h.hover_at(at);

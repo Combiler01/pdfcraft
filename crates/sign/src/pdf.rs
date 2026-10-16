@@ -468,7 +468,7 @@ impl SignatureInfo {
     }
 }
 
-fn text(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
+pub(crate) fn text(doc: &Document, d: &Dict, key: &[u8]) -> Option<String> {
     let o = doc.resolve(d.get(key)?);
     let s = match &*o {
         Object::String(s) => s.to_text(),

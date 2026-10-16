@@ -1603,7 +1603,15 @@ fn page_size_shows_while_the_pointer_is_in_the_bottom_left_quadrant() {
 
 #[test]
 fn navigation_history_commands_and_rail_are_per_tab_and_non_editing() {
+    for os in [egui::os::OperatingSystem::Nix, egui::os::OperatingSystem::Mac, egui::os::OperatingSystem::Windows] {
+        navigation_history_for_os(os);
+    }
+}
+
+fn navigation_history_for_os(os: egui::os::OperatingSystem) {
     let (mut h, c) = harness();
+    h.ctx.set_os(os);
+    h.run_steps(2);
     let enabled =
         |list: Value, id: &str| list["commands"].as_array().unwrap().iter().find(|cmd| cmd["id"] == id).unwrap()["enabled"].as_bool().unwrap();
     assert!(!enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
@@ -1617,7 +1625,8 @@ fn navigation_history_commands_and_rail_are_per_tab_and_non_editing() {
     ok(&mut h, &c, "ui.set", json!({"key": "page", "value": "4"}));
     assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.previous_view"));
     // The real rail button is accessible and invokes the same history, not the adjacent page.
-    ok(&mut h, &c, "ui.click", json!({"label": &format!("Previous view ({})", if cfg!(target_os = "macos") { "⌘[" } else { "Ctrl+[" })}));
+    let shortcut = if h.ctx.os() == egui::os::OperatingSystem::Mac { "⌘[" } else { "Ctrl+[" };
+    ok(&mut h, &c, "ui.click", json!({"label": &format!("Previous view ({shortcut})")}));
     assert_eq!(h.state().views[0].current, 0);
     assert!(enabled(ok(&mut h, &c, "ui.commands", json!({})), "view.next_view"));
     ok(&mut h, &c, "ui.command", json!({"id": "view.next_view"}));

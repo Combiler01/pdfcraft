@@ -733,7 +733,7 @@ pub(crate) fn page(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             let edge = ui.max_rect().right();
             add_menu(app, ui);
             let open_docs: Vec<(usize, String)> =
-                app.views.iter().enumerate().filter_map(|(i, v)| app.session.get(v.id).map(|d| (i, d.display_name()))).collect();
+                app.views.iter().enumerate().filter_map(|(i, _)| crate::canvas::tab_label(app, i).map(|name| (i, name))).collect();
             let response = ui.add_enabled_ui(!open_docs.is_empty(), |ui| widgets::icon_pill(ui, "file-plus", tl!("Add open documents"), false)).inner;
             response.clone().on_disabled_hover_text(tl!("No documents are open"));
             egui::Popup::menu(&response).show(|ui| {

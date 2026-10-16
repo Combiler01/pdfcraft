@@ -77,9 +77,9 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                 // Tabs shrink to share the strip (names end in "…") and scroll only once they reach
                 // their narrowest; then arrows either side say so and step through them.
                 let mut natural: Vec<f32> = Vec::with_capacity(app.views.len() + 1);
-                for v in &app.views {
-                    if let Some(doc) = app.session.get(v.id) {
-                        natural.push(tab_natural_width(ui, &t, &doc.display_name()));
+                for i in 0..app.views.len() {
+                    if let Some(name) = crate::canvas::tab_label(app, i) {
+                        natural.push(tab_natural_width(ui, &t, &name));
                     }
                 }
                 if app.combine_tab.open {
@@ -125,7 +125,8 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
                             let mut dragged = None;
                             for i in 0..app.views.len() {
                                 let Some(doc) = app.session.get(app.views[i].id) else { continue };
-                                let (name, dirty) = (doc.display_name(), doc.dirty);
+                                let Some(name) = crate::canvas::tab_label(app, i) else { continue };
+                                let dirty = doc.dirty;
                                 // A tab showing the document's title names its file on hover.
                                 let file = (name != doc.name).then_some(doc.name.as_str());
                                 let response = tab(

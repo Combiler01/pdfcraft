@@ -1863,6 +1863,32 @@ mod encoding_tests {
         }
     }
 
+    /// The Annex D.2 alias codes read, through the whole decode path, as the ink they draw.
+    ///
+    /// This is the map `redact` matches its patterns on (`unicode_map`), so a code that decodes
+    /// to an invisible formatting character is a silent miss, not a cosmetic one: "well-known"
+    /// written with the 0xAD byte matched no search and no redaction pattern.
+    #[test]
+    fn the_alias_codes_decode_as_ordinary_ink_and_encode_back_to_the_low_code() {
+        let (doc, d) = simple("Helvetica", None, Some(Object::name("WinAnsiEncoding")));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"well\xadknown"), "well-known");
+        assert_eq!(m.decode(b"a\xa0b"), "a b");
+        assert_eq!(m.encode("well-known a b").as_deref(), Some(&b"well-known a b"[..]), "the low code is the one written");
+
+        let (doc, d) = simple("Helvetica", None, Some(Object::name("MacRomanEncoding")));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"a\xcab"), "a b");
+        assert_eq!(m.decode(b"a\xadb"), "a\u{2260}b", "MacRoman 0xAD is `notequal`, not a hyphen");
+        assert_eq!(m.encode("a b").as_deref(), Some(&b"a b"[..]));
+
+        // An explicit /Differences name still says what it says: this is a property of those
+        // codes in those tables, not of the glyph names.
+        let (doc, d) = simple("Helvetica", None, Some(differences(vec![Object::Int(0x41), Object::name("sfthyphen"), Object::name("nbspace")])));
+        let m = Metrics::from_dict(&doc, &d);
+        assert_eq!(m.decode(b"AB"), "\u{ad}\u{a0}");
+    }
+
     /// Pins a deliberate restraint, so it is not "fixed" into a regression: a great many ordinary
     /// Latin TrueType subsets set the `/FontDescriptor` symbolic flag and still rely on a Latin
     /// encoding. Suppressing the implicit table on the flag would lose real text on a large share

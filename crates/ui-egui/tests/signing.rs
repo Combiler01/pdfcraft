@@ -152,11 +152,16 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     h.get_by_label_contains("Signed by Grace Hopper").click();
     h.run_steps(2);
     h.get_by_label("Signature validity is UNKNOWN:");
+    // Seed a find so the trust path proves it invalidates the view: trust rebuilds
+    // the display copy, and the next frame must draw from it without any zoom change.
+    h.state_mut().views[0].find = Some(pdfcraft_ui_egui::canvas::Find { matches: vec![(0, 0..5)], ..Default::default() });
     h.get_by_label("Add to trusted certificates").click();
     h.run_steps(3);
     h.get_by_label("Signed and all signatures are valid.");
     let s = h.state();
     assert_eq!(s.session.get(s.views[0].id).unwrap().signatures[0].status, SignatureStatus::Valid);
+    assert!(s.views[0].find.as_ref().is_some_and(|f| f.matches.is_empty()), "trust invalidates the view without zooming");
+    assert!(!s.session.get(s.views[0].id).unwrap().dirty, "trust alone is not an edit");
     // Show certificate: the Certificate Viewer.
     h.get_by_label("Show certificate…").click();
     h.run_steps(3);
@@ -182,8 +187,60 @@ fn drawing_a_signature_creating_an_id_signing_and_trusting() {
     assert_eq!(s.views.len(), 2);
     let v = s.session.get(s.views[1].id).unwrap();
     assert!(v.name.contains("signed version") && v.signatures.iter().any(|x| x.signed));
+    assert!(s.views[0].snapshot.is_none());
+    assert!(s.views[1].snapshot.as_ref().is_some_and(|snap| snap.kind == pdfcraft_ui_egui::canvas::SnapshotKind::SignedVersion));
+    // A repeat click reuses the snapshot tab instead of opening another identical one.
+    h.get_by_label("View signed version").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!((s.views.len(), s.active), (2, Some(1)));
+    // A repeat from the original tab reuses it too.
+    h.state_mut().active = Some(0);
+    h.run_steps(1);
+    h.get_by_label("View signed version").click();
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!((s.views.len(), s.active), (2, Some(1)));
+    // The snapshot tab says what it is.
+    h.get_by_label_contains("You are viewing the signed version of");
+    // Closing a clean snapshot closes the tab with no save prompt. The bar's own
+    // Close is addressed from its message, because the tab chrome has a Close button
+    // with the same label.
+    let label = h.get_by_label_contains("You are viewing the signed version of");
+    let label_row = label.rect().y_range();
+    let mut node = label;
+    let mut close = None;
+    for _ in 0..4 {
+        if let Some(pill) = node.query_by_label("Close") {
+            close = Some(pill);
+            break;
+        }
+        let Some(up) = node.parent() else { break };
+        node = up;
+    }
+    let close = close.expect("the notice bar holds its own Close");
+    // The bar's Close sits in the bar's row and the tab chrome's sits above it. Without
+    // this the walk could reach the chrome's button, which closes the same tab, and the
+    // test would pass with the bar's own button never pressed.
+    assert!(label_row.contains(close.rect().center().y), "the Close found is the bar's own");
+    close.click();
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 1);
+    assert!(h.state().close_request.is_none());
+    // Closing a dirty snapshot asks about saving instead of closing at once.
+    h.get_by_label("View signed version").click();
+    h.run_steps(3);
+    let id = h.state().views[1].id;
+    h.state_mut().session.apply(id, pdfcraft_engine::Edit::SetInfo { key: "Title".into(), value: "Dirty".into() }).unwrap();
+    h.state_mut().views[1].close_requested = true;
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 2);
+    h.get_by_label("Save changes to “contract_signed (signed version).pdf” before closing?");
+    h.get_by_label("Don't save").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views.len(), 1);
     // Trusted certificates and the ID list persist.
-    let saved = s.persist();
+    let saved = h.state().persist();
     let mut fresh = PdfCraftApp::new();
     fresh.set_option("language", "en").unwrap();
     fresh.restore(&saved);

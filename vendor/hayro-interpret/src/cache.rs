@@ -72,7 +72,8 @@ pub(crate) struct DecodedImageCache {
 /// - the dictionary's bytes (`dict_hash`: `/Decode`, `/ColorSpace`, `/SMask`, `/Mask`,
 ///   `/BitsPerComponent`, filters, …) and its object (`obj`: the decryption key depends on it);
 /// - whether it is decoded as a mask, a stencil mask, raster or mask output, interpolation,
-///   the decode target size, and preview or final quality.
+///   the decode target size (only for an image a JPX stream decodes, which is the only
+///   decode that reads it: PdfCraft patch 32), and preview or final quality.
 ///
 /// A transfer function (graphics state `/TR`) also changes the pixels and has no cheap key, so
 /// an image drawn under one is not cached; neither is an inline image, whose dictionary lives in
@@ -95,6 +96,8 @@ pub(crate) struct DecodedImageKey {
 struct DecodedImageCacheInner {
     map: HashMap<DecodedImageKey, Option<Box<dyn Any + Send + Sync>>>,
     bytes: usize,
+    /// PdfCraft patch (32): how many keyed decodes ran (cache misses).
+    decodes: usize,
 }
 
 impl DecodedImageCache {
@@ -103,6 +106,12 @@ impl DecodedImageCache {
             inner: Arc::new(Mutex::new(DecodedImageCacheInner::default())),
             preview: false,
         }
+    }
+
+    /// PdfCraft patch (32): how many decodes the cache was asked to keep (its misses), for
+    /// diagnostics and tests. 0 when the lock is poisoned.
+    pub(crate) fn decodes(&self) -> usize {
+        self.inner.lock().map(|locked| locked.decodes).unwrap_or(0)
     }
 
     /// The same cache, for a preview (`true`) or a final render.
@@ -141,6 +150,7 @@ impl DecodedImageCache {
         let Ok(mut locked) = self.inner.lock() else {
             return val;
         };
+        locked.decodes = locked.decodes.saturating_add(1);
         // Another thread may have decoded it meanwhile: keep the first copy.
         if let Some(existing) = locked.map.get(&key)
             && let Some(existing) = existing.as_ref().and_then(|val| val.downcast_ref::<T>())

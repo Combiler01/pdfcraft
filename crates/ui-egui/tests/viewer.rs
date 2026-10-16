@@ -857,6 +857,49 @@ fn an_earlier_revision_opens_from_document_properties() {
     let doc = s.session.get(s.views[s.active.unwrap()].id).unwrap();
     assert_eq!(doc.name, "updated (revision 1).pdf");
     assert_eq!(doc.info_value("Title"), None, "as it was before the update");
+    // A repeat reuses the revision tab instead of opening another identical one.
+    let views = s.views.len();
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let original = {
+        let s = h.state();
+        ids.iter().position(|id| s.session.get(*id).is_some_and(|d| d.name == "updated.pdf")).unwrap()
+    };
+    h.state_mut().active = Some(original);
+    h.state_mut().open_revision(1);
+    h.run_steps(1);
+    let s = h.state();
+    assert_eq!(s.views.len(), views);
+    assert!(
+        s.views[s.active.unwrap()]
+            .snapshot
+            .as_ref()
+            .is_some_and(|snap| snap.kind == pdfcraft_ui_egui::canvas::SnapshotKind::Revision && snap.revision == 1)
+    );
+    // An unknown revision errors without opening a tab.
+    h.state_mut().active = Some(original);
+    h.state_mut().open_revision(99);
+    h.run_steps(1);
+    let s = h.state();
+    assert_eq!(s.views.len(), views);
+    assert!(h.state().toast.as_ref().is_some_and(|t| t.0.starts_with("Couldn't open revision 99")), "unknown revisions error without opening a tab");
+    // Another tab over the same original shares the snapshot: b.pdf's first revision is
+    // byte-identical to updated.pdf's (incremental saves append), so it reuses the tab.
+    let ids: Vec<_> = h.state().views.iter().map(|v| v.id).collect();
+    let other = {
+        let s = h.state();
+        ids.iter().position(|id| s.session.get(*id).is_some_and(|d| d.name == "b.pdf")).unwrap()
+    };
+    h.state_mut().active = Some(other);
+    h.state_mut().open_revision(1);
+    h.run_steps(1);
+    let s = h.state();
+    assert_eq!(s.views.len(), views);
+    assert!(
+        s.views[s.active.unwrap()]
+            .snapshot
+            .as_ref()
+            .is_some_and(|snap| snap.kind == pdfcraft_ui_egui::canvas::SnapshotKind::Revision && snap.revision == 1)
+    );
 }
 
 #[test]

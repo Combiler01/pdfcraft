@@ -878,21 +878,27 @@ fn is_placeholder_title(title: &str) -> bool {
     address || t == "untitled"
 }
 
-/// What is displayed: the working file, plus (in memory only, never saved) the appearances
-/// PdfCraft draws for comments that have none ([`pdfcraft_annot::with_missing_appearances`]).
-/// The working file is unchanged, and so is everything that reads it (saving, signatures, …).
+/// The working file plus appearances for comments that have none. Signature artwork
+/// is preserved; validation badges belong to the viewer and never enter these bytes,
+/// which image/text exports and Print as Image also consume.
+fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u8>> {
+    let Some(e) = editor else { return bytes.clone() };
+    let Some(display) = pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances) else {
+        return bytes.clone();
+    };
+    match write_incremental(&display, &SaveOptions::default()) {
+        Ok(written) => Arc::new(written),
+        Err(err) => {
+            e.cos.note_repair(format!("missing comment appearances could not be drawn ({err})"));
+            bytes.clone()
+        }
+    }
+}
+
 /// The reader shows the same pages in `a` and `b`: count, displayed size and rotation.
 fn same_pages(a: &[pdfcraft_render::PageInfo], b: &[pdfcraft_render::PageInfo]) -> bool {
     a.len() == b.len()
         && a.iter().zip(b).all(|(x, y)| (x.width - y.width).abs() < 0.01 && (x.height - y.height).abs() < 0.01 && x.rotation == y.rotation)
-}
-
-fn display_bytes(editor: Option<&mut Editor>, bytes: &Arc<Vec<u8>>) -> Arc<Vec<u8>> {
-    let Some(display) = editor.and_then(|e| pdfcraft_annot::with_missing_appearances_cached(&e.cos, &mut e.appearances)) else {
-        return bytes.clone();
-    };
-    // Writing fails only as saving the document would; the page then shows as it always did.
-    write_incremental(&display, &SaveOptions::default()).map(Arc::new).unwrap_or_else(|_| bytes.clone())
 }
 
 /// The copy PDFCraft displays when opening `bytes`: with appearances drawn, in memory only, for
@@ -3227,8 +3233,8 @@ fn xfa_values_from_datasets(doc: &mut pdfcraft_cos::Document) -> Result<Vec<Stri
 }
 
 /// Validate the signature fields of `cos` (written as `bytes`).
-fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &pdfcraft_sign::DigestCache) -> Arc<Vec<SignatureInfo>> {
-    Arc::new(pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache))
+fn signatures_of(cos: &pdfcraft_cos::Document, bytes: &[u8], trust: &TrustStore, cache: &pdfcraft_sign::DigestCache) -> Vec<SignatureInfo> {
+    pdfcraft_sign::pdf::list_cached(cos, bytes, trust, cache)
 }
 
 impl Session {
@@ -3553,6 +3559,8 @@ impl Session {
             Ok(Err(e)) => (None, Some(e.to_string())),
             Err(_) => (None, Some("the document structure could not be read for editing".into())),
         };
+        let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
+        let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, trust, &sig_cache)).unwrap_or_default();
         let display = display_bytes(editor.as_mut(), &bytes);
         let renderer = RenderPool::new(display.clone(), render_threads(), config.clone());
         let (form, adopted) = editor
@@ -3574,8 +3582,6 @@ impl Session {
             };
             e.cos.note_repair(line);
         }
-        let sig_cache = Arc::new(pdfcraft_sign::DigestCache::default());
-        let signatures = editor.as_ref().map(|e| signatures_of(&e.cos, &bytes, trust, &sig_cache)).unwrap_or_default();
         Document {
             id: DocId(0),
             name,
@@ -3592,7 +3598,7 @@ impl Session {
             form: Arc::new(form),
             marker_scan: OnceLock::new(),
             links: OnceLock::new(),
-            signatures,
+            signatures: Arc::new(signatures),
             trust: trust.clone(),
             sig_cache,
             editor,
@@ -3890,7 +3896,8 @@ impl Session {
             doc.info.producer = info("Producer");
             doc.info.file_size = bytes.len();
             if !doc.signatures.is_empty() {
-                doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+                doc.signatures = Arc::new(signatures);
             }
             doc.bytes = bytes;
             return Ok(());
@@ -3933,10 +3940,9 @@ impl Session {
         }
         doc.info.file_size = bytes.len();
         doc.form = form;
-        if !doc.signatures.is_empty() {
-            doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        }
+        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
+        doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
         Ok(())
@@ -3979,10 +3985,9 @@ impl Session {
             doc.marker_scan = OnceLock::new();
         }
         doc.info.file_size = bytes.len();
-        if !doc.signatures.is_empty() {
-            doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
-        }
+        let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache) };
         doc.display = display_bytes(Some(editor), &bytes);
+        doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
         doc.fonts_stale = true;
@@ -4055,8 +4060,9 @@ impl Session {
         if invalidate_links {
             doc.links = OnceLock::new();
         }
-        doc.signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
+        let signatures = signatures_of(&editor.cos, &bytes, &doc.trust, &doc.sig_cache);
         doc.display = display_bytes(Some(editor), &bytes);
+        doc.signatures = Arc::new(signatures);
         doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         doc.bytes = bytes;
         Ok(())
@@ -4788,14 +4794,20 @@ impl Session {
         &self.trust.certs
     }
 
-    /// Replace the trusted certificates and revalidate every open document's signatures.
+    /// Replace the trusted certificates, revalidate every open document's signatures,
+    /// and rebuild its display copy and renderer to match (working file untouched,
+    /// generation/dirty unchanged: trust alone is not an edit).
     pub fn set_trusted_certificates(&mut self, certs: Vec<pdfcraft_sign::Certificate>) {
         self.trust = Arc::new(TrustStore { certs });
         for doc in &mut self.docs {
             doc.trust = self.trust.clone();
-            if let Some(e) = doc.editor.as_ref() {
-                doc.signatures = signatures_of(&e.cos, &doc.bytes, &doc.trust, &doc.sig_cache);
-            }
+            let Some(editor) = doc.editor.as_mut() else { continue };
+            // Keep verdict refresh and renderer refresh together. Viewer caches are
+            // invalidated by the UI trust path; trust alone changes no document artwork.
+            let signatures = if doc.signatures.is_empty() { Vec::new() } else { signatures_of(&editor.cos, &doc.bytes, &doc.trust, &doc.sig_cache) };
+            doc.display = display_bytes(Some(editor), &doc.bytes);
+            doc.signatures = Arc::new(signatures);
+            doc.renderer = RenderPool::new(doc.display.clone(), render_threads(), doc.config.clone());
         }
     }
 

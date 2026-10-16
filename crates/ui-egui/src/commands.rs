@@ -513,7 +513,7 @@ impl PdfCraftApp {
             }
             "sign.validate" => {
                 let certs = self.session.trusted_certificates().to_vec();
-                self.session.set_trusted_certificates(certs);
+                self.apply_trusted_certificates(certs);
                 self.choose_right_panel(Some(RightPanel::Signatures));
             }
             "sign.panel" => self.choose_right_panel(Some(RightPanel::Signatures)),

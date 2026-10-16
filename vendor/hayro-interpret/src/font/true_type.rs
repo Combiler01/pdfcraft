@@ -286,7 +286,13 @@ impl EmbeddedKind {
         self.differences
             .get(&code)
             .map(|s| s.as_str())
+            // PdfCraft patch: an Annex D.2 alias code reads as the ordinary character; see
+            // `Encoding::text_alias`.
+            .or_else(|| self.encoding.text_alias(code))
             .or_else(|| self.encoding.map_code(code))
+            // The last resort reads the code as WinAnsi whatever the font said, so it takes the
+            // same aliasing.
+            .or_else(|| Encoding::WinAnsi.text_alias(code))
             .or_else(|| win_ansi::get(code))
     }
 
