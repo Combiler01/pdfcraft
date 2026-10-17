@@ -44,8 +44,6 @@ mod combine_ui;
 pub mod docking;
 pub use combine_ui::{Columns as CombineColumns, CombineView, Lock as CombineLock, SortKey};
 mod camera_ui;
-pub mod clipboard;
-pub use clipboard::MockClipboard;
 mod commands;
 mod comment_props;
 pub mod comments;
@@ -734,9 +732,6 @@ pub struct PdfCraftApp {
     pub last_copied_file: Option<(String, Vec<u8>)>,
     pub last_copied_image_rect: Option<[f64; 4]>,
     pub system_clipboard: bool,
-    /// Deterministic in-memory clipboard for headless UI tests and automation.
-    /// When `Some`, clipboard operations use this mock instead of the OS clipboard.
-    pub clipboard_override: Option<MockClipboard>,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
     /// Duplicate Field: which field and onto which pages.
@@ -1037,8 +1032,7 @@ impl PdfCraftApp {
             last_copied_image: None,
             last_copied_file: None,
             last_copied_image_rect: None,
-            system_clipboard: false,
-            clipboard_override: Some(MockClipboard::default()),
+            system_clipboard: true,
             attach_override: None,
             duplicate_draft: None,
             form_preview: false,
@@ -2514,31 +2508,6 @@ impl PdfCraftApp {
         }
     }
 
-    /// Injects a deterministic mock clipboard for headless tests.
-    pub fn set_mock_clipboard(&mut self, mock: MockClipboard) {
-        self.clipboard_override = Some(mock);
-    }
-
-    /// Sets plain text on the mock clipboard (creating one if absent).
-    pub fn set_mock_clipboard_text(&mut self, text: impl Into<String>) {
-        if let Some(mock) = &mut self.clipboard_override {
-            mock.text = Some(text.into());
-            mock.image = None;
-        } else {
-            self.clipboard_override = Some(MockClipboard::with_text(text));
-        }
-    }
-
-    /// Sets an image on the mock clipboard (creating one if absent).
-    pub fn set_mock_clipboard_image(&mut self, width: usize, height: usize, rgba: Vec<u8>) {
-        if let Some(mock) = &mut self.clipboard_override {
-            mock.image = Some((width, height, rgba));
-            mock.text = None;
-        } else {
-            self.clipboard_override = Some(MockClipboard::with_image(width, height, rgba));
-        }
-    }
-
     /// `true` while any open document still waits for page renders (used by headless capture).
     pub fn render_pending(&self) -> bool {
         self.views.iter().any(|v| v.render_pending())
@@ -2981,18 +2950,14 @@ impl PdfCraftApp {
             self.cut_page_image(sel.page, sel.index);
         }
         if paste {
-            let system_has_text = if let Some(mock) = &self.clipboard_override {
-                mock.text.as_ref().is_some_and(|t| !t.is_empty())
+            #[cfg(not(target_arch = "wasm32"))]
+            let system_has_text = if self.system_clipboard {
+                arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false)
             } else {
-                #[cfg(not(target_arch = "wasm32"))]
-                if self.system_clipboard {
-                    arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false)
-                } else {
-                    false
-                }
-                #[cfg(target_arch = "wasm32")]
                 false
             };
+            #[cfg(target_arch = "wasm32")]
+            let system_has_text = false;
 
             if paste_event_text.is_some() || system_has_text {
                 self.last_copied_image = None;

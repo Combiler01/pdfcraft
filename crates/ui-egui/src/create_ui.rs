@@ -111,24 +111,10 @@ impl PdfCraftApp {
     /// Create ▸ Clipboard: a new document from the image (one page, its size) or the text on
     /// the clipboard, as Acrobat does.
     pub(crate) fn create_from_clipboard(&mut self) {
-        let clip = if let Some(mock) = &self.clipboard_override {
-            if let Some((w, h, rgba)) = &mock.image {
-                Some(Clip::Image { width: *w, height: *h, rgba: rgba.clone() })
-            } else {
-                mock.text.as_ref().map(|t| Clip::Text(t.clone()))
-            }
-        } else if self.system_clipboard {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                read_clipboard()
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                None
-            }
-        } else {
-            None
-        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let clip = read_clipboard();
+        #[cfg(target_arch = "wasm32")]
+        let clip: Option<Clip> = None;
         match clip {
             Some(c) => {
                 if let Err(e) = self.create_from_clip(c) {

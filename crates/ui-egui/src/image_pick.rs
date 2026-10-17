@@ -203,7 +203,7 @@ impl PdfCraftApp {
     /// previous copy, and puts that file on the system clipboard.
     #[cfg(not(target_arch = "wasm32"))]
     fn put_file_on_clipboard(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
-        if self.clipboard_override.is_some() || !self.system_clipboard {
+        if !self.system_clipboard {
             return Ok(());
         }
         let dir = clipboard_dir().ok_or("there is no folder for the copied file")?;
