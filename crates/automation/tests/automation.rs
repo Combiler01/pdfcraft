@@ -716,12 +716,11 @@ fn an_in_place_save_reports_a_required_rewrite_as_not_incremental() {
 #[test]
 fn a_recovered_page_tree_survives_a_full_save() {
     let dir = workdir("save-verify-before-write");
-    let objs: [&[u8]; 5] = [
+    let objs: [&[u8]; 4] = [
         b"<< /Type /Catalog /Pages 3 0 R >>",
         b"<< /Type /Page /MediaBox [0 0 200 300] /Contents 4 0 R >>",
         b"[ 0 ]",
         b"<< /Length 18 >>\nstream\n0 0 m 100 100 l S\nendstream",
-        b"<< /Type /Page /MediaBox [0 0 200 200] >>",
     ];
     let mut original = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
