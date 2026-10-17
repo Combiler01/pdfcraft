@@ -96,6 +96,8 @@ mod icon_data;
 pub mod icons;
 pub mod last_session;
 pub mod motion;
+#[cfg(not(target_arch = "wasm32"))]
+mod os_clipboard;
 mod page_selection_ui;
 mod pageboxes;
 mod palette;
@@ -2951,11 +2953,8 @@ impl PdfCraftApp {
         }
         if paste {
             #[cfg(not(target_arch = "wasm32"))]
-            let system_has_text = if self.system_clipboard {
-                arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false)
-            } else {
-                false
-            };
+            let system_has_text =
+                if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false) } else { false };
             #[cfg(target_arch = "wasm32")]
             let system_has_text = false;
 

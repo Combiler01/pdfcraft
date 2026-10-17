@@ -4977,20 +4977,16 @@ fn stale_clipboard_plain_text_does_not_paste_image() {
     // Put an image into internal cache
     h.state_mut().last_copied_image = Some((10, 10, vec![0; 400]));
     h.state_mut().last_copied_file = Some(("cached.png".to_string(), vec![1, 2, 3]));
-    h.state_mut().system_clipboard = true;
-
-    // Set actual system clipboard to plain text
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        cb.set_text("just plain text").ok();
-    }
+    // The text arrives in the paste event, as it does from the OS. The real system clipboard is
+    // shared by every test thread, so this test doesn't write it.
+    h.state_mut().system_clipboard = false;
 
     // A paste event containing plain text clears internal image cache and does not paste image
     h.event(egui::Event::Paste("just plain text".into()));
     h.run_steps(2);
 
-    // can_paste_image should now be false because the system clipboard has text, not an image!
-    assert!(!h.state().can_paste_image(), "cannot paste image when system clipboard has text");
+    // can_paste_image should now be false because the clipboard has text, not an image!
+    assert!(!h.state().can_paste_image(), "cannot paste image when the clipboard has text");
 
     // paste_image should fail and return false without pasting
     assert!(!h.state_mut().paste_image(0, None), "must not paste stale cached image");

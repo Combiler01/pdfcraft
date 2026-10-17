@@ -2840,7 +2840,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
-    let can_paste_image = app.can_paste_image();
+    // Asking means opening the system clipboard (and decoding any image on it), so it's asked
+    // once when a right-click opens a menu, not on every frame.
+    let can_paste_key = egui::Id::new("can-paste-image");
+    let can_paste_image = if ui.input(|i| i.pointer.secondary_pressed()) {
+        let can = app.can_paste_image();
+        ui.data_mut(|d| d.insert_temp(can_paste_key, can));
+        can
+    } else {
+        ui.data(|d| d.get_temp(can_paste_key)).unwrap_or(false)
+    };
     let view = &mut app.views[index];
     // Opened without the owner password and something is restricted.
     let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));

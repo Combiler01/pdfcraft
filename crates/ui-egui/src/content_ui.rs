@@ -824,7 +824,7 @@ impl crate::PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
                 let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+                crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
@@ -897,10 +897,8 @@ impl crate::PdfCraftApp {
     pub fn can_paste_image(&self) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.system_clipboard
-                && let Ok(mut cb) = arboard::Clipboard::new()
-            {
-                return cb.get_image().is_ok();
+            if self.system_clipboard {
+                return crate::os_clipboard::with(|cb| cb.get_image().map(|_| ())).is_ok();
             }
         }
         self.last_copied_image.is_some() || self.last_copied_file.is_some()
@@ -920,11 +918,9 @@ impl crate::PdfCraftApp {
 
         #[cfg(not(target_arch = "wasm32"))]
         let (has_system_cb, os_image) = if self.system_clipboard {
-            if let Ok(mut cb) = arboard::Clipboard::new() {
-                let img_opt = cb.get_image().ok().map(|img| (img.width, img.height, img.bytes.to_vec()));
-                (true, img_opt)
-            } else {
-                (false, None)
+            match crate::os_clipboard::with(|cb| Ok(cb.get_image().ok().map(|img| (img.width, img.height, img.bytes.into_owned())))) {
+                Ok(img_opt) => (true, img_opt),
+                Err(_) => (false, None),
             }
         } else {
             (false, None)
