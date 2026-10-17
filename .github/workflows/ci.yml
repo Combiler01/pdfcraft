@@ -85,11 +85,11 @@ jobs:
 
       - name: Test
         if: runner.os != 'Linux'
-        run: cargo test --workspace -- --test-threads=1
+        run: cargo test --workspace
 
       - name: Test (with craft-fonts)
         if: runner.os == 'Linux'
-        run: cargo test --workspace -- --test-threads=1
+        run: cargo test --workspace
 
       - name: Layering
         if: runner.os == 'Linux'

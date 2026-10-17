@@ -44,6 +44,7 @@ fn harness(pages: usize, setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harn
     let mut h = builder.build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
+        app.clipboard_override = Some(pdfcraft_ui_egui::MockClipboard::default());
         app.open_bytes("doc.pdf", None, fixture(pages)).expect("fixture opens");
         setup(&mut app);
         app
@@ -4978,11 +4979,13 @@ fn stale_clipboard_plain_text_does_not_paste_image() {
     h.state_mut().last_copied_image = Some((10, 10, vec![0; 400]));
     h.state_mut().last_copied_file = Some(("cached.png".to_string(), vec![1, 2, 3]));
     h.state_mut().system_clipboard = true;
+    h.state_mut().clipboard_override = None;
 
-    // Set actual system clipboard to plain text
+    // Set actual system clipboard to plain text, asserting success explicitly
     #[cfg(not(target_arch = "wasm32"))]
-    if let Ok(mut cb) = arboard::Clipboard::new() {
-        cb.set_text("just plain text").ok();
+    {
+        let mut cb = arboard::Clipboard::new().expect("acquire OS clipboard");
+        cb.set_text("just plain text").expect("set OS clipboard text");
     }
 
     // A paste event containing plain text clears internal image cache and does not paste image
@@ -4993,6 +4996,23 @@ fn stale_clipboard_plain_text_does_not_paste_image() {
     assert!(!h.state().can_paste_image(), "cannot paste image when system clipboard has text");
 
     // paste_image should fail and return false without pasting
+    assert!(!h.state_mut().paste_image(0, None), "must not paste stale cached image");
+
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.page_images(0).len(), 0, "no image pasted on the page");
+}
+
+#[test]
+fn deterministic_mock_clipboard_plain_text_does_not_paste_image() {
+    let mut h = harness(1, |_| {});
+    h.run_steps(4);
+    h.state_mut().last_copied_image = Some((10, 10, vec![0; 400]));
+    h.state_mut().last_copied_file = Some(("cached.png".to_string(), vec![1, 2, 3]));
+
+    // Inject plain text into the mock clipboard
+    h.state_mut().set_mock_clipboard_text("just plain text");
+
+    assert!(!h.state().can_paste_image(), "cannot paste image when mock clipboard has text");
     assert!(!h.state_mut().paste_image(0, None), "must not paste stale cached image");
 
     let doc = h.state().session.get(h.state().views[0].id).unwrap();

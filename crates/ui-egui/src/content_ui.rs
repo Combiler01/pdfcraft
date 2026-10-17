@@ -821,14 +821,19 @@ impl crate::PdfCraftApp {
             return false;
         };
         let copied = pixels.and_then(|(w, h, rgba)| {
-            #[cfg(not(target_arch = "wasm32"))]
-            if self.system_clipboard {
-                let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
-            }
-            #[cfg(target_arch = "wasm32")]
-            if self.system_clipboard {
-                return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
+            if let Some(mock) = &mut self.clipboard_override {
+                mock.image = Some((w as usize, h as usize, rgba.clone()));
+                mock.text = None;
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.system_clipboard {
+                    let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
+                    arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+                }
+                #[cfg(target_arch = "wasm32")]
+                if self.system_clipboard {
+                    return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
+                }
             }
             self.last_copied_image = Some((w, h, rgba));
             Ok((w, h))
@@ -895,11 +900,25 @@ impl crate::PdfCraftApp {
 
     /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
     pub fn can_paste_image(&self) -> bool {
+        if let Some(mock) = &self.clipboard_override {
+            if mock.text.as_ref().is_some_and(|t| !t.is_empty()) {
+                return false;
+            }
+            if mock.image.is_some() {
+                return true;
+            }
+            return self.last_copied_image.is_some() || self.last_copied_file.is_some();
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             if self.system_clipboard
                 && let Ok(mut cb) = arboard::Clipboard::new()
             {
+                if let Ok(text) = cb.get_text()
+                    && !text.is_empty()
+                {
+                    return false;
+                }
                 return cb.get_image().is_ok();
             }
         }
@@ -918,19 +937,33 @@ impl crate::PdfCraftApp {
             return false;
         }
 
-        #[cfg(not(target_arch = "wasm32"))]
-        let (has_system_cb, os_image) = if self.system_clipboard {
-            if let Ok(mut cb) = arboard::Clipboard::new() {
-                let img_opt = cb.get_image().ok().map(|img| (img.width, img.height, img.bytes.to_vec()));
-                (true, img_opt)
-            } else {
-                (false, None)
-            }
+        let (has_system_cb, os_image, system_has_text) = if let Some(mock) = &self.clipboard_override {
+            let has_text = mock.text.as_ref().is_some_and(|t| !t.is_empty());
+            let img = mock.image.clone();
+            (true, img, has_text)
         } else {
-            (false, None)
+            #[cfg(not(target_arch = "wasm32"))]
+            if self.system_clipboard {
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    let has_text = cb.get_text().map(|t| !t.is_empty()).unwrap_or(false);
+                    let img_opt = cb.get_image().ok().map(|img| (img.width, img.height, img.bytes.to_vec()));
+                    (true, img_opt, has_text)
+                } else {
+                    (false, None, false)
+                }
+            } else {
+                (false, None, false)
+            }
+            #[cfg(target_arch = "wasm32")]
+            (false, None, false)
         };
-        #[cfg(target_arch = "wasm32")]
-        let (has_system_cb, os_image): (bool, Option<(usize, usize, Vec<u8>)>) = (false, None);
+
+        if system_has_text {
+            self.last_copied_image = None;
+            self.last_copied_file = None;
+            self.last_copied_image_rect = None;
+            return false;
+        }
 
         let image_data: Option<(String, Vec<u8>)> = if has_system_cb {
             match os_image {
