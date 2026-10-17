@@ -479,6 +479,7 @@
 	Couldn't take the snapshot: {e}	Posnetka ni bilo mogoče usvariti: {e}
 	Couldn't use {name}: {e}	Datoteke {name} ni bilo mogoče uporabiti: {e}
 	Couldn't write {name}: {e}	Datoteke {name} ni bilo mogoče zapisati: {e}
+	the name is not a plain file name	ime ni preprosto ime datoteke
 	Couldn't write {path}: {e}	Poti {path} ni bilo mogoče zapisati: {e}
 	Counterclockwise 90 degrees	90 stopinj v levo
 	Country/Region	Država/regija

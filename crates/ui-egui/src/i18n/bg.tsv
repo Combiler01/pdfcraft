@@ -1664,6 +1664,7 @@
 	Couldn't use {name}: {e}	{name} не можа да бъде използван: {e}
 	Couldn't extract pages: {e}	Страниците не можаха да бъдат извлечени: {e}
 	Couldn't write {name}: {e}	{name} не можа да бъде записан: {e}
+	the name is not a plain file name	името не е обикновено име на файл
 	Wrote 1 file to {dir}	Записан е 1 файл в {dir}
 	Wrote {n} files to {dir}	Записани са {n} файла в {dir}
 	No pages match those choices	Няма страници, отговарящи на този избор

@@ -739,8 +739,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 match action {
                     Some(crate::sign_ui::CertAction::Trust(c)) => app.trust_certificate(*c),
                     Some(crate::sign_ui::CertAction::Export(c)) => {
-                        let pem = crate::sign_ui::certificate_pem(&c);
-                        app.write_files(&[(format!("{}.cer", c.display_name()), std::sync::Arc::new(pem.into_bytes()))], "Export certificate");
+                        app.export_certificate(&c);
                     }
                     None => {}
                 }

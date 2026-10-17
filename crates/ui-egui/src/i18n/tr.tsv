@@ -1603,6 +1603,7 @@
 	Couldn't use {name}: {e}	{name} kullanılamadı: {e}
 	Couldn't extract pages: {e}	Sayfalar ayıklanamadı: {e}
 	Couldn't write {name}: {e}	{name} yazılamadı: {e}
+	the name is not a plain file name	ad, basit bir dosya adı değil
 	Wrote 1 file to {dir}	1 dosya {dir} konumuna yazıldı
 	Wrote {n} files to {dir}	{n} dosya {dir} konumuna yazıldı
 	No pages match those choices	Bu seçimlerle eşleşen sayfa yok

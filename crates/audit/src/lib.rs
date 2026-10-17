@@ -87,6 +87,9 @@ pub enum AuditError {
 /// Fraction of a text line's ink (the area of its words), or of its box, that must lie under a
 /// cover to count as hidden (see [`covers`]).
 const COVER_FRACTION: f64 = 0.4;
+/// Fraction of one word's area that must lie under a cover to count as hidden on its own, however
+/// long the line around it (see [`covers`]).
+const WORD_FRACTION: f64 = 0.5;
 /// WCAG contrast ratio below which the text is unreadable against the cover.
 const COVER_CONTRAST: f64 = 3.0;
 
@@ -138,7 +141,10 @@ fn is_cover(rect: &cover::FilledRect, line: &TextLine) -> bool {
     rect.pos > line.paint_pos() && covers(&rect.rect, line) && contrast(line.color, rect.rgb) < COVER_CONTRAST
 }
 
-/// Does `cover` hide a substantial part of what `line` draws? Two ways, either is enough:
+/// Does `cover` hide a substantial part of what `line` draws? Three ways, any is enough:
+///
+/// - Half of one word lies under the cover. A box over one number in a long line hides a few
+///   percent of the line, and the number all the same (#2662).
 ///
 /// - 40% of the area of the line's words (its `ink`) lies under the cover. Measured on the words,
 ///   not the box: an applied redaction leaves a gap that draws nothing (a `TJ` adjustment where
@@ -155,6 +161,9 @@ fn covers(cover: &[f64; 4], line: &TextLine) -> bool {
         let total: f64 = boxes.iter().map(area).sum();
         if total > 0.0 { boxes.iter().map(hidden).sum::<f64>() / total } else { 0.0 }
     };
+    if line.ink.iter().any(|w| area(w) > 0.0 && hidden(w) / area(w) >= WORD_FRACTION) {
+        return true;
+    }
     let inked = fraction(&line.ink) >= COVER_FRACTION;
     let boxed = fraction(std::slice::from_ref(&line.rect)) >= COVER_FRACTION;
     let word_intersects = || line.ink.iter().any(|w| hidden(w) > 0.0);

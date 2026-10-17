@@ -1714,6 +1714,7 @@ action wizard	Start	Iniciar
 	Couldn't use {name}: {e}	No se pudo usar {name}: {e}
 	Couldn't extract pages: {e}	No se pudieron extraer las páginas: {e}
 	Couldn't write {name}: {e}	No se pudo escribir {name}: {e}
+	the name is not a plain file name	el nombre no es un nombre de archivo simple
 	Wrote 1 file to {dir}	Se ha escrito 1 archivo en {dir}
 	Wrote {n} files to {dir}	Se han escrito {n} archivos en {dir}
 	No pages match those choices	Ninguna página coincide con esas opciones

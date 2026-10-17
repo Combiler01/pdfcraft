@@ -18,6 +18,8 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0",
 craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "f58bc1a3df490992d633393d0898af0588ce882c" }
 # Shared system spooler; document composition remains in pdfcraft-print.
 craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "666c358065261a2816b376fa3bb10538dbf53040" }
+# Whether a path stored in a document may be opened (GoToR link targets).
+craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "82a24b006eefa036b43c09a67fb9a3fbd17ffe63" }
 # internal
 pdfcraft-geom = { path = "crates/geom", version = "0.8.0" }
 pdfcraft-filters = { path = "crates/filters", version = "0.8.0" }

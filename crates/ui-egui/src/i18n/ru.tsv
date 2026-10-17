@@ -1704,6 +1704,7 @@
 	Couldn't use {name}: {e}	Не удалось использовать {name}: {e}
 	Couldn't extract pages: {e}	Не удалось извлечь страницы: {e}
 	Couldn't write {name}: {e}	Не удалось записать {name}: {e}
+	the name is not a plain file name	имя не является простым именем файла
 	Wrote 1 file to {dir}	Записан 1 файл в {dir}
 	Wrote {n} files to {dir}	Записано {n} файлов в {dir}
 	No pages match those choices	Страницы не соответствуют этим выбору

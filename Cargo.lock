@@ -1170,6 +1170,11 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-docpath"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=82a24b006eefa036b43c09a67fb9a3fbd17ffe63#82a24b006eefa036b43c09a67fb9a3fbd17ffe63"
+
+[[package]]
 name = "craft-print"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=666c358065261a2816b376fa3bb10538dbf53040#666c358065261a2816b376fa3bb10538dbf53040"
@@ -4128,6 +4133,7 @@ name = "pdfcraft-engine"
 version = "0.8.0"
 dependencies = [
  "chrono",
+ "craft-docpath",
  "icu_properties",
  "idna",
  "image",

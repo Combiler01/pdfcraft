@@ -1634,6 +1634,7 @@
 	Couldn't use {name}: {e}	{name} файлын пайдалану мүмкін болмады: {e}
 	Couldn't extract pages: {e}	Беттерді шығарып алу мүмкін болмады: {e}
 	Couldn't write {name}: {e}	{name} файлына жазу мүмкін болмады: {e}
+	the name is not a plain file name	атау қарапайым файл атауы емес
 	Wrote 1 file to {dir}	1 файл {dir} ішіне жазылды
 	Wrote {n} files to {dir}	{n} файл {dir} ішіне жазылды
 	No pages match those choices	Ешбір бет бұл таңдауларға сәйкес келмейді

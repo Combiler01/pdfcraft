@@ -1696,6 +1696,7 @@
 	Couldn't use {name}: {e}	Nie można użyć {name}: {e}
 	Couldn't extract pages: {e}	Nie można wyodrębnić stron: {e}
 	Couldn't write {name}: {e}	Nie można zapisać {name}: {e}
+	the name is not a plain file name	nazwa nie jest zwykłą nazwą pliku
 	Wrote 1 file to {dir}	Zapisano 1 plik w {dir}
 	Wrote {n} files to {dir}	Liczba plików zapisanych w {dir}: {n}
 	No pages match those choices	Żadna strona nie pasuje do wybranych opcji

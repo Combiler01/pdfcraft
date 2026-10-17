@@ -1637,6 +1637,7 @@
 	Couldn't use {name}: {e}	{name} konnte nicht verwendet werden: {e}
 	Couldn't extract pages: {e}	Seiten konnten nicht extrahiert werden: {e}
 	Couldn't write {name}: {e}	{name} konnte nicht geschrieben werden: {e}
+	the name is not a plain file name	der Name ist kein einfacher Dateiname
 	Wrote 1 file to {dir}	1 Datei nach {dir} geschrieben
 	Wrote {n} files to {dir}	{n} Dateien nach {dir} geschrieben
 	No pages match those choices	Keine Seiten entsprechen dieser Auswahl

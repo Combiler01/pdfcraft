@@ -1703,6 +1703,7 @@
 	Couldn't use {name}: {e}	تعذّر استخدام {name}: {e}
 	Couldn't extract pages: {e}	تعذّر استخراج الصفحات: {e}
 	Couldn't write {name}: {e}	تعذّرت كتابة {name}: {e}
+	the name is not a plain file name	الاسم ليس اسم ملف بسيطًا
 	Wrote 1 file to {dir}	كُتب ملف واحد في {dir}
 	Wrote {n} files to {dir}	كُتب {n} ملفات في {dir}
 	No pages match those choices	لا صفحات تطابق هذه الاختيارات

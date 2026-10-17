@@ -1671,6 +1671,7 @@
 	Couldn't use {name}: {e}	无法使用{name}：{e}
 	Couldn't extract pages: {e}	无法提取页面：{e}
 	Couldn't write {name}: {e}	无法写入{name}：{e}
+	the name is not a plain file name	名称不是单纯的文件名
 	Wrote 1 file to {dir}	已将 1 个文件写入{dir}
 	Wrote {n} files to {dir}	已将{n}个文件写入{dir}
 	No pages match those choices	所选条件没有匹配的页面

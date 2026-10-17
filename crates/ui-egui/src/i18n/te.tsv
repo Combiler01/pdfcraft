@@ -1623,6 +1623,7 @@ action wizard	Start	ప్రారంభించు
 	Couldn't use {name}: {e}	{name}ను ఉపయోగించడం సాధ్యం కాలేదు: {e}
 	Couldn't extract pages: {e}	పేజీలను వేరు తీయడం సాధ్యం కాలేదు: {e}
 	Couldn't write {name}: {e}	{name}ను రాయడం సాధ్యం కాలేదు: {e}
+	the name is not a plain file name	పేరు సాధారణ ఫైల్ పేరు కాదు
 	Wrote 1 file to {dir}	{dir}లో 1 ఫైల్ సేవ్ చేయబడింది
 	Wrote {n} files to {dir}	{dir}లో {n} ఫైల్‌లు సేవ్ చేయబడ్డాయి
 	No pages match those choices	ఆ ఎంపికలకు సరిపోయే పేజీలు ఏవీ లేవు

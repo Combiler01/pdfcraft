@@ -1615,6 +1615,7 @@
 	Couldn't use {name}: {e}	無法使用{name}：{e}
 	Couldn't extract pages: {e}	無法提取頁面：{e}
 	Couldn't write {name}: {e}	無法寫入{name}：{e}
+	the name is not a plain file name	名稱不是單純的檔案名稱
 	Wrote 1 file to {dir}	已將 1 個檔案寫入{dir}
 	Wrote {n} files to {dir}	已將{n}個檔案寫入{dir}
 	No pages match those choices	所選條件沒有匹配的頁面

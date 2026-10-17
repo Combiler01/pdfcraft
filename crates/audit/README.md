@@ -16,9 +16,9 @@ It reports two kinds of finding:
 A properly applied redaction removes the text, so it never flags. Page backgrounds, table
 shading and highlights don't either: they're painted before the text, or light against it.
 
-A rectangle covers a text line when it hides at least 40% of the area of the words the line
-draws, or at least 40% of the line's box together with a positive-area intersection with one
-of its words. The gap an applied redaction leaves (a `TJ` adjustment where the text was) is in the line's box but
+A rectangle covers a text line when it hides at least half of one of the line's words, at
+least 40% of the area of the words the line draws, or at least 40% of the line's box together
+with a positive-area intersection with one of its words. The gap an applied redaction leaves (a `TJ` adjustment where the text was) is in the line's box but
 holds no word, so a redaction box over it alone does not count.
 
 Limits, by design and documented rather than hidden:
@@ -29,8 +29,8 @@ Limits, by design and documented rather than hidden:
 - covers inside form XObjects are found, but only text drawn directly in the page content is
   checked under them;
 - annotation rectangles are compared in unrotated user space, so `/Rotate` pages may misalign;
-- a cover that hides less than 40% of a line's box and less than 40% of its words (a short
-  value in the middle of a long line) is not flagged.
+- a cover that hides less than half of every word it touches, less than 40% of a line's box and
+  less than 40% of its words (a sliver of a long value) is not flagged.
 
 It fails closed: an undecodable content stream, malformed `/Annots`, form XObjects nested deeper
 than 32 or in a cycle, or a walk past the operator bound is an error, never "no findings".

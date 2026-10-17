@@ -933,8 +933,7 @@ pub fn right_panel(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             app.start_signing(page, None, Some(field), None);
         }
         Some(crate::sign_ui::PanelAction::ExportCertificate(c)) => {
-            let pem = crate::sign_ui::certificate_pem(&c);
-            app.write_files(&[(format!("{}.cer", c.display_name()), std::sync::Arc::new(pem.into_bytes()))], "Export certificate");
+            app.export_certificate(&c);
         }
         None => {}
     }

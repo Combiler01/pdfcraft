@@ -1709,6 +1709,7 @@
 	Couldn't use {name}: {e}	Impossibile usare {name}: {e}
 	Couldn't extract pages: {e}	Impossibile estrarre le pagine: {e}
 	Couldn't write {name}: {e}	Impossibile scrivere {name}: {e}
+	the name is not a plain file name	il nome non è un semplice nome file
 	Wrote 1 file to {dir}	Scritto 1 file in {dir}
 	Wrote {n} files to {dir}	Scritti {n} file in {dir}
 	No pages match those choices	Nessuna pagina corrisponde a queste scelte

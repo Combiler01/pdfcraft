@@ -1538,6 +1538,7 @@
 	Couldn't use {name}: {e}	Não foi possível usar {name}: {e}
 	Couldn't extract pages: {e}	Não foi possível extrair páginas: {e}
 	Couldn't write {name}: {e}	Não foi possível gravar {name}: {e}
+	the name is not a plain file name	o nome não é um nome de arquivo simples
 	Wrote 1 file to {dir}	1 arquivo gravado em {dir}
 	Wrote {n} files to {dir}	{n} arquivos gravados em {dir}
 	No pages match those choices	Nenhuma página corresponde a essas opções

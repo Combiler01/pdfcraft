@@ -175,6 +175,47 @@ fn unapplied_redact_mark_is_found() {
     assert!(findings[0].covered_text.contains("DO NOT SHARE"));
 }
 
+/// #2662: a box over one number of a long line hides a few percent of the line, and all of the
+/// number. Found as a cover, and as an unapplied mark over the same word.
+#[test]
+fn a_cover_over_one_word_of_a_long_line_is_found() {
+    // Helvetica 11: "The contract value is " ends near x 132, "98765" spans about 132-163.
+    let line = b"BT /F1 11 Tf 30 100 Td (The contract value is 98765 and the rest of this long line continues here.) Tj ET
+";
+    let mut content = line.to_vec();
+    content.extend_from_slice(
+        b"0 g
+131 96 33 14 re f
+",
+    );
+    let findings = audit_redactions(&open(one_page(&content, ""))).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::CoveredText);
+    assert!(findings[0].covered_text.contains("98765"), "{findings:?}");
+
+    let mut b = Builder::new();
+    b.add("<< /Type /Catalog /Pages 2 0 R >>");
+    b.add("<< /Type /Pages /Kids [3 0 R] /Count 1 >>");
+    b.add("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> /Annots [6 0 R] >>");
+    b.add_stream(line);
+    b.add(FONT);
+    b.add("<< /Type /Annot /Subtype /Redact /Rect [131 96 164 110] >>");
+    let findings = audit_redactions(&open(b.build())).expect("audit must run");
+    assert_eq!(findings.len(), 1, "{findings:?}");
+    assert_eq!(findings[0].kind, FindingKind::UnappliedMark);
+}
+
+/// A box that only grazes the words beside it (less than half of each) is not a cover.
+#[test]
+fn a_box_grazing_a_word_is_not_flagged() {
+    let content = b"BT /F1 11 Tf 30 100 Td (The contract value is 98765 and the rest of this long line continues here.) Tj ET
+0 g
+131 96 6 14 re f
+";
+    let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
+    assert!(findings.is_empty(), "{findings:?}");
+}
+
 #[test]
 fn background_before_text_is_not_flagged() {
     // An opaque dark rectangle painted *before* the text is a background, not a cover.
@@ -303,15 +344,17 @@ fn partial_value_is_found(rotated: bool) {
 /// Keep the historic detections with several covers, lines and text-spacing states.
 #[test]
 fn faux_redactions_with_multiple_covers_lines_and_spacing_are_found() {
-    let cases: [&[u8]; 4] = [
-        b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj ET\n0 g\n72 738 65 16 re f\n140 738 40 16 re f\n",
-        b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj 0 -15 Td (Account: 987654321) Tj ET\n0 g\n115 723 100 30 re f\n",
-        b"BT /F1 11 Tf 8 Tc 72 742 Td (Account: 1234) Tj ET\n0 g\n145 738 90 16 re f\n",
-        b"BT /F1 11 Tf 250 Tz 72 742 Td (Account: 1234) Tj ET\n0 g\n100 738 160 16 re f\n",
+    // The second box of the first case hides most of the number (less than 40% of the line): a
+    // finding of its own since covers are also measured per word (#2662).
+    let cases: [(&[u8], usize); 4] = [
+        (b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj ET\n0 g\n72 738 65 16 re f\n140 738 40 16 re f\n", 2),
+        (b"BT /F1 11 Tf 72 742 Td (Account: 123456789) Tj 0 -15 Td (Account: 987654321) Tj ET\n0 g\n115 723 100 30 re f\n", 1),
+        (b"BT /F1 11 Tf 8 Tc 72 742 Td (Account: 1234) Tj ET\n0 g\n145 738 90 16 re f\n", 1),
+        (b"BT /F1 11 Tf 250 Tz 72 742 Td (Account: 1234) Tj ET\n0 g\n100 738 160 16 re f\n", 1),
     ];
-    for content in cases {
+    for (content, expected) in cases {
         let findings = audit_redactions(&open(one_page(content, ""))).expect("audit must run");
-        assert_eq!(findings.len(), 1, "{}: {findings:?}", String::from_utf8_lossy(content));
+        assert_eq!(findings.len(), expected, "{}: {findings:?}", String::from_utf8_lossy(content));
     }
 }
 

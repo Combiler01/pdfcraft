@@ -1701,6 +1701,7 @@
 	Couldn't use {name}: {e}	Не вдалося використати {name}: {e}
 	Couldn't extract pages: {e}	Не вдалося видобути сторінки: {e}
 	Couldn't write {name}: {e}	Не вдалося записати {name}: {e}
+	the name is not a plain file name	назва не є простою назвою файлу
 	Wrote 1 file to {dir}	Записано 1 файл у {dir}
 	Wrote {n} files to {dir}	Записано файлів ({n}) у {dir}
 	No pages match those choices	Жодна сторінка не відповідає вибраним параметрам

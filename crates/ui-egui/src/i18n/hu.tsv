@@ -1622,6 +1622,7 @@
 	Couldn't use {name}: {e}	{name} használata nem sikerült: {e}
 	Couldn't extract pages: {e}	Az oldalakat nem sikerült kinyerni: {e}
 	Couldn't write {name}: {e}	{name} írása nem sikerült: {e}
+	the name is not a plain file name	a név nem egyszerű fájlnév
 	Wrote 1 file to {dir}	1 fájl ide írva: {dir}
 	Wrote {n} files to {dir}	{n} fájl ide írva: {dir}
 	No pages match those choices	Egy oldal sem felel meg ezeknek a választásoknak

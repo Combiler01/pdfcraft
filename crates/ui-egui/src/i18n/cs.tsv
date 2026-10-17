@@ -1755,6 +1755,7 @@ key	Space	Mezerník
 	Couldn't use {name}: {e}	{name} nelze použít: {e}
 	Couldn't extract pages: {e}	Stránky nelze extrahovat: {e}
 	Couldn't write {name}: {e}	{name} nelze zapsat: {e}
+	the name is not a plain file name	název není prostý název souboru
 	Wrote 1 file to {dir}	Zapsán 1 soubor do {dir}
 	Wrote {n} files to {dir}	Zapsáno souborů: {n} (složka {dir})
 	No pages match those choices	Těmto volbám neodpovídají žádné stránky

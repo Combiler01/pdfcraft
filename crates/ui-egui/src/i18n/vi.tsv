@@ -1955,6 +1955,7 @@ comment menu	Edit	Sửa
 	Couldn't use the photo: {e}	Không thể dùng ảnh: {e}
 	Couldn't use {name}: {e}	Không thể dùng {name}: {e}
 	Couldn't write {name}: {e}	Không thể ghi {name}: {e}
+	the name is not a plain file name	tên không phải là tên tệp đơn thuần
 	Couldn't write {path}: {e}	Không thể ghi {path}: {e}
 	Create link	Tạo liên kết
 	Created 1 link	Đã tạo 1 liên kết

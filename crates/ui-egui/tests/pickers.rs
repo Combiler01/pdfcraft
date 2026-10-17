@@ -748,20 +748,26 @@ fn a_background_startup_forms_script_notice_waits_until_its_tab_is_selected() {
 
 /// Embedded bytes and the PDF's original /UF name stay independent of the Save suggestion.
 fn attachment_fixture() -> Vec<u8> {
-    let name = "invoice\u{202e}fdp.exe";
+    attachment_pdf("invoice\u{202e}fdp.exe", b"hello notes")
+}
+
+/// A one-page PDF with one embedded file whose /UF name is `name`.
+fn attachment_pdf(name: &str, data: &[u8]) -> Vec<u8> {
     let uf = std::iter::once(0xfeffu16).chain(name.encode_utf16()).map(|c| format!("{c:04X}")).collect::<String>();
-    let objs = [
-        "<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(notes.txt) 5 0 R] >> >> >>".to_string(),
-        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
-        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> >>".to_string(),
-        "<< /Type /EmbeddedFile /Length 11 >>\nstream\nhello notes\nendstream".to_string(),
-        format!("<< /Type /Filespec /F (notes.txt) /UF <{uf}> /EF << /F 4 0 R >> >>"),
+    let objs: [Vec<u8>; 5] = [
+        b"<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(notes.txt) 5 0 R] >> >> >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Resources << >> >>".to_vec(),
+        [format!("<< /Type /EmbeddedFile /Length {} >>\nstream\n", data.len()).as_bytes(), data, b"\nendstream"].concat(),
+        format!("<< /Type /Filespec /F (notes.txt) /UF <{uf}> /EF << /F 4 0 R >> >>").into_bytes(),
     ];
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, o) in objs.iter().enumerate() {
         offsets.push(out.len());
-        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(o);
+        out.extend_from_slice(b"\nendobj\n");
     }
     let xref = out.len();
     out.extend_from_slice(b"xref\n0 6\n0000000000 65535 f \n");
@@ -823,4 +829,43 @@ fn attachment_save_preserves_bytes_metadata_and_selected_destination() {
     let doc = h.state().session.get(id).unwrap();
     assert_eq!(doc.info.attachments[index].name, raw_name);
     assert_eq!(doc.bytes.as_ref(), &original);
+}
+
+/// Every file under `dir`, recursively, sorted.
+fn files_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() { out.extend(files_under(&path)) } else { out.push(path) }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn files_written_from_an_attachment_tab_stay_inside_the_chosen_folder() {
+    let dir = AttachmentDir::new();
+    let absolute = dir.0.join("elsewhere").join("x.pdf").to_string_lossy().into_owned();
+    for name in ["../../x.pdf", absolute.as_str()] {
+        let out = dir.0.join("a").join("b").join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let mut h = harness(&[]);
+        h.state_mut().open_bytes("outer.pdf", None, attachment_pdf(name, &fixture(2))).unwrap();
+        h.run_steps(2);
+        let id = h.state().views[0].id;
+        h.state_mut().attachment_action(id, 0, true);
+        h.run_steps(2);
+        assert_eq!(h.state().views.len(), 2, "{name}: the attachment opens as a tab");
+        h.state_mut().export_dir_override = Some(out.to_string_lossy().into_owned());
+        h.state_mut().split_active(&pdfcraft_ui_egui::SplitPlan::By(pdfcraft_engine::SplitBy::PageCount(1)));
+        let written = files_under(&dir.0);
+        assert_eq!(written.len(), 2, "{name}: two split parts, got {written:?}");
+        assert!(written.iter().all(|p| p.parent() == Some(out.as_path())), "{name}: {written:?}");
+        // Extract writes page 1 under the name Split gave it.
+        h.state_mut().extract_draft = pdfcraft_ui_egui::ExtractDraft { separate: true, ..Default::default() };
+        h.state_mut().extract_selection();
+        assert!(h.state().toast.as_ref().is_some_and(|t| t.0.starts_with("Wrote 1 file")), "{name}: {:?}", h.state().toast);
+        assert_eq!(files_under(&dir.0), written, "{name}");
+        std::fs::remove_dir_all(dir.0.join("a")).unwrap();
+    }
 }

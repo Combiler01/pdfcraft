@@ -506,7 +506,8 @@ mod cups_options {
         let Some(record) = std::env::var_os(RECORD) else { return };
         let args: Vec<String> = std::env::args().skip_while(|a| a != "--").skip(1).collect();
         std::fs::write(std::path::Path::new(&record).join("args"), args.join("\n")).unwrap();
-        println!("{}", std::env::var(ANSWER).unwrap());
+        // Serial libtest prints its test label without a newline before this helper's stdout.
+        println!("\n{}", std::env::var(ANSWER).unwrap());
     }
 
     fn command(record: &std::path::Path, answer: &str) -> std::process::Command {

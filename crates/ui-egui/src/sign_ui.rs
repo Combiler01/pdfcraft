@@ -266,6 +266,12 @@ fn entry_unusable(u: &sign::windows::Unusable) -> DigitalIdEntry {
 }
 
 impl PdfCraftApp {
+    /// Export certificate: write `c` as PEM into a chosen folder, named after its subject.
+    pub(crate) fn export_certificate(&mut self, c: &Certificate) {
+        let name = format!("{}.cer", crate::files::attachment_file_name(&c.display_name()));
+        self.write_files(&[(name, std::sync::Arc::new(certificate_pem(c).into_bytes()))], "Export certificate");
+    }
+
     /// Start signing: the rectangle (or field) is known; show Sign with a Digital ID.
     pub fn start_signing(&mut self, page: usize, rect: Option<[f64; 4]>, field: Option<String>, certify: Option<u8>) {
         self.refresh_os_key_store_ids();
@@ -1494,6 +1500,23 @@ mod tests {
         app.sign_draft = Some(draft);
         let i = app.create_digital_id()?;
         Ok(PathBuf::from(&app.digital_ids[i].path))
+    }
+
+    #[test]
+    fn an_exported_certificate_is_written_inside_the_chosen_folder() {
+        let dir = scratch();
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+        let key = PrivateKey::generate_p256().unwrap();
+        let cert = Certificate::self_signed(&Name::build("../x", "", "", "", ""), &key, sign::Time::from_unix(0), 1, &[1]).unwrap();
+        let mut app = PdfCraftApp::new();
+        app.export_dir_override = Some(out.to_string_lossy().into_owned());
+        app.export_certificate(&cert);
+        let written: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(written, vec![std::ffi::OsString::from("out")]);
+        let pem = std::fs::read_to_string(out.join(".._x.cer")).unwrap();
+        assert!(pem.starts_with("-----BEGIN CERTIFICATE-----"), "{pem}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

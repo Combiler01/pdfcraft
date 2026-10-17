@@ -1215,6 +1215,7 @@
 	Couldn't use {name}: {e}	Δεν ήταν δυνατή η χρήση του {name}: {e}
 	Couldn't extract pages: {e}	Δεν ήταν δυνατή η εξαγωγή σελίδων: {e}
 	Couldn't write {name}: {e}	Δεν ήταν δυνατή η εγγραφή του {name}: {e}
+	the name is not a plain file name	το όνομα δεν είναι απλό όνομα αρχείου
 	Wrote 1 file to {dir}	Γράφτηκε 1 αρχείο στον φάκελο {dir}
 	Wrote {n} files to {dir}	Γράφτηκαν {n} αρχεία στον φάκελο {dir}
 	No pages match those choices	Καμία σελίδα δεν αντιστοιχεί σε αυτές τις επιλογές

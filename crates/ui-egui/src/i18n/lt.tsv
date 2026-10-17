@@ -1965,6 +1965,7 @@ comment menu	Edit	Redaguoti
 	Couldn't use the photo: {e}	Nepavyko panaudoti nuotraukos: {e}
 	Couldn't use {name}: {e}	Nepavyko panaudoti {name}: {e}
 	Couldn't write {name}: {e}	Nepavyko įrašyti {name}: {e}
+	the name is not a plain file name	vardas nėra paprastas failo vardas
 	Couldn't write {path}: {e}	Nepavyko įrašyti {path}: {e}
 	Create link	Kurti saitą
 	Created 1 link	Sukurtas 1 saitas
