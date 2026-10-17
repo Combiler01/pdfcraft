@@ -2922,6 +2922,12 @@ impl PdfCraftApp {
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::C)));
         let cut = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Cut)))
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::X)));
+        let paste_event_text = ctx.input(|input| {
+            input.events.iter().find_map(|e| match e {
+                egui::Event::Paste(text) if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            })
+        });
         let paste = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Paste(_))))
             || ctx.input_mut(|input| input.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::V)));
 
@@ -2944,6 +2950,22 @@ impl PdfCraftApp {
             self.cut_page_image(sel.page, sel.index);
         }
         if paste {
+            #[cfg(not(target_arch = "wasm32"))]
+            let system_has_text = if self.system_clipboard {
+                arboard::Clipboard::new().and_then(|mut cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false)
+            } else {
+                false
+            };
+            #[cfg(target_arch = "wasm32")]
+            let system_has_text = false;
+
+            if paste_event_text.is_some() || system_has_text {
+                self.last_copied_image = None;
+                self.last_copied_file = None;
+                self.last_copied_image_rect = None;
+                return;
+            }
+
             let page = self.views.get(i).map_or(0, |v| v.current);
             self.paste_image(page, None);
         }
