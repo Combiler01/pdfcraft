@@ -2241,12 +2241,70 @@ fn image_arrange_preserves_exact_non_rectangular_clipping_path() {
 
     // 2. Appearance: polygon geometry and even-odd rule are preserved
     assert!(str_content.contains("W*"), "Appearance: even-odd W* fill rule preserved");
-    assert!(str_content.contains("120 120 m 160 120 l 140 160 l h W* n"), "Appearance: exact polygon clip preserved");
+    // The original group still clips the image left behind, so the moved copy must carry its own.
+    let flat = str_content.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(flat.matches("120 120 m 160 120 l 140 160 l h W* n").count(), 2, "Appearance: exact polygon clip preserved in both units");
     let after = images::page_images(&doc, 0).unwrap();
     assert_eq!(after.len(), 2, "both images preserved");
+    for image in &after {
+        assert!(image.contains([140.0, 130.0]), "Appearance: inside the triangle shows");
+        assert!(!image.contains([125.0, 155.0]), "Appearance: inside its box but outside the triangle stays clipped");
+    }
 
     // 3. Preservation: External Text and remaining original group content preserved
     assert!(str_content.contains("External Text"), "Preservation: external text preserved");
+}
+
+#[test]
+fn image_remove_crop_after_arrange_keeps_position_under_outer_transform() {
+    // Arrange writes `cm inverse`, the clip, then the absolute placement; Remove Crop used to drop
+    // only the first, which drew the image under the outer translation twice.
+    let content = "1 0 0 1 50 50 cm q 0 0 50 50 re W n 100 0 0 100 0 0 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    assert_eq!(images::page_images(&doc, 0).unwrap()[0].rect, [50.0, 50.0, 150.0, 150.0]);
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let mut doc = reopen(&doc);
+    let moved = images::page_images(&doc, 0).unwrap();
+    assert_eq!(moved[0].rect, [50.0, 50.0, 150.0, 150.0]);
+    assert_eq!(moved[0].visible_rect, Some([50.0, 50.0, 100.0, 100.0]));
+
+    images::remove_image_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].rect, [50.0, 50.0, 150.0, 150.0], "the image stays where it was");
+    assert_eq!(after[0].visible_rect, Some([50.0, 50.0, 150.0, 150.0]), "the crop is gone");
+}
+
+#[test]
+fn image_arrange_refuses_to_move_past_a_clip_it_is_not_under() {
+    // The text after the image is drawn under a top-level clip; moving the image after it would
+    // crop the image to that clip.
+    let content = "q 100 0 0 100 50 50 cm /Im0 Do Q 0 0 60 60 re W n BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let before = page_content_bytes(&doc, 0);
+    assert_eq!(images::page_images(&doc, 0).unwrap()[0].visible_rect, Some([50.0, 50.0, 150.0, 150.0]));
+
+    for order in [images::ArrangeOrder::BringToFront, images::ArrangeOrder::BringForward] {
+        let err = images::arrange_image(&mut doc, 0, 0, order).unwrap_err();
+        assert!(err.to_string().contains("clipping path"), "{err}");
+    }
+    assert_eq!(page_content_bytes(&doc, 0), before, "nothing changes");
+}
+
+#[test]
+fn image_arrange_send_to_back_keeps_a_shared_clip() {
+    // The image after the text is clipped by a top-level clip set before both; behind the text it
+    // is no longer under that clip, so the moved unit has to draw it itself.
+    let content = "BT /F1 12 Tf 72 700 Td (External Text) Tj ET 0 0 60 60 re W n q 100 0 0 100 50 50 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let str_content = String::from_utf8_lossy(&bytes);
+    assert!(str_content.rfind("/Im0 Do").unwrap() < str_content.find("External Text").unwrap(), "the image moved behind the text");
+    assert_eq!(images::page_images(&doc, 0).unwrap()[0].visible_rect, Some([50.0, 50.0, 60.0, 60.0]), "still cropped to the clip");
 }
 
 #[test]

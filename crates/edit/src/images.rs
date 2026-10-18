@@ -995,11 +995,14 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     let mut dest_effective_state = EffectiveGState::default();
     let mut dest_ctm = Matrix::IDENTITY;
     let mut scope_start_ctm = Matrix::IDENTITY;
+    let mut outer_clips = Vec::new();
+    let mut dest_clips = Vec::new();
 
     let max_scan = scan_target.max(target.saturating_add(1)).max(scope_start.saturating_add(1));
     for (i, op) in ops.iter().enumerate() {
         if i == scope_start {
             scope_start_ctm = state.placement.matrix;
+            outer_clips = state.placement.clips.clone();
         }
         if i == target {
             source_effective_state = tracker.current_state.clone();
@@ -1008,6 +1011,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         if i == scan_target {
             dest_effective_state = tracker.current_state.clone();
             dest_ctm = state.placement.matrix;
+            dest_clips = state.placement.clips.clone();
         }
         if i >= max_scan {
             break;
@@ -1018,6 +1022,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     if scan_target >= ops.len() {
         dest_effective_state = tracker.current_state.clone();
         dest_ctm = state.placement.matrix;
+        dest_clips = state.placement.clips.clone();
     }
     if dest_ctm.invert().is_none() {
         return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
@@ -1036,7 +1041,25 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         }
     };
 
-    if extracted.clip_ops.is_empty() && !img.clips.is_empty() {
+    // The clips the moved unit draws itself: all of the image's when they are rebuilt from
+    // `img.clips`, else those its own scope set after the clips around it.
+    let all_clips = extracted.clip_ops.is_empty();
+    let reemitted = if all_clips {
+        img.clips.as_slice()
+    } else if img.clips.starts_with(&outer_clips) {
+        img.clips.get(outer_clips.len()..).unwrap_or_default()
+    } else {
+        return Err(EditError::Invalid("unsupported graphics state: the image clipping path cannot be cleanly preserved".into()));
+    };
+    // At the destination it is clipped by the clips there and the ones it draws. Moving past a
+    // clip the image isn't under (or out from under one it is) would change what part shows.
+    if !dest_clips.iter().all(|c| img.clips.contains(c)) || !img.clips.iter().all(|c| dest_clips.contains(c) || reemitted.contains(c)) {
+        return Err(EditError::Invalid(
+            "unsupported graphics state: moving the image past a clipping path would change what part of it shows".into(),
+        ));
+    }
+
+    if all_clips && !img.clips.is_empty() {
         for clip in &img.clips {
             let ops = clip_path_to_ops(clip);
             if !ops.is_empty() {
@@ -1218,53 +1241,42 @@ fn image_exclusive_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
     Ok(isolated)
 }
 
-fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize, scope_matrix: Matrix) -> Vec<Op> {
+/// The scope `start..=end` without its clipping paths, for drawing in the CTM `scope_matrix`
+/// in effect before it. Its `cm`s go too, and one `cm` before the image `Do` at `target` puts
+/// it back at `draw`, so clips any earlier move put around it (`cm inverse`, path, `W n`,
+/// absolute `cm`) can't leave the image displaced.
+fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize, target: usize, scope_matrix: Matrix, draw: Matrix) -> Result<Vec<Op>, EditError> {
+    let inverse = scope_matrix.invert().ok_or_else(|| EditError::Invalid("unsupported graphics state: non-invertible CTM".into()))?;
+    let placement = draw.then(&inverse);
+    if !placement.0.iter().all(|v| v.is_finite()) {
+        return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
+    }
+    let is_path = |o: &Op| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re");
     let mut drawing = Vec::new();
     let mut i = start.saturating_add(1);
     while i < end {
-        let op = match ops.get(i) {
-            Some(o) => o,
-            None => break,
-        };
-        if op.is("cm")
-            && scope_matrix != Matrix::IDENTITY
-            && let (Some(m), Some(inv)) = (op.nums::<6>(), scope_matrix.invert())
-            && Matrix(m) == inv
-        {
-            let mut k = i.saturating_add(1);
-            while ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")) {
+        let Some(op) = ops.get(i) else { break };
+        if op.is("cm") {
+            i = i.saturating_add(1);
+            continue;
+        }
+        if is_path(op) {
+            let mut k = i;
+            while ops.get(k).is_some_and(is_path) {
                 k = k.saturating_add(1);
             }
-            if k > i.saturating_add(1)
-                && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*"))
-                && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n"))
-            {
-                i = i.saturating_add(1);
+            if ops.get(k).is_some_and(|o| o.is("W") || o.is("W*")) && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n")) {
+                i = k.saturating_add(2);
                 continue;
             }
         }
-        if matches!(op.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re") {
-            let mut k = i;
-            while ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")) {
-                k = k.saturating_add(1);
-            }
-            if k > i && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*")) && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n"))
-            {
-                i = k.saturating_add(2);
-                if scope_matrix != Matrix::IDENTITY
-                    && ops.get(i).is_some_and(|next| next.is("cm"))
-                    && let Some(m) = ops.get(i).and_then(|next| next.nums::<6>())
-                    && Matrix(m) == scope_matrix
-                {
-                    i = i.saturating_add(1);
-                }
-                continue;
-            }
+        if i == target && placement != Matrix::IDENTITY {
+            drawing.push(Op::new("cm", placement.0.map(pdfcraft_content::num).to_vec()));
         }
         drawing.push(op.clone());
         i = i.saturating_add(1);
     }
-    drawing
+    Ok(drawing)
 }
 
 /// Remove any private clipping path / crop on image `index` on `page`.
@@ -1290,7 +1302,7 @@ pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Resul
         .position(|op| op.span.start == span && op.is("Do"))
         .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
     if let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? {
-        let drawing_ops = extract_image_drawing_ops(&ops, start, end, scope_matrix);
+        let drawing_ops = extract_image_drawing_ops(&ops, start, end, target, scope_matrix, Matrix(img.draw_matrix))?;
         let start_op = ops.get(start).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
         let end_op = ops.get(end).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
         let range = start_op.span.start..end_op.span.end;
