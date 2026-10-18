@@ -118,8 +118,8 @@ milestone = "M1"
 status = "shipped"
 commands = []
 tools = []
-evidence = ["crates/filters/src/lib.rs::chain_three_filters_with_predictor", "crates/filters/src/lzw.rs::spec_example", "crates/filters/src/predictor.rs::png_hand_vectors"]
-notes = ""
+evidence = ["crates/filters/src/lib.rs::chain_three_filters_with_predictor", "crates/filters/src/lzw.rs::spec_example", "crates/filters/src/predictor.rs::png_hand_vectors", "crates/filters/src/lib.rs::raw_flate_fallback_preserves_output_limits", "crates/cos/src/object.rs::raw_flate_fallback_streams_preserve_the_caller_limit"]
+notes = "Raw-deflate fallback preserves output limits in strict and tolerant decoding, including misleading zlib headers. Image codecs remain outside this general-purpose filter implementation."
 
 [[feature]]
 id = "core.image-filters"
@@ -4160,8 +4160,8 @@ milestone = "M5"
 status = "shipped"
 commands = ["comment.export"]
 tools = ["doc_export_data"]
-evidence = ["crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/xfdf/src/tests.rs::fdf_round_trips_values_and_comments", "crates/automation/tests/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text"]
-notes = ""
+evidence = ["crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/xfdf/src/tests.rs::fdf_round_trips_values_and_comments", "crates/automation/tests/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text", "crates/xfdf/src/tests.rs::xfdf_exports_preserve_whitespace_in_comment_attributes"]
+notes = "XFDF exports retain tabs and line breaks in comment identities and metadata."
 
 [[feature]]
 id = "comment.export-selected"
@@ -4692,8 +4692,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.export_data"]
 tools = ["doc_export_data"]
-evidence = ["crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/automation/tests/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text"]
-notes = "XFDF, FDF; XFA forms also export their data as XML or XDP (form.xfa-data)"
+evidence = ["crates/xfdf/src/tests.rs::xfdf_round_trips_comments_and_values", "crates/automation/tests/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text", "crates/xfdf/src/tests.rs::xml_exports_preserve_whitespace_in_field_names"]
+notes = "XFDF, FDF; XFA forms also export their data as XML or XDP (form.xfa-data); XML/XFDF exports retain tabs and line breaks in field identities through character references."
 
 [[feature]]
 id = "form.data-xml-csv-txt"
@@ -4704,8 +4704,8 @@ milestone = "M6"
 status = "shipped"
 commands = ["form.export_data", "form.import_data"]
 tools = ["doc_export_data", "doc_import_data"]
-evidence = ["crates/xfdf/src/tests.rs::form_data_as_xml_csv_and_text", "crates/automation/tests/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text"]
-notes = "Acrobat's XML (xfdf:original), CSV, tab-delimited"
+evidence = ["crates/xfdf/src/tests.rs::form_data_as_xml_csv_and_text", "crates/automation/tests/automation.rs::comments_and_form_data_travel_as_xfdf_fdf_and_text", "crates/xfdf/src/tests.rs::xml_form_import_preserves_text_around_comments_and_instructions", "crates/xfdf/src/tests.rs::xml_exports_preserve_whitespace_in_field_names"]
+notes = "Acrobat's XML (xfdf:original), CSV, tab-delimited; Plain AcroForm XML imports retain all direct text around comments and processing instructions, including CDATA and character references. Nested-element and XFA interpretation remain outside this flat exchange format. XML/XFDF exports retain tabs and line breaks in field identities through character references."
 
 [[feature]]
 id = "form.merge-to-spreadsheet"

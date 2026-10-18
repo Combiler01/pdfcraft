@@ -197,6 +197,9 @@ fn esc(s: &str) -> String {
             '<' => o.push_str("&lt;"),
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
+            // XML 1.0 §3.3.3 normalizes literal attribute whitespace, but not references.
+            '\t' => o.push_str("&#9;"),
+            '\n' => o.push_str("&#10;"),
             '\r' => o.push_str("&#13;"),
             c if (c as u32) < 0x20 && c != '\n' && c != '\t' => {}
             c => o.push(c),
@@ -1114,7 +1117,8 @@ fn import_table(doc: &mut Document, text: &str) -> Result<Report, DataError> {
             .map(|c| {
                 let name =
                     c.attributes().find(|a| a.name() == "original").map(|a| a.value().to_string()).unwrap_or_else(|| c.tag_name().name().to_string());
-                (name, vec![c.text().unwrap_or("").to_string()])
+                // Comments and processing instructions do not end a field's character data.
+                (name, vec![c.children().filter(|node| node.is_text()).filter_map(|node| node.text()).collect()])
             })
             .collect()
     } else if t.lines().next().is_some_and(|l| l.contains('\t')) {
