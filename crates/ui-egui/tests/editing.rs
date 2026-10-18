@@ -3052,7 +3052,9 @@ fn tiny_image_crop_handle_drag_does_not_panic() {
 #[test]
 fn text_selection_action_icons() {
     let mut h = harness(1, |_| {});
-    h.run_steps(4);
+    // Dragging selects only once the page's text layer is in, and it comes from the render pool
+    // in the background: under load a fixed number of frames was sometimes not enough.
+    support::wait_until(&mut h, "page 1's text layer", |app| app.views[0].has_page_text(0));
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
     let p0 = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
     let p1 = egui::pos2(r.left() + 100.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
