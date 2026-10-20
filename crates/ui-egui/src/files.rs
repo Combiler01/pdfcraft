@@ -476,33 +476,26 @@ impl PdfCraftApp {
         match purpose {
             FilePurpose::TextFont { page } => {
                 let Some((_, bytes)) = files.into_iter().next() else { return };
-                if self.apply_edit(Edit::RegisterTextFont { page, bytes: Arc::new(bytes.clone()) })
-                    && let Some((index, id)) = self.active_ids()
+                let bytes = Arc::new(bytes);
+                if !self.apply_edit(Edit::RegisterTextFont { page, bytes: bytes.clone() }) {
+                    return;
+                }
+                let Some((index, id)) = self.active_ids() else { return };
+                let Some(mut ed) = self.views[index].line_editor.clone().filter(|ed| ed.page == page) else { return };
+                // The font just loaded is the one the user wants: apply it to the paragraph, as
+                // choosing it from the document-font menu does, instead of only registering it (#2591).
+                let resource = self.session.get(id).and_then(|doc| {
+                    doc.text_editor_fonts(page).into_iter().find(|f| f.bytes == *bytes && !f.resource.starts_with("PCApproved")).map(|f| f.resource)
+                });
+                let ctx = self.ctx.clone();
+                if resource.is_some() {
+                    ed.font_resource = resource;
+                    self.apply_line_format(index, ed, ctx.as_ref());
+                } else if let Some(doc) = self.session.get(id)
+                    && let Some(ctx) = ctx
                 {
-                    let resource =
-                        self.session.get(id).and_then(|doc| doc.text_editor_fonts(page).into_iter().find(|f| f.bytes == bytes).map(|f| f.resource));
-                    if let Some(resource) = resource
-                        && let Some(ed) = self.views[index].line_editor.as_mut()
-                    {
-                        ed.font_resource = Some(resource);
-                        let edit = Edit::EditTextBlock { page: ed.page, block: ed.block, text: ed.text.clone(), style: ed.style() };
-                        if self.apply_edit(edit)
-                            && let Some(ed) = self.views[index].line_editor.as_mut()
-                        {
-                            ed.applied();
-                            if let Some(doc) = self.session.get(id)
-                                && let Some(block) = doc.text_blocks(ed.page).get(ed.block)
-                            {
-                                ed.refresh_source(block, doc.text_lines(ed.page));
-                            }
-                        }
-                    }
-                    if let Some(ed) = self.views[index].line_editor.as_mut()
-                        && let Some(doc) = self.session.get(id)
-                        && let Some(ctx) = self.ctx.as_ref()
-                    {
-                        ed.fonts = crate::edit_text_ui::install_source_fonts(ctx, doc, page);
-                    }
+                    ed.fonts = crate::edit_text_ui::install_source_fonts(&ctx, doc, page);
+                    self.views[index].line_editor = Some(ed);
                 }
             }
             FilePurpose::Combine => self.stage_combine(files),

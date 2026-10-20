@@ -1339,6 +1339,10 @@ mod tests {
         assert!(parser.acquire(|| panic!("must not retry"), || false).unwrap().is_none());
     }
 
+    /// The waits here only guard against a hang; they don't time anything. The initializer is
+    /// held until the end of the test, so a waiter that can't cancel waits forever and fails the
+    /// guard however long it is, and a correct one returns as soon as its thread runs. Two
+    /// seconds was too short for a busy FreeBSD VM in CI to start the threads (#1970).
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn waiting_worker_can_cancel_before_initializer_returns() {
@@ -1346,6 +1350,7 @@ mod tests {
             sync::{atomic::AtomicUsize, mpsc},
             time::Duration,
         };
+        const HANG_GUARD: Duration = Duration::from_secs(600);
         let parser = Arc::new(PoolParser::default());
         let (started_tx, started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
@@ -1355,14 +1360,16 @@ mod tests {
                 parser.acquire(
                     || {
                         started_tx.send(()).unwrap();
-                        release_rx.recv().unwrap();
+                        // A failed test drops the sender: that ends the hold, it is not a
+                        // second failure.
+                        let _ = release_rx.recv();
                         Pdf::new(ONE_PAGE.to_vec()).ok()
                     },
                     || false,
                 )
             })
         };
-        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        started_rx.recv_timeout(HANG_GUARD).expect("the initializer starts");
         let cancelled = Arc::new(AtomicBool::new(false));
         let checks = Arc::new(AtomicUsize::new(0));
         let (done_tx, done_rx) = mpsc::channel();
@@ -1379,13 +1386,13 @@ mod tests {
                 done_tx.send(result.unwrap().is_none()).unwrap();
             })
         };
-        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let deadline = std::time::Instant::now() + HANG_GUARD;
         while checks.load(Ordering::Relaxed) == 0 {
-            assert!(std::time::Instant::now() < deadline);
-            std::thread::yield_now();
+            assert!(std::time::Instant::now() < deadline, "the waiter never checked for cancellation");
+            std::thread::sleep(Duration::from_millis(1));
         }
         cancelled.store(true, Ordering::Release);
-        assert!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+        assert!(done_rx.recv_timeout(HANG_GUARD).expect("the waiter cancels while the initializer is held"));
         waiter.join().unwrap();
         release_tx.send(()).unwrap();
         assert!(initializer.join().unwrap().unwrap().is_some());
@@ -2886,6 +2893,33 @@ trailer << /Root 1 0 R >>
         assert_eq!(px(20, 80), vec![255, 0, 0, 255], "checkbox must show the /Yes appearance, not the decoy stream");
     }
 
+    /// Microsoft Reporting Services (bank statements, invoices) writes `stream \r\n`, a space
+    /// before the line break. The content stream was then taken to start at the space and the
+    /// page rendered blank, while Preview, Chrome and Poppler showed it. Vendored hayro-syntax
+    /// patch: spaces and tabs before the line break are skipped, with the right `/Length` and
+    /// with a wrong one. Spaces with no line break after them never start stream data.
+    #[test]
+    fn space_before_the_line_break_after_stream_still_renders() {
+        let pdf = |eol: &str, length: u32| {
+            format!(
+                "%PDF-1.3\r\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\r\n\
+                 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\r\n\
+                 3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >> endobj\r\n\
+                 4 0 obj << /Length {length} >> stream{eol}0 0 0 rg 20 20 60 60 re f\r\nendstream\r\nendobj\r\n\
+                 trailer << /Root 1 0 R >>\r\n%%EOF"
+            )
+            .into_bytes()
+        };
+        for (eol, length) in [(" \r\n", 25), (" \n", 25), ("\t \r", 25), (" \r\n", 999), ("\r\n", 25)] {
+            let mut r = PageRenderer::new(Arc::new(pdf(eol, length)), RenderConfig::default());
+            let p = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(p.error.is_none(), "{eol:?}: {:?}", p.error);
+            let px = |x: u32, y: u32| p.rgba[((y * p.width + x) * 4) as usize..][..4].to_vec();
+            assert_eq!(px(50, 50), vec![0, 0, 0, 255], "stream{eol:?} (/Length {length}) must draw the square");
+            assert_eq!(px(5, 5), vec![255, 255, 255, 255], "outside the square stays white");
+        }
+    }
+
     /// An appearance whose /BBox is a line or a point, or whose /Matrix collapses it to one, has
     /// no mapping onto the annotation's /Rect: the scale (/Rect size over transformed box size)
     /// divided by zero, and the infinite or NaN matrix reached the device with everything the
@@ -3397,6 +3431,36 @@ trailer << /Root 1 0 R >>
         }
     }
 
+    /// A shaded Type 3 glyph must use bounds in device coordinates at every position.
+    #[test]
+    fn shaded_type3_glyph_draws_at_multiple_positions() {
+        let content = "BT /F 30 Tf 1 0 0 1 50 70 Tm (A) Tj 1 0 0 1 220 70 Tm (A) Tj ET";
+        let glyph = "100 0 d0 0 0 100 100 re W n /S sh";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 300 150] /Resources << /Font << /F 5 0 R >> >> /Contents 4 0 R >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] /CharProcs << /A 6 0 R >> /Encoding << /Differences [65 /A] >> /FirstChar 65 /LastChar 65 /Widths [100] /Resources << /Shading << /S 7 0 R >> >> >> endobj
+6 0 obj << /Length {} >> stream
+{glyph}
+endstream endobj
+7 0 obj << /ShadingType 2 /ColorSpace /DeviceRGB /Coords [0 0 100 0] /Function << /FunctionType 2 /Domain [0 1] /C0 [1 0 0] /C1 [0 0 1] /N 1 >> /Extend [true true] >> endobj
+trailer << /Root 1 0 R >>
+%%EOF", content.len(), glyph.len()
+        );
+        let mut renderer = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        for x in [65usize, 235] {
+            let pixel = &page.rgba[(65 * 300 + x) * 4..][..4];
+            assert!(pixel[0] < 240 && pixel[2] < 240 && pixel[1] < 10, "glyph at {x}: {pixel:?}");
+        }
+    }
+
     /// From `cargo xtask fuzz`: a Type 3 font without /Resources inherits the page's, where its
     /// own name is defined, and its glyph shows text in itself (vendored patch:
     /// `MAX_PAINT_NESTING`). Must terminate; a normal Type 3 glyph must still paint.
@@ -3467,6 +3531,141 @@ trailer << /Root 1 0 R >>
         assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255]);
     }
 
+    /// One page `w` × `h` points whose content `content` paints with pattern `/P1`: a 10 × 10 cell
+    /// of blue with `/XStep step /YStep step` and pattern matrix `matrix`. Its RGBA pixels.
+    fn tiling_page(w: usize, h: usize, content: &str, step: &str, matrix: &str) -> Vec<u8> {
+        let cell = "0 0 1 rg 0 0 10 10 re f";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 {w} {h}] /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 3 /BBox [0 0 10 10] /XStep {step} /YStep {step} /Matrix [{matrix}] /Length {} >> stream
+{cell}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            cell.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        page.rgba.to_vec()
+    }
+
+    /// #3349: PowerPoint (PDFMaker) writes a picture fill as a tiling pattern drawn once, with
+    /// `/XStep 2147480100 /YStep 2147480100` and a matrix that flips y. Fitting such a step into
+    /// a cell pixmap shrank the picture below a pixel, so it vanished. The cell's `/BBox` is drawn
+    /// at full scale, once, filled or stroked: where it is it shows, and around it (left, right,
+    /// above, below) nothing repeats or smears.
+    #[test]
+    fn a_tiling_pattern_drawn_once_shows_its_cell() {
+        let at = |px: &[u8], w: usize, x: usize, y: usize| px[(y * w + x) * 4..][..3].to_vec();
+        let (blue, white) = (vec![0, 0, 255], vec![255, 255, 255]);
+        // The cell at user x 10..20 and, flipped, y 10..20: device rows 20..30.
+        let once = tiling_page(40, 40, "/Pattern cs /P1 scn 0 0 40 40 re f", "2147480100", "1 0 0 -1 10 20");
+        assert_eq!(at(&once, 40, 15, 25), blue, "the cell");
+        for (x, y, side) in [(5, 25, "left"), (25, 25, "right"), (15, 15, "above"), (15, 35, "below")] {
+            assert_eq!(at(&once, 40, x, y), white, "nothing {side} of it");
+        }
+        // Stroked: a wide line across the cell shows it too.
+        let stroked = tiling_page(40, 40, "/Pattern CS /P1 SCN 20 w 0 15 m 40 15 l S", "2147480100", "1 0 0 -1 10 20");
+        assert_eq!(at(&stroked, 40, 15, 25), blue, "a stroke with the pattern");
+        assert_eq!(at(&stroked, 40, 25, 25), white);
+        // An ordinary step still tiles.
+        let tiled = tiling_page(40, 40, "/Pattern cs /P1 scn 0 0 40 40 re f", "20", "1 0 0 1 0 0");
+        assert_eq!(at(&tiled, 40, 25, 35), blue, "a step of 20 repeats the cell");
+    }
+
+    /// #3356 review: a `/BBox` too thin to divide by (not zero, which is refused, but 1e-40
+    /// wide) makes the cell scale infinite; it keeps the old path, so no infinite or NaN
+    /// geometry reaches the cell renderer, the page renders and what follows still draws.
+    #[test]
+    fn a_tiling_cell_too_thin_to_scale_keeps_the_old_path() {
+        assert!(hayro::usable_cell_scale(2.0, 1.0));
+        for (xs, ys) in [(f32::INFINITY, 1.0), (1.0, f32::NAN), (0.0, 1.0), (1.0, -2.0)] {
+            assert!(!hayro::usable_cell_scale(xs, ys), "{xs} {ys}");
+        }
+        let thin = "0.0000000000000000000000000000000000000001";
+        let content = "/Pattern cs /P1 scn 0 0 40 40 re f 1 0 0 rg 0 0 4 4 re f";
+        let cell = "0 0 1 rg 0 0 10 10 re f";
+        let pdf = format!(
+            "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Pattern << /P1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /Pattern /PatternType 1 /PaintType 1 /TilingType 3 /BBox [0 0 {thin} 10] /XStep 2147480100 /YStep 2147480100 /Length {} >> stream
+{cell}
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            content.len(),
+            cell.len()
+        );
+        let mut r = PageRenderer::new(Arc::new(pdf.into_bytes()), RenderConfig::default());
+        let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+        assert!(page.error.is_none(), "{:?}", page.error);
+        assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 0, 0, 255], "what follows still draws");
+        assert_eq!(&page.rgba[((20 * 40 + 20) * 4)..][..3], &[255, 255, 255], "the degenerate cell draws nothing");
+    }
+
+    /// #3349: a step too large for a cell pixmap is drawn as one cell only when the painted area
+    /// can't reach another: a page wide (or tall) enough to show the next cell, or the one before,
+    /// still tiles them.
+    #[test]
+    fn a_large_step_still_tiles_where_the_next_cell_shows() {
+        let at = |px: &[u8], w: usize, x: usize, y: usize| px[(y * w + x) * 4..][..3].to_vec();
+        let blue = vec![0, 0, 255];
+        // Steps of 3100 points: over 3000 pixels at this scale, so the cell is shrunk to fit,
+        // by 3000/3100; a pixel 4 points into a cell is blue either way.
+        let wide = "/Pattern cs /P1 scn 0 0 3200 20 re f";
+        let next = tiling_page(3200, 20, wide, "3100", "1 0 0 1 0 0");
+        assert_eq!(at(&next, 3200, 3104, 15), blue, "the cell to the right");
+        let before = tiling_page(3200, 20, wide, "3100", "1 0 0 1 3100 0");
+        assert_eq!(at(&before, 3200, 4, 15), blue, "the cell to the left");
+        let tall = "/Pattern cs /P1 scn 0 0 20 3200 re f";
+        let above = tiling_page(20, 3200, tall, "3100", "1 0 0 1 0 0");
+        assert_eq!(at(&above, 20, 4, 3200 - 3104), blue, "the cell above");
+        let below = tiling_page(20, 3200, tall, "3100", "1 0 0 1 0 3100");
+        assert_eq!(at(&below, 20, 4, 3200 - 4), blue, "the cell below");
+        // A stroke counts with its width: this line ends at x 3080, short of the next cell at
+        // 3100, but its square cap reaches 3110.
+        let stroked = tiling_page(3200, 20, "/Pattern CS /P1 SCN 60 w 2 J 0 10 m 3080 10 l S", "3100", "1 0 0 1 0 0");
+        assert_eq!(at(&stroked, 3200, 3104, 15), blue, "the next cell, under the stroke's cap");
+        // A miter reaches further than the line width (review on #3356): this join's vertex is
+        // at x 3085, 15 short of the next cell with a 10-wide line, but its miter tip, 45 long
+        // under the default limit of 10, reaches 3130.
+        let mitered = tiling_page(3200, 20, "/Pattern CS /P1 SCN 10 w 0 j 3000 0 m 3085 10 l 3000 20 l S", "3100", "1 0 0 1 0 0");
+        // The tip narrows to a point, so this pixel is partly covered: blue, not white.
+        let tip = at(&mitered, 3200, 3104, 10);
+        assert!(tip[0] < 160 && tip[1] < 160 && tip[2] > 200, "the next cell, under the miter's tip: {tip:?}");
+        // Under a skew, a direction between the axes stretches more than either axis (review on
+        // #3356). This join's vertex is at device x 2980 and its miter tip, along that direction,
+        // at 3107: the larger axis stretch (1.118) put the reach at 3092, short of the next cell;
+        // the most any direction stretches (1.461) puts it at 3126.
+        let skewed = tiling_page(
+            3200,
+            20,
+            "/Pattern CS /P1 SCN 1 0 1 0.5 0 0 cm 20 w 0 j 2783.936 -366.118 m 3033.6 -53.6 l 2721.082 -303.264 l S",
+            "3100",
+            "1 0 0 1 0 0",
+        );
+        // The tip narrows to a point, so its pixels are partly covered.
+        let under_tip = (3100..3108).flat_map(|x| (10..20).map(move |y| (x, y))).map(|(x, y)| at(&skewed, 3200, x, y));
+        assert!(
+            under_tip.clone().any(|px| px[0] < 200 && px[1] < 200 && px[2] > 240),
+            "the next cell, under the skewed miter's tip: {:?}",
+            under_tip.collect::<Vec<_>>()
+        );
+    }
+
     /// Contributor-original JPEG 2000: one unsigned 8-bit pixel per component, one tile,
     /// no decomposition, reversible wavelet, and one empty packet per component. Empty
     /// coefficients decode to the midpoint (128) after the unsigned DC level shift.
@@ -3506,6 +3705,60 @@ trailer << /Root 1 0 R >>
         pdf.extend_from_slice(&codestream);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
         pdf
+    }
+
+    /// [`jpx_midpoint_pdf`]'s codestream (every sample 128) wrapped in a JP2 file whose header
+    /// has a colour specification naming enumerated colour space `enumerated`.
+    fn jp2_midpoint_pdf(components: u16, enumerated: u32) -> Vec<u8> {
+        let raw = jpx_midpoint_pdf(8, components);
+        let start = raw.windows(4).position(|w| w == [0xff, 0x4f, 0xff, 0x51]).unwrap();
+        let end = raw.windows(2).rposition(|w| w == [0xff, 0xd9]).unwrap() + 2;
+        let codestream = &raw[start..end];
+        let jp2_box = |kind: &[u8], body: &[u8]| [&((8 + body.len()) as u32).to_be_bytes()[..], kind, body].concat();
+        let mut ihdr = Vec::new();
+        ihdr.extend_from_slice(&1_u32.to_be_bytes()); // height
+        ihdr.extend_from_slice(&1_u32.to_be_bytes()); // width
+        ihdr.extend_from_slice(&components.to_be_bytes());
+        ihdr.extend_from_slice(&[7, 7, 0, 0]); // 8 bits, wavelet, colour known, no IPR
+        let colr = [&[1, 0, 0][..], &enumerated.to_be_bytes()].concat();
+        let jp2 = [
+            vec![0, 0, 0, 12, b'j', b'P', b' ', b' ', 0x0d, 0x0a, 0x87, 0x0a],
+            jp2_box(b"ftyp", b"jp2 \0\0\0\0jp2 "),
+            jp2_box(b"jp2h", &[jp2_box(b"ihdr", &ihdr), jp2_box(b"colr", &colr)].concat()),
+            jp2_box(b"jp2c", codestream),
+        ]
+        .concat();
+        let content = "q 20 0 0 20 5 5 cm /Im1 Do Q";
+        let mut pdf = format!(
+            "%PDF-1.7\n\
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n\
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj\n\
+4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+5 0 obj << /Type /XObject /Subtype /Image /Width 1 /Height 1 /BitsPerComponent 8 /Filter /JPXDecode /Length {} >> stream\n",
+            content.len(),
+            jp2.len()
+        )
+        .into_bytes();
+        pdf.extend_from_slice(&jp2);
+        pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF");
+        pdf
+    }
+
+    /// #3306: a JP2 image whose colour specification names an enumerated colour space the
+    /// decoder refuses (CIEJab in a veraPDF fixture, or YPbPr, or bilevel for one component) is
+    /// drawn as if it had none, by its component count, as MuPDF and Poppler draw it: the
+    /// midpoint image shows mid-grey instead of nothing. A space the decoder knows (sRGB) is
+    /// drawn as before.
+    #[test]
+    fn a_jp2_image_in_a_refused_enumerated_colour_space_is_drawn() {
+        for (components, enumerated) in [(3, 19), (3, 22), (1, 15), (3, 16)] {
+            let mut r = PageRenderer::new(Arc::new(jp2_midpoint_pdf(components, enumerated)), RenderConfig::default());
+            let page = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(page.error.is_none(), "{enumerated}: {:?}", page.error);
+            let px = &page.rgba[((40 - 15) * 40 + 15) * 4..][..3];
+            assert!(px.iter().all(|&v| (120..=136).contains(&v)), "enum {enumerated}, {components} component(s): {px:?}");
+        }
     }
 
     #[test]
@@ -3633,6 +3886,46 @@ endstream endobj
             assert!(page.error.is_none(), "{rows:?}: {:?}", page.error);
             assert_eq!(&page.rgba[((24 * 40 + 15) * 4)..][..4], &[0, 0, 0, 255], "{rows:?}: the fax image paints black");
             assert_eq!(&page.rgba[((38 * 40 + 1) * 4)..][..4], &[255, 255, 255, 255], "{rows:?}: outside the image stays white");
+        }
+    }
+
+    /// #3308: a fax image whose `/Rows` says fewer rows than its `/Height` (a plotter driver wrote
+    /// `/Rows` equal to `/Columns`) is decoded to its height: only the first `/Rows` rows were
+    /// decoded and the rest drawn black, as MuPDF and Acrobat don't. `/BlackIs1` turns the fixture
+    /// white, so rows left undecoded show as black. Also through an `/Indexed` colour space, the
+    /// filter's other output path.
+    #[test]
+    fn group4_fax_with_rows_below_its_height_decodes_to_the_image_height() {
+        const ALL_BLACK_8X4: [u8; 6] = [0x26, 0xa2, 0xfe, 0x00, 0x20, 0x02];
+        for (space, rows) in [("/DeviceGray", "/Rows 2"), ("[/Indexed /DeviceRGB 1 <000000FFFFFF>]", "/Rows 2"), ("/DeviceGray", "/Rows 4")] {
+            let content = "q 20 0 0 20 5 5 cm /Im1 Do Q";
+            let mut pdf = format!(
+                "%PDF-1.7
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /XObject << /Im1 5 0 R >> >> >> endobj
+4 0 obj << /Length {} >> stream
+{content}
+endstream endobj
+5 0 obj << /Type /XObject /Subtype /Image /Width 8 /Height 4 /ColorSpace {space} /BitsPerComponent 1 /Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns 8 {rows} /BlackIs1 true >> /Length {} >> stream
+",
+                content.len(),
+                ALL_BLACK_8X4.len()
+            )
+            .into_bytes();
+            pdf.extend_from_slice(&ALL_BLACK_8X4);
+            pdf.extend_from_slice(
+                b"
+endstream endobj
+trailer << /Root 1 0 R >>
+%%EOF",
+            );
+            let mut renderer = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let page = renderer.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() });
+            assert!(page.error.is_none(), "{space} {rows}: {:?}", page.error);
+            for y in [17, 22, 27, 32] {
+                assert_eq!(&page.rgba[((y * 40 + 15) * 4)..][..4], &[255, 255, 255, 255], "{space} {rows}: image row at y {y} is decoded");
+            }
         }
     }
 
@@ -4591,7 +4884,11 @@ trailer << /Root 1 0 R >>
             let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
             let _ = tx.send(r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, ..Default::default() }));
         });
-        let page = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("a self-painting form must not stall the renderer");
+        // Only a guard against a hang: the shared budget is checked by the warnings below, which
+        // come out the same on every machine. The render decodes and reads 512 MiB of content,
+        // a third of a second on a desktop, and a busy FreeBSD VM in CI ran past the minute this
+        // used to allow.
+        let page = rx.recv_timeout(std::time::Duration::from_secs(600)).expect("a self-painting form must not stall the renderer");
         assert!(page.error.is_none(), "{:?}", page.error);
         assert!(page.warnings.contains(&RenderWarning::ContentTruncated), "the skipped nested content is observable");
         assert_eq!(
@@ -4662,30 +4959,73 @@ trailer << /Root 1 0 R >>
     /// pdf.js corpus spent most of its 1.5 s hashing them. The samples are now one flat array
     /// indexed by strides: this page paints a 2,097,152-sample ramp (the most a table may hold)
     /// 30 times, which took 38 seconds through the hash map.
+    ///
+    /// The build each paint does is timed against reading the function's samples, the part of it
+    /// no table can skip, not against a deadline: through the hash map it took about a hundred
+    /// times as long as the read, through the flat array about as long. A deadline can't tell
+    /// them apart on every machine: the hash map's 30 paints took 14 s on one desktop, the flat
+    /// array's over 10 s on a busy FreeBSD VM in CI. No counter does either (both read every
+    /// sample on every build), so the test compares two times taken on this thread, the fastest
+    /// of several rounds of each: a stall from other work (other tests, swapping) would have to
+    /// slow every build and spare a read to fail it.
     #[test]
     fn shadings_with_large_sampled_functions_paint_quickly() {
+        use hayro::hayro_interpret::Function;
+        use hayro_syntax::bit_reader::BitReader;
+        use hayro_syntax::object::{FromBytes, Object};
+        use std::time::{Duration, Instant};
+
         const SAMPLES: usize = 1 << 21;
         let samples = zlib_zeros(SAMPLES);
+        let function = format!(
+            "<< /FunctionType 0 /Domain [0 1] /Range [0 1] /Size [{SAMPLES}] /BitsPerSample 8 /Filter /FlateDecode /Length {} >>",
+            samples.len()
+        );
         // Black ramp on the left half, 30 times over; a red square after it.
         let content = "q 0 0 20 40 re W n /Sh0 sh Q\n".repeat(30) + "1 0 0 rg 36 36 4 4 re f";
         let mut pdf = b"%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 40 40] /Contents 4 0 R /Resources << /Shading << /Sh0 5 0 R >> >> >> endobj\n".to_vec();
         pdf.extend_from_slice(format!("4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n", content.len()).as_bytes());
         pdf.extend_from_slice(b"5 0 obj << /ShadingType 2 /ColorSpace /DeviceGray /Coords [0 0 40 0] /Function 6 0 R >> endobj\n");
-        pdf.extend_from_slice(
-            format!("6 0 obj << /FunctionType 0 /Domain [0 1] /Range [0 1] /Size [{SAMPLES}] /BitsPerSample 8 /Filter /FlateDecode /Length {} >> stream\n", samples.len())
-                .as_bytes(),
-        );
+        pdf.extend_from_slice(format!("6 0 obj {function} stream\n").as_bytes());
         pdf.extend_from_slice(&samples);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(render_first_page(pdf));
-        });
-        let page =
-            rx.recv_timeout(std::time::Duration::from_secs(10)).expect("painting a large sampled function must not rebuild a hash map each time");
+        let page = render_first_page(pdf);
         assert_eq!(rgb_at(&page.rgba, 40, 5, 20), [0, 0, 0], "the ramp is drawn");
         assert_eq!(rgb_at(&page.rgba, 40, 30, 20), [255, 255, 255], "outside the clip");
         assert_eq!(rgb_at(&page.rgba, 40, 38, 2), [255, 0, 0], "the rest of the page draws");
+
+        // What each paint does: build the function from its stream. Timed against reading the
+        // stream's samples, the part of the build no table can skip.
+        let mut bytes = format!("{function} stream\n").into_bytes();
+        bytes.extend_from_slice(&samples);
+        bytes.extend_from_slice(b"\nendstream");
+        let object = Object::from_bytes(&bytes).expect("a stream object");
+        let Object::Stream(stream) = &object else { panic!("the function is a stream") };
+        let (mut build, mut read) = (Duration::MAX, Duration::MAX);
+        for _ in 0..8 {
+            let started = Instant::now();
+            let function = Function::new(&object);
+            assert!(function.is_some(), "a sampled function");
+            drop(function);
+            build = build.min(started.elapsed());
+
+            let started = Instant::now();
+            let decoded = stream.decoded().expect("the samples decode");
+            let mut reader = BitReader::new(&decoded);
+            let mut values = Vec::new();
+            while values.len() < SAMPLES
+                && let Some(value) = reader.read(8)
+            {
+                values.push(value);
+            }
+            assert_eq!(std::hint::black_box(&values).len(), SAMPLES);
+            drop(values);
+            read = read.min(started.elapsed());
+        }
+        assert!(
+            build < read * 10,
+            "building a {SAMPLES}-sample function took {build:?}, over ten times the {read:?} reading its samples takes (a hash map took a hundred times)"
+        );
     }
 
     /// Patch 31's flat table gives every sampled function the values the hash map gave: points
@@ -6191,6 +6531,8 @@ endstream endobj
     /// each of a 3304 × 4105 background's pixels, every page took four seconds and 430 MB to
     /// draw, again after each field was filled. This image (2048 × 2048, a 9,000-operator
     /// program) took about 40 seconds that way; from a 256-entry table it takes milliseconds.
+    /// The runs are counted (patch 34) rather than timed: a deadline also failed when a slow,
+    /// busy CI machine took longer than it allowed, and the count is the same on every machine.
     #[test]
     fn spot_colour_images_run_their_tint_transform_once_per_sample_value() {
         const SIDE: usize = 2048;
@@ -6207,11 +6549,11 @@ endstream endobj
         let function = format!("<< /FunctionType 4 /Domain [0 1] /Range [0 1 0 1 0 1] /Length {} >>", program.len());
         let pdf =
             image_cache_pdf("q 130 0 0 70 0 0 cm /A Do Q", "<< /XObject << /A 5 0 R >> >>", &[(&image, &data), (&function, program.as_bytes())]);
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(render_first_page(pdf));
-        });
-        let out = rx.recv_timeout(std::time::Duration::from_secs(10)).expect("a spot-colour image must not run its tint transform for every pixel");
+        // The count is per thread, and this render runs on this one.
+        let before = hayro::hayro_interpret::color::tint_transform_runs();
+        let out = render_first_page(pdf);
+        let runs = hayro::hayro_interpret::color::tint_transform_runs() - before;
+        assert_eq!(runs, 256, "the tint transform runs once per possible sample value, not once for each of the {} pixels", SIDE * SIDE);
         let w = out.width as usize;
         assert_eq!(rgb_at(&out.rgba, w, 10, 35), [255, 0, 0], "tint 0");
         assert_eq!(rgb_at(&out.rgba, w, 120, 35), [0, 255, 0], "tint 1");

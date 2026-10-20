@@ -246,6 +246,39 @@ fn read_mode_closes_the_panes_and_leaving_it_brings_them_back() {
     assert_eq!(h.state().right, Some(RightPanel::Pages));
 }
 
+/// Read mode hides the quick toolbar too, and puts down the tool that was in use (#2646).
+#[test]
+fn read_mode_hides_the_quick_toolbar() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    h.get_by_label("Hand (H)").click();
+    h.run_steps(2);
+    assert_eq!(h.state().quick_tool, QuickTool::Hand);
+    h.get_by_label("Read").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Select (V)").is_none(), "no quick toolbar in Read mode");
+    assert_eq!(h.state().quick_tool, QuickTool::Select);
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(3);
+    assert_eq!(h.state().mode, Mode::AllTools);
+    h.get_by_label("Select (V)");
+}
+
+/// Opening a document with Read as the default mode puts down the tool in use, as entering Read
+/// mode from the mode bar does: the hidden toolbar would leave no way to see or change it.
+#[test]
+fn opening_into_read_mode_puts_the_tool_down() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(|app| app.open_bytes("fixture.pdf", None, FIXTURE.to_vec()).expect("fixture opens"));
+    assert_eq!(h.state().mode, Mode::AllTools);
+    h.state_mut().set_option("quick", "hand").unwrap();
+    h.state_mut().set_option("default-mode", "read").unwrap();
+    h.state_mut().open_bytes("again.pdf", None, FIXTURE.to_vec()).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().mode, Mode::Read, "the new document opens in the default mode");
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "no tool stays active behind the hidden toolbar");
+}
+
 /// A pane closed in Read mode stays closed on the way out: leaving Read mode doesn't bring back the
 /// pane saved on the way in, and closing Comments keeps its close preference.
 #[test]
@@ -319,6 +352,27 @@ fn a_middle_click_closes_the_tab() {
     h.run_steps(3);
     assert_eq!(h.state().views.len(), 1, "unsaved changes ask first");
     assert!(h.state().close_request.is_some());
+}
+
+#[test]
+fn a_link_prompt_above_a_save_prompt_owns_its_keys() {
+    for key in [egui::Key::Escape, egui::Key::Enter] {
+        let mut h = harness(|app| {
+            app.open_bytes("first.pdf", None, FIXTURE.to_vec()).unwrap();
+            app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
+            app.close_request = Some(pdfcraft_ui_egui::CloseRequest::Tab(app.views[0].id));
+        });
+        h.run_steps(3);
+        h.state_mut().pending_link =
+            Some(pdfcraft_ui_egui::PendingLink { url: "https://example.org".to_owned(), origin: pdfcraft_ui_egui::LinkOrigin::Link });
+        h.run_steps(3);
+        h.key_press(key);
+        h.run_steps(3);
+        assert_eq!(h.state().pending_link.is_some(), key == egui::Key::Enter);
+        assert!(h.state().close_request.is_some(), "the save prompt stays open after {key:?}");
+        assert_eq!(h.state().views.len(), 1, "the edited document remains open");
+        assert!(h.state().last_opened_url.is_none());
+    }
 }
 
 #[test]
@@ -839,6 +893,9 @@ fn files_and_quit_from_the_operating_system() {
     let queue = std::rc::Rc::new(std::cell::RefCell::new(vec![OsEvent::Open(vec![path.to_string_lossy().into_owned()])]));
     let q = queue.clone();
     let mut h = harness(move |app| app.os_events = Some(Box::new(move || q.borrow_mut().drain(..).collect())));
+    // The file is read on a worker thread, after however many frames that takes: it must still
+    // be there until the tab has opened.
+    support::wait_until(&mut h, "the file the operating system opened", |app| !app.views.is_empty());
     std::fs::remove_file(&path).ok();
     assert_eq!(h.state().views.len(), 1, "the file opens in a tab");
     h.get_by_label_contains(&name);

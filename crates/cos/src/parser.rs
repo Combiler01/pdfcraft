@@ -337,11 +337,14 @@ impl<'a> Lexer<'a> {
             }
             return Ok(Object::Real(0.0));
         }
-        match s.trim_start_matches('+').parse::<i64>() {
+        // Tolerate a doubled sign ("--280") like the real branch does.
+        let t = s.trim_start_matches('+');
+        let cleaned = t.strip_prefix('-').filter(|r| r.starts_with('-')).unwrap_or(t);
+        match cleaned.parse::<i64>() {
             Ok(v) => Ok(Object::Int(v)),
             Err(_) => {
                 // Out-of-range integers are treated as reals (§7.3.3 allows implementation limits).
-                s.parse::<f64>().map(Object::Real).map_err(|_| CosError::Syntax { offset: start, detail: format!("bad number {s:?}") })
+                cleaned.parse::<f64>().map(Object::Real).map_err(|_| CosError::Syntax { offset: start, detail: format!("bad number {s:?}") })
             }
         }
     }
@@ -401,7 +404,16 @@ fn parse_indirect_in(
     if let Object::Dict(dict) = &obj
         && lx.eat_keyword(b"stream")
     {
-        // The keyword is followed by CRLF or LF (a lone CR is tolerated).
+        // The keyword is followed by CRLF or LF (a lone CR is tolerated). Microsoft Reporting
+        // Services writes a space first (`stream \r\n`); spaces and tabs count only when a line
+        // break follows, so they are never taken from the data.
+        let mut eol = lx.pos;
+        while matches!(data.get(eol), Some(b' ' | b'\t')) {
+            eol += 1;
+        }
+        if matches!(data.get(eol), Some(b'\r' | b'\n')) {
+            lx.pos = eol;
+        }
         match (data.get(lx.pos), data.get(lx.pos + 1)) {
             (Some(b'\r'), Some(b'\n')) => lx.pos += 2,
             (Some(b'\n'), _) | (Some(b'\r'), _) => lx.pos += 1,
@@ -476,6 +488,20 @@ mod tests {
     }
 
     #[test]
+    fn doubled_sign_integer_reads_like_the_real_form() {
+        // Some writers emit a TJ kerning as "--280"; the real form "--280.0" is already read.
+        assert_eq!(obj("--280.0"), Object::Real(-280.0));
+        assert_eq!(obj("--280"), Object::Int(-280));
+        match obj("[(Hello) --280 (World)]") {
+            Object::Array(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[1], Object::Int(-280));
+            }
+            other => panic!("not an array: {other:?}"),
+        }
+    }
+
+    #[test]
     fn scalars() {
         assert_eq!(obj("true"), Object::Bool(true));
         assert_eq!(obj("null"), Object::Null);
@@ -535,6 +561,25 @@ mod tests {
         let Object::Stream(s) = o else { panic!("stream expected") };
         assert_eq!(&s.raw[..], b"HELLO");
         assert_eq!(s.dict.int(b"Length"), Some(5));
+    }
+
+    #[test]
+    fn indirect_stream_with_a_space_before_the_line_break() {
+        // `stream \r\n` as Microsoft Reporting Services writes it: the data starts after the
+        // line break, so the /Length is still right and the data keeps no leading space.
+        for eol in [&b" \r\n"[..], b" \n", b"\t \r"] {
+            let mut data = b"7 0 obj\n<< /Length 5 >>\nstream".to_vec();
+            data.extend_from_slice(eol);
+            data.extend_from_slice(b"HELLO\r\nendstream\nendobj\n");
+            let (_, o) = parse_indirect(&data, 0, &|_| None).unwrap();
+            let Object::Stream(s) = o else { panic!("stream expected") };
+            assert_eq!(&s.raw[..], b"HELLO", "{eol:?}");
+        }
+        // Spaces with no line break after them are data, not a keyword terminator.
+        let data = b"7 0 obj\n<< /Length 7 >>\nstream   HELLO\nendstream\nendobj\n";
+        let (_, o) = parse_indirect(data, 0, &|_| None).unwrap();
+        let Object::Stream(s) = o else { panic!("stream expected") };
+        assert_eq!(&s.raw[..], b"   HELLO");
     }
 
     #[test]

@@ -904,6 +904,92 @@ fn text_page(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+#[test]
+fn tracked_text_keeps_words_in_paragraphs_and_objects() {
+    let expected = "TRACKED SAMPLE TEXT";
+    for spacing in [1.5, 2.0001, 3.0] {
+        for scale in [50.0, 100.0, 150.0] {
+            for positioned in [false, true] {
+                let mut show = String::new();
+                if !positioned {
+                    show.push('[');
+                }
+                for (i, c) in expected.chars().enumerate() {
+                    if positioned {
+                        show.push_str(&format!("({c}) Tj "));
+                        if i + 1 < expected.len() {
+                            show.push_str(&format!("[{}] TJ ", -spacing * 100.0));
+                        }
+                    } else {
+                        show.push_str(&format!("({c}) "));
+                        if i + 1 < expected.len() {
+                            show.push_str(&format!("{} ", -spacing * 100.0));
+                        }
+                    }
+                }
+                if !positioned {
+                    show.push_str("] TJ");
+                }
+                let doc = text_page(&format!("BT /F1 10 Tf {scale} Tz 72 700 Td {show} ET"));
+                assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, expected, "{spacing}, {scale}, {positioned}");
+                assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, expected);
+                assert_eq!(crate::objects::editable_objects(&doc, 0).unwrap()[0].text.as_deref(), Some(expected));
+            }
+        }
+        let doc = text_page(&format!("BT /F1 10 Tf {spacing} Tc 72 700 Td ({expected}) Tj ET"));
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, expected);
+    }
+}
+
+#[test]
+fn single_glyph_words_and_cells_are_not_tracking() {
+    for (content, expected) in [
+        ("BT /F1 10 Tf 72 700 Td [(a) -1000 (b) -1000 (c) -1000 (d)] TJ ET", "a b c d"),
+        ("BT /F1 10 Tf 72 700 Td [(1) -2500 (2) -2500 (3) -2500 (4) -2500 (5)] TJ ET", "1 2 3 4 5"),
+        ("BT /F1 10 Tf 72 700 Td [(A) -300 (B) -1200 (C) -1200 (D) -1200 (E) -300 (F) -1200 (G)] TJ ET", "A B C D E F G"),
+    ] {
+        assert_eq!(text::text_blocks(&text_page(content), 0).unwrap()[0].text, expected, "{content}");
+    }
+    let mut s = String::from("BT /F1 10 Tf ");
+    for (i, c) in "12345".chars().enumerate() {
+        s.push_str(&format!("1 0 0 1 {} 700 Tm ({c}) Tj ", 72 + i * 12));
+    }
+    s.push_str("ET");
+    assert_eq!(text::text_blocks(&text_page(&s), 0).unwrap()[0].text, "1 2 3 4 5");
+}
+
+#[test]
+fn tracked_text_preserves_larger_word_gaps() {
+    for show in [
+        "[(T) -300 (E) -300 (S) -300 (T) -600 (W) -300 (O) -300 (R) -300 (D)] TJ",
+        "(T) Tj [-300] TJ (E) Tj [-300] TJ (S) Tj [-300] TJ (T) Tj [-600] TJ (W) Tj [-300] TJ (O) Tj [-300] TJ (R) Tj [-300] TJ (D) Tj",
+        "[(TEST) -300 (WORD)] TJ",
+        "(TEST) Tj [-300] TJ (W) Tj [-300] TJ (O) Tj [-300] TJ (R) Tj [-300] TJ (D) Tj",
+    ] {
+        let doc = text_page(&format!("BT /F1 10 Tf 72 700 Td {show} ET"));
+        assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, "TEST WORD", "{show}");
+    }
+}
+
+#[test]
+fn tracked_text_positions_do_not_count_character_spacing_twice() {
+    let expected = "TRACKED SAMPLE TEXT";
+    for char_spacing in [0.0, 2.0] {
+        for transform in ["1 0 0 1 0 0", "0 1 -1 0 800 0"] {
+            let mut content = format!("q {transform} cm BT /F1 10 Tf {char_spacing} Tc ");
+            let mut x = 72.0;
+            for c in expected.chars() {
+                content.push_str(&format!("1 0 0 1 {x:.4} 700 Tm ({c}) Tj "));
+                x += pdfcraft_fonts::helvetica_width(&c.to_string(), 10.0) + 2.0001;
+            }
+            content.push_str("ET Q");
+            let doc = text_page(&content);
+            assert_eq!(text::text_blocks(&doc, 0).unwrap()[0].text, expected);
+            assert_eq!(crate::objects::editable_objects(&doc, 0).unwrap()[0].text.as_deref(), Some(expected));
+        }
+    }
+}
+
 fn descriptor_text_page() -> Document {
     let content = "BT /F1 12 Tf 72 700 Td (ab) Tj ET";
     let objs: Vec<String> = vec![
@@ -1473,6 +1559,65 @@ fn skia_subset_page() -> Document {
     doc
 }
 
+/// #2616: a subset whose ToUnicode has no space (as LaTeX and Sphinx output often has, spacing
+/// words with TJ kerning) makes finding the space width read every font on the page. That ran
+/// for every character of a multi-row draft, so each keystroke in a long paragraph took half a
+/// second. It runs once per font now, however long the paragraph.
+#[test]
+fn a_long_draft_in_a_font_without_a_space_works_out_the_space_width_once() {
+    // Two rows of one paragraph (14 pt apart) in the Chrome-style subset of `skia_subset_page`,
+    // whose ToUnicode here has no entry for the space glyph.
+    let mut doc =
+        text_page("BT /F3 12 Tf 72 700 Td <0177031602E001FB03050255> Tj ET          BT /F3 12 Tf 72 686 Td <008D0266035402FE01FB030503E6> Tj ET");
+    let program = doc.add(Object::Stream(Stream::flate(Dict::new(), include_bytes!("../../../assets/fonts/Inter-Regular.ttf"))));
+    let unicode = doc.add(Object::Stream(Stream::flate(
+        Dict::new(),
+        b"1 begincodespacerange <0000> <FFFF> endcodespacerange 12 beginbfchar <0177> <0050> <0316> <006F> <02E0> <006C>           <01FB> <0061> <0305> <006E> <0255> <0064> <008D> <0047> <0266> <0065> <0354> <0072> <02FE> <006D> <03E6> <0079>           <1000> <007A> endbfchar",
+    )));
+    let widths: Vec<Object> =
+        [(0x8D, 746), (0x177, 639), (0x1FB, 551), (0x255, 612), (0x266, 583), (0x2E0, 242), (0x2FE, 876), (0x305, 591), (0x316, 600)]
+            .into_iter()
+            .chain([(0x354, 376), (0x3E6, 515)])
+            .flat_map(|(cid, width)| [Object::Int(cid), Object::Array(vec![Object::Int(width)])])
+            .collect();
+    let descriptor = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("FontDescriptor")),
+        (b"FontName".to_vec(), Object::name("BAAAAA+SampleSans")),
+        (b"Flags".to_vec(), Object::Int(32)),
+        (b"FontFile2".to_vec(), Object::Ref(program)),
+    ]);
+    let cid_font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("CIDFontType2")),
+        (b"BaseFont".to_vec(), Object::name("BAAAAA+SampleSans")),
+        (b"CIDToGIDMap".to_vec(), Object::name("Identity")),
+        (b"DW".to_vec(), Object::Int(562)),
+        (b"W".to_vec(), Object::Array(widths)),
+        (b"FontDescriptor".to_vec(), Object::Dict(descriptor)),
+    ]);
+    let font = Dict::from_iter([
+        (b"Type".to_vec(), Object::name("Font")),
+        (b"Subtype".to_vec(), Object::name("Type0")),
+        (b"BaseFont".to_vec(), Object::name("BAAAAA+SampleSans")),
+        (b"Encoding".to_vec(), Object::name("Identity-H")),
+        (b"DescendantFonts".to_vec(), Object::Array(vec![Object::Dict(cid_font)])),
+        (b"ToUnicode".to_vec(), Object::Ref(unicode)),
+    ]);
+    let p = pdfcraft_model::pages(&doc)[0].obj;
+    let fonts = Dict::from_iter([(b"F3".to_vec(), Object::Dict(font))]);
+    doc.update_dict(p, |d| d.set(b"Resources".to_vec(), Object::Dict(Dict::from_iter([(b"Font".to_vec(), Object::Dict(fonts))])))).unwrap();
+    let blocks = text::text_blocks(&doc, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "one paragraph: {:?}", blocks.iter().map(|b| &b.text).collect::<Vec<_>>());
+    let draft = "Poland and Germany
+"
+    .repeat(20);
+    text::SOURCE_SPACE_CALLS.with(|c| c.set(0));
+    let layout = text::text_edit_layout(&doc, 0, 0, draft.trim_end(), &text::BlockStyle::default()).unwrap();
+    let calls = text::SOURCE_SPACE_CALLS.with(std::cell::Cell::get);
+    assert!(layout.draft_rect.is_some_and(|r| r[2] > r[0]), "laid out: {:?}", layout.draft_rect);
+    assert!(calls <= 8, "the space width was worked out {calls} times for {} characters", draft.len());
+}
+
 #[test]
 fn a_subset_keeps_its_font_for_glyphs_left_to_the_default_width() {
     let doc = skia_subset_page();
@@ -1919,6 +2064,31 @@ fn repeated_image_edits_change_one_transform_instead_of_nesting() {
         let caption: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
         assert_eq!(caption.is_empty(), !content.contains("Caption"), "{content}: the text after the image is untouched");
     }
+}
+
+#[test]
+fn repeated_group_moves_of_a_cropped_image_change_one_clip_transform() {
+    // The crop is smaller than the image, so a clip left behind would shrink `visible_rect`.
+    let mut doc = image_page_with("q 150 120 100 50 re W n 200 0 0 100 100 100 cm /Im0 Do Q BT /F1 12 Tf 72 700 Td (Caption) Tj ET");
+    let operators = |doc: &Document| pdfcraft_content::parse(&page_content_bytes(doc, 0)).ops.len();
+    let start = images::page_images(&doc, 0).unwrap()[0].clone();
+    let mut first = 0;
+    for i in 0..20 {
+        images::translate_images(&mut doc, 0, &[0], [1.0, -2.0]).unwrap();
+        if i == 0 {
+            first = operators(&doc);
+        }
+    }
+    let moved = |r: [f64; 4]| [r[0] + 20.0, r[1] - 40.0, r[2] + 20.0, r[3] - 40.0];
+    let now = images::page_images(&doc, 0).unwrap()[0].clone();
+    assert!(close(now.rect, moved(start.rect)), "{:?}", now.rect);
+    assert!(close(now.visible_rect.unwrap(), moved(start.visible_rect.unwrap())), "the crop moves with the image: {:?}", now.visible_rect);
+    assert_eq!(operators(&doc), first, "twenty group moves add no more operators than one");
+    assert_eq!(q_depth(&doc), 1);
+    let doc = reopen(&doc);
+    assert!(close(images::page_images(&doc, 0).unwrap()[0].visible_rect.unwrap(), moved(start.visible_rect.unwrap())));
+    let caption: Vec<_> = text::text_lines(&doc, 0).unwrap().into_iter().map(|l| l.text).collect();
+    assert_eq!(caption, ["Caption"]);
 }
 
 #[test]
@@ -3011,6 +3181,72 @@ fn replacing_a_line_keeps_a_distinct_nearby_line() {
 }
 
 #[test]
+fn editing_text_keeps_an_overlapping_watermark_and_covered_paragraphs() {
+    let listed = |doc: &Document| text::text_lines(doc, 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>();
+    // #1756: a rotated watermark's bounding box covers the middle of the page, and a body line
+    // whose baseline happens to sit near the watermark's starting y is still unrelated text.
+    for rotation in [35.0, 45.0, 0.0] {
+        let mut base = text_page("BT /F1 14 Tf 60 700 Td (Heading) Tj ET");
+        add_watermark(
+            &mut base,
+            &[0],
+            &Watermark { text: "TEST WATERMARK".into(), font_size: 48.0, rotation, opacity: 0.25, ..Watermark::default() },
+            false,
+        )
+        .unwrap();
+        let wm_y = text::text_lines(&base, 0).unwrap().into_iter().find(|l| l.text == "TEST WATERMARK").unwrap().origin_baseline();
+        let mut doc = text_page(&format!("BT /F1 14 Tf 1 0 0 1 60 {wm_y:.2} Tm (Body paragraph one with several words here) Tj ET"));
+        add_watermark(
+            &mut doc,
+            &[0],
+            &Watermark { text: "TEST WATERMARK".into(), font_size: 48.0, rotation, opacity: 0.25, ..Watermark::default() },
+            false,
+        )
+        .unwrap();
+        let line_idx = text::text_lines(&doc, 0).unwrap().iter().position(|l| l.text.starts_with("Body")).unwrap();
+        let mut line_edited = doc.clone();
+        text::replace_line(&mut line_edited, 0, line_idx, "Edited body line").unwrap();
+        assert_eq!(listed(&reopen(&line_edited)), ["Edited body line", "TEST WATERMARK"], "rotation {rotation}");
+
+        let block_idx = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text.starts_with("Body")).unwrap();
+        let mut preview = doc.clone();
+        text::clear_block(&mut preview, 0, block_idx).unwrap();
+        assert_eq!(listed(&preview), ["TEST WATERMARK"], "clear_block keeps the watermark at rotation {rotation}");
+
+        text::rewrite_block(&mut doc, 0, block_idx, Some("Edited body paragraph"), &text::BlockStyle::default()).unwrap();
+        assert_eq!(listed(&reopen(&doc)), ["Edited body paragraph", "TEST WATERMARK"], "rotation {rotation}");
+    }
+
+    // #1368: dragging one paragraph onto another paragraph's baseline and moving it on again
+    // leaves the covered paragraph intact.
+    let mut doc = text_page("BT /F1 12 Tf 72 700 Td (First paragraph) Tj ET BT /F1 12 Tf 72 600 Td (Second paragraph) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, None, &text::BlockStyle { offset: Some([0.0, -100.0]), ..Default::default() }).unwrap();
+    let second = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text == "Second paragraph");
+    assert!(second.is_some(), "the covered paragraph stays on the page: {:?}", listed(&doc));
+    let first = text::text_blocks(&doc, 0).unwrap().iter().position(|b| b.text == "First paragraph").unwrap();
+    text::rewrite_block(&mut doc, 0, first, None, &text::BlockStyle { offset: Some([0.0, -100.0]), ..Default::default() }).unwrap();
+    assert_eq!(listed(&reopen(&doc)), ["First paragraph", "Second paragraph"]);
+
+    // Even when a large horizontal watermark shows the same word as a body line at the same y,
+    // or a rotated 12 pt line crosses a horizontal 12 pt line of the same word at the same origin,
+    // editing one keeps the other.
+    let mut same_word = text_page("BT /F1 12 Tf 1 0 0 1 200 400 Tm (DRAFT) Tj ET BT /F1 48 Tf 1 0 0 1 150 400 Tm (DRAFT) Tj ET");
+    text::replace_line(&mut same_word, 0, 0, "FINAL").unwrap();
+    let after = text::text_lines(&reopen(&same_word), 0).unwrap();
+    assert_eq!(after.iter().map(|l| (&l.text[..], l.size as i32)).collect::<Vec<_>>(), [("FINAL", 12), ("DRAFT", 48)]);
+
+    let mut crossed = text_page("BT /F1 12 Tf 1 0 0 1 100 500 Tm (Crossed) Tj ET BT /F1 12 Tf 0.707 0.707 -0.707 0.707 100 500 Tm (Crossed) Tj ET");
+    text::replace_line(&mut crossed, 0, 0, "Horizontal").unwrap();
+    assert_eq!(listed(&reopen(&crossed)), ["Horizontal", "Crossed"]);
+
+    // An invisible OCR text layer (`3 Tr`) on the same baseline and size as a visible line is
+    // still removed when the visible line is edited, even if OCR misread a letter.
+    let mut ocr = text_page("BT /F1 12 Tf 0 Tr 1 0 0 1 72 700 Tm (Hello world) Tj ET BT /F1 12 Tf 3 Tr 1 0 0 1 72 700 Tm (Rello world) Tj ET");
+    text::replace_line(&mut ocr, 0, 0, "Goodbye world").unwrap();
+    assert_eq!(listed(&reopen(&ocr)), ["Goodbye world"]);
+}
+
+#[test]
 fn paragraphs_move_and_rewrap_to_a_new_width() {
     let para = "BT /F1 10 Tf 12 TL 100 700 Td (One two three four five six seven) Tj T* (eight nine ten eleven twelve) Tj ET";
     let close = |a: f64, b: f64| (a - b).abs() < 0.5;
@@ -3533,6 +3769,88 @@ fn form_xobjects_that_fan_out_stop_at_the_visit_budget() {
     let _ = text::reading_blocks(&doc, 0).unwrap();
     assert!(images::reading_images(&doc, 0).unwrap().is_empty());
     assert!(start.elapsed() < std::time::Duration::from_secs(30), "took {:?}", start.elapsed());
+}
+
+/// #3120: a one-page document whose page draws "Secret", then `content`. `forms` are (name,
+/// content) form XObjects, which the page and every form can draw, as they can a 1×1 image `/Im`.
+fn page_with_forms(content: &str, forms: &[(String, String)]) -> Document {
+    let xobjects: String = forms.iter().enumerate().map(|(i, (name, _))| format!("/{name} {} 0 R ", 7 + i)).collect();
+    let resources = format!("<< /Font << /F1 5 0 R >> /XObject << /Im 6 0 R {xobjects}>> >>");
+    let mut objs = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+        format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources {resources} /Contents 4 0 R >>"),
+        stream("", &format!("BT /F1 24 Tf 72 700 Td (Secret) Tj ET\n{content}")),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        stream("/Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8", "A"),
+    ];
+    objs.extend(forms.iter().map(|(_, body)| stream(&format!("/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources {resources}"), body)));
+    build(&objs.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+/// #3120: export reads text from forms as deep and as often as the renderer draws them, and says
+/// when a limit left some out: a text form drawn 5 000 times (past the old budget of 4 096) or
+/// forms nested 13 deep (past the old 12) lost the form drawn after them, silently.
+#[test]
+fn reading_follows_forms_as_far_as_the_renderer_and_says_where_it_stops() {
+    // Covers "Secret" with a black box and writes "TAIL": drawn last, so a reader that stops
+    // early misses it.
+    const TAIL: &str = "0 g 70 692 90 30 re f BT /F1 24 Tf 72 600 Td (TAIL) Tj ET";
+    let tail = |doc: &Document| {
+        let read = text::reading_blocks_checked(doc, 0).unwrap();
+        (read.blocks.iter().any(|b| b.text.contains("TAIL")), read.truncated)
+    };
+    let form = |name: &str, body: &str| (name.to_string(), body.to_string());
+
+    let rows =
+        |n: usize| page_with_forms(&format!("{}/C Do", "/R Do ".repeat(n)), &[form("R", "BT /F1 6 Tf 300 100 Td (row) Tj ET"), form("C", TAIL)]);
+    assert_eq!(tail(&rows(5_000)), (true, false));
+
+    // The innermost form also draws an image: an image at the depth limit is read, and leaves
+    // nothing out.
+    let chain = |depth: usize| {
+        let mut forms: Vec<_> = (1..depth).map(|i| form(&format!("D{i}"), &format!("/D{} Do", i + 1))).collect();
+        forms.push(form(&format!("D{depth}"), &format!("{TAIL} q 20 0 0 10 5 5 cm /Im Do Q")));
+        page_with_forms("/D1 Do", &forms)
+    };
+    assert_eq!(tail(&chain(13)), (true, false));
+    // The renderer's limit, written out so the test does not move with the constant.
+    assert_eq!(tail(&chain(50)), (true, false));
+    assert_eq!(tail(&chain(51)), (false, true));
+    let deepest = chain(text::MAX_FORM_DEPTH);
+    assert_eq!(tail(&deepest), (true, false));
+    assert_eq!(images::reading_images(&deepest, 0).unwrap().len(), 1);
+    let deep = chain(text::MAX_FORM_DEPTH + 1);
+    assert_eq!(tail(&deep), (false, true));
+    assert!(images::reading_images(&deep, 0).unwrap().is_empty());
+
+    // A wrapper form A draws a dot form B `n` times, then C. A, the dots and C use the page's
+    // budget up exactly; one dot more leaves C unread.
+    let fanout =
+        |n: usize| page_with_forms("/A Do", &[form("A", &format!("{}/C Do", "/B Do ".repeat(n))), form("B", "0 g 10 10 1 1 re f"), form("C", TAIL)]);
+    assert_eq!(tail(&fanout(text::MAX_FORM_VISITS - 2)), (true, false));
+    let many = fanout(text::MAX_FORM_VISITS - 1);
+    assert_eq!(tail(&many), (false, true));
+    assert!(images::reading_images(&many, 0).unwrap().is_empty());
+    // Without the flag, reading is unchanged.
+    let blocks: Vec<String> = text::reading_blocks(&many, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(blocks, ["Secret"]);
+}
+
+/// #3120: with the renderer's limits, forms that each draw the next a hundred times, 12 levels
+/// deep (100^11 forms) or past the depth cap, still stop at the page's budget quickly, and say
+/// that text was left out.
+#[test]
+fn forms_that_fan_out_a_hundred_ways_stop_quickly_and_say_so() {
+    for levels in [12, text::MAX_FORM_DEPTH + 1] {
+        let mut forms: Vec<(String, String)> = (1..levels).map(|i| (format!("N{i}"), format!("/N{} Do ", i + 1).repeat(100))).collect();
+        forms.push((format!("N{levels}"), "BT /F1 10 Tf 10 10 Td (leaf) Tj ET".to_string()));
+        let doc = page_with_forms("/N1 Do", &forms);
+        let start = std::time::Instant::now();
+        assert!(text::reading_blocks_checked(&doc, 0).unwrap().truncated, "{levels} levels");
+        assert!(images::reading_images(&doc, 0).unwrap().is_empty());
+        assert!(start.elapsed() < std::time::Duration::from_secs(30), "{levels} levels took {:?}", start.elapsed());
+    }
 }
 
 /// Forms that draw themselves or each other, have no resources, a malformed matrix, or are
@@ -4075,6 +4393,55 @@ fn latin_ligature_actual_text_stays_on_its_line() {
     }
 }
 
+/// #3110: `/ActualText` may come from a named property list (`/Span /MC0 BDC`) looked up in the
+/// page's or the form's `/Properties`, as well as from an inline one.
+#[test]
+fn actual_text_from_named_property_list() {
+    let properties = "/Properties << /MC0 << /ActualText (Hello World) >> /MC1 << /Lang (en) >> >>";
+    let page_with = |content: &str| {
+        build(&[
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            &format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> {properties} >> /Contents 4 0 R >>"),
+            &stream("", content),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        ])
+    };
+    for (content, expected) in [
+        ("/Span /MC0 BDC BT /F1 24 Tf 72 700 Td (Glyphs) Tj ET EMC", "Hello World"),
+        ("/Span <</ActualText (Hello World)>> BDC BT /F1 24 Tf 72 700 Td (Glyphs) Tj ET EMC", "Hello World"),
+        ("/Span /MC1 BDC BT /F1 24 Tf 72 700 Td (Glyphs) Tj ET EMC", "Glyphs"),
+        ("/Span /Missing BDC BT /F1 24 Tf 72 700 Td (Glyphs) Tj ET EMC", "Glyphs"),
+    ] {
+        let doc = page_with(content);
+        for doc in [&doc, &reopen(&doc)] {
+            let lines = text::text_lines(doc, 0).unwrap();
+            assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), [expected], "{content}");
+            assert_eq!(text::text_blocks(doc, 0).unwrap()[0].editor_text, expected, "{content}");
+            let reading: Vec<String> = text::reading_blocks(doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+            assert_eq!(reading, [expected], "{content}");
+        }
+    }
+
+    // A form's named list is looked up in the form's own /Properties, not the page's.
+    let fm = stream(
+        "/Type /XObject /Subtype /Form /BBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /Properties << /MC0 << /ActualText (Form text) >> >> >>",
+        "/Span /MC0 BDC BT /F1 24 Tf 72 600 Td (Glyphs) Tj ET EMC",
+    );
+    let doc = build(&[
+        "<< /Type /Catalog /Pages 2 0 R >>",
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        &format!(
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> /XObject << /Fm1 6 0 R >> {properties} >> /Contents 4 0 R >>"
+        ),
+        &stream("", "/Fm1 Do"),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+        &fm,
+    ]);
+    let reading: Vec<String> = text::reading_blocks(&doc, 0).unwrap().into_iter().map(|b| b.text).collect();
+    assert_eq!(reading, ["Form text"]);
+}
+
 #[test]
 fn actual_text_and_visual_rtl_glyphs_keep_their_own_reading_order() {
     let hex: String = "שלום".encode_utf16().map(|u| format!("{u:04X}")).collect();
@@ -4518,6 +4885,74 @@ fn private_image_crop_with_intervening_state_resizes_across_streams() {
     }
 }
 
+/// [`image_page`] with `pieces` as its `/Contents` array and a Form /Fm0 drawing 72,500–172,600.
+fn split_image_page(pieces: &[&[u8]]) -> Document {
+    let mut doc = image_page();
+    let page = pdfcraft_model::pages(&doc)[0].obj;
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([72, 500, 172, 600].map(Object::Int).to_vec()));
+    let form = doc.add(Object::Stream(Stream::flate(form, b"0.5 g 72 500 100 100 re f")));
+    let image = doc.get(pdfcraft_model::pages(&doc)[0].obj);
+    let mut res = image.as_dict().and_then(|d| d.get(b"Resources")).and_then(|r| r.as_dict().cloned()).unwrap();
+    let mut xo = res.get(b"XObject").and_then(|x| x.as_dict().cloned()).unwrap();
+    xo.set(b"Fm0".to_vec(), Object::Ref(form));
+    res.set(b"XObject".to_vec(), Object::Dict(xo));
+    let refs = pieces.iter().map(|b| Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), b))))).collect();
+    doc.update_dict(page, |d| {
+        d.set(b"Contents".to_vec(), Object::Array(refs));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+    })
+    .unwrap();
+    doc
+}
+
+#[test]
+fn an_image_whose_operator_starts_the_next_stream_can_be_selected_moved_and_deleted() {
+    // #3113: an operator's operands end one piece and its keyword starts the next.
+    let square = [72.0, 500.0, 172.0, 600.0];
+    let cases: [(&[&[u8]], bool); 4] = [
+        (&[b"q 100 0 0 100 72 500 cm /Im0", b"Do Q"], false),
+        (&[b"q 100 0 0 100 72 500", b"cm /Im0 Do Q"], false),
+        (&[b"q /Fm0", b"Do Q"], true),
+        (&[b"q 100 0 0 100 72 500 cm /Im0 Do Q"], false),
+    ];
+    for (pieces, is_form) in cases {
+        let doc = split_image_page(pieces);
+        let label: Vec<_> = pieces.iter().map(|p| String::from_utf8_lossy(p)).collect();
+        let images = images::page_images(&doc, 0).unwrap();
+        assert_eq!(images.len(), 1, "{label:?}");
+        assert!(close(images[0].rect, square), "{label:?}: {:?}", images[0].rect);
+        assert_eq!(images[0].is_form, is_form);
+        assert!(images[0].contains([122.0, 550.0]), "{label:?}");
+        if !is_form {
+            let read = images::reading_images(&doc, 0).unwrap();
+            assert!(read.len() == 1 && close(read[0].rect, square), "{label:?}: {read:?}");
+        }
+
+        let mut deleted = doc.clone();
+        images::change_image(&mut deleted, 0, 0, &images::ImageChange::Delete).unwrap();
+        let deleted = reopen(&deleted);
+        assert!(images::page_images(&deleted, 0).unwrap().is_empty(), "{label:?}");
+        let (joined, ops) = joined_ops(&deleted);
+        assert!(!ops.iter().any(|o| o.is("Do")), "{joined}");
+
+        let target = [300.0, 500.0, 400.0, 600.0];
+        let mut moved = doc.clone();
+        images::change_image(&mut moved, 0, 0, &images::ImageChange::Transform(images::rect_to_rect(square, target))).unwrap();
+        let moved = reopen(&moved);
+        let after = images::page_images(&moved, 0).unwrap();
+        assert!(after.len() == 1 && close(after[0].rect, target), "{label:?}: {after:?} {:?}", joined_ops(&moved).0);
+
+        let mut shifted = doc.clone();
+        images::translate_images(&mut shifted, 0, &[0], [228.0, 0.0]).unwrap();
+        let shifted = reopen(&shifted);
+        let after = images::page_images(&shifted, 0).unwrap();
+        assert!(after.len() == 1 && close(after[0].rect, target), "{label:?}: {after:?} {:?}", joined_ops(&shifted).0);
+    }
+}
+
 #[test]
 fn curved_image_clips_have_analytic_bounds_and_holes_do_not_capture_points() {
     let mut doc = image_page();
@@ -4696,6 +5131,31 @@ fn turned_paragraph_keeps_its_line_breaks_when_a_word_is_added() {
     assert!(text::rewrite_block(&mut doc, 0, 0, Some("Only line"), &style).is_err());
 }
 
+/// A paragraph drawn at a slant rewraps at the width its rows have along their baseline, as the
+/// same paragraph upright does. Its upright bounding box turned into the baseline's frame is wider
+/// by the rows' height times |sin 2θ|, which let a word that doesn't fit stay on its row.
+#[test]
+fn a_paragraph_at_a_slant_rewraps_at_the_width_it_has_upright() {
+    let rows = ["Rotated paragraph, first row of text", "that continues on a second row and", "ends on the third row here."];
+    let draft = "Rotated paragraph, first row of text that continues on a second row and now carries a few extra words \
+        before it ends on the third row here.";
+    let rewrapped = |degrees: f64| {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        let shown = rows.iter().map(|r| format!("({r}) Tj")).collect::<Vec<_>>().join(" T* ");
+        let mut doc = text_page(&format!("BT /F1 12 Tf 14.4 TL {cos:.6} {sin:.6} {:.6} {cos:.6} 300 400 Tm {shown} ET", -sin));
+        let block = text::text_blocks(&doc, 0).unwrap().remove(0);
+        assert_eq!(block.editor_text, rows.join("\n"), "{degrees}°");
+        text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+        text::text_lines(&reopen(&doc), 0).unwrap().into_iter().map(|l| l.text).collect::<Vec<_>>()
+    };
+    let upright = rewrapped(0.0);
+    // The widest source row is 189.44 pt; "now carries a few extra words before" is 196.07 pt.
+    assert_eq!(upright[2], "now carries a few extra words", "{upright:?}");
+    for degrees in [30.0, 45.0, 60.0, 90.0, 135.0, 210.0, 330.0] {
+        assert_eq!(rewrapped(degrees), upright, "{degrees}°");
+    }
+}
+
 /// A paragraph in a Chrome-style subset font: `/W` leaves out the glyphs of the `/DW` width.
 /// Adding a word keeps every row as it was and shows the word in the page's own font (#1443).
 #[test]
@@ -4748,6 +5208,76 @@ fn default_width_subset_paragraph_keeps_its_rows_when_a_word_is_added() {
         assert_eq!(a.text, b.text);
         assert!(close(a.rect, b.rect), "untouched rows keep their place and width: {:?} {:?}", a.rect, b.rect);
     }
+}
+
+/// #2578: a single turned row grows along its baseline only up to the page's 36 pt margin and wraps
+/// onto further rows from there, instead of running off the page.
+#[test]
+fn turned_single_row_wraps_at_the_page_margin() {
+    let draft = "A single turned row that keeps growing with many more words added until it is far longer than the page is tall, so it has to stop or wrap somewhere";
+    // Reading upwards (90° CCW) from y = 600 on the 600 × 800 test page: top margin is at y = 764.
+    let before = text_page("BT /F1 12 Tf 0 1 -1 0 300 600 Tm (A single turned row) Tj ET");
+    let layout = text::text_edit_layout(&before, 0, 0, draft, &text::BlockStyle::default()).unwrap();
+    let mut doc = before;
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+    let reopened = reopen(&doc);
+    let lines = text::text_lines(&reopened, 0).unwrap();
+    assert!(lines.len() > 1, "expected the turned row to wrap at the top margin: {lines:?}");
+    for line in &lines {
+        assert!((line.rect[1] - 600.0).abs() < 0.5, "row starts at y = 600: {:?}", line.rect);
+        assert!(line.rect[3] <= 800.0 - 36.0 + 0.5, "row stays within the top margin: {:?}", line.rect);
+    }
+    let blocks = text::text_blocks(&reopened, 0).unwrap();
+    assert_eq!(blocks.len(), 1, "wrapped turned rows stay one paragraph: {blocks:?}");
+    assert_eq!(blocks[0].text, draft);
+    assert_eq!(layout.draft_rect, Some(blocks[0].rect));
+
+    // Reading downwards (90° CW) from y = 200: bottom margin is at y = 36.
+    let mut doc = text_page("BT /F1 12 Tf 0 -1 1 0 300 200 Tm (A single turned row) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "expected 90° CW row to wrap at the bottom margin: {lines:?}");
+    for line in &lines {
+        assert!((line.rect[3] - 200.0).abs() < 0.5, "row starts at y = 200: {:?}", line.rect);
+        assert!(line.rect[1] >= 36.0 - 0.5, "row stays within the bottom margin: {:?}", line.rect);
+    }
+
+    // Reading upside down (180°) from x = 200: left margin is at x = 36.
+    let mut doc = text_page("BT /F1 12 Tf -1 0 0 -1 200 600 Tm (A single turned row) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "expected 180° row to wrap at the left margin: {lines:?}");
+    for line in &lines {
+        assert!((line.rect[2] - 200.0).abs() < 0.5, "row starts at x = 200: {:?}", line.rect);
+        assert!(line.rect[0] >= 36.0 - 0.5, "row stays within the left margin: {:?}", line.rect);
+    }
+
+    // Slanted (45°) from (400, 600): baseline stops where it first reaches a 36 pt margin.
+    let (sin, cos) = 45.0_f64.to_radians().sin_cos();
+    let mut doc = text_page(&format!("BT /F1 12 Tf {cos:.6} {sin:.6} {:.6} {cos:.6} 400 600 Tm (A single turned row) Tj ET", -sin));
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "expected 45° slanted row to wrap at the margin: {lines:?}");
+    for line in &lines {
+        assert!(line.rect[2] <= 600.0 && line.rect[3] <= 800.0, "slanted row stays on the page: {:?}", line.rect);
+    }
+
+    // Moving a turned single row with `offset` reduces the room left before the margin.
+    let mut doc = text_page("BT /F1 12 Tf 0 1 -1 0 300 500 Tm (A single turned row) Tj ET");
+    let moved = text::BlockStyle { offset: Some([0.0, 150.0]), ..Default::default() };
+    text::rewrite_block(&mut doc, 0, 0, Some(draft), &moved).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() > 1, "{lines:?}");
+    for line in &lines {
+        assert!((line.rect[1] - 650.0).abs() < 0.5, "moved row starts at y = 650: {:?}", line.rect);
+        assert!(line.rect[3] <= 800.0 - 36.0 + 0.5, "moved row stops at the top margin: {:?}", line.rect);
+    }
+
+    // A turned row that already starts inside the 36 pt margin keeps its own width instead of collapsing.
+    let mut doc = text_page("BT /F1 12 Tf 0 1 -1 0 300 770 Tm (Edge label) Tj ET");
+    text::rewrite_block(&mut doc, 0, 0, Some("Edge label updated"), &text::BlockStyle::default()).unwrap();
+    let lines = text::text_lines(&reopen(&doc), 0).unwrap();
+    assert!(lines.len() >= 2, "{lines:?}");
 }
 
 /// An added item is written out as a specific standard-14 face (`/Times-Italic`, `/Helvetica-Bold`
@@ -5041,36 +5571,555 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
 }
 
 #[test]
-fn test_image_move_does_not_emit_whiteout() {
-    let mut doc = image_page();
-    let imgs = images::page_images(&doc, 0).unwrap();
-    assert_eq!(imgs.len(), 1);
-    let original_rect = imgs[0].rect;
+#[test]
+fn image_copy_cut_paste_keyboard_and_context_menu() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 40, image::Rgb([180, 50, 50])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
 
-    // Move the image to a new location
-    let target_rect = [original_rect[0] + 50.0, original_rect[1] + 100.0, original_rect[2] + 50.0, original_rect[3] + 100.0];
-    let t = images::rect_to_rect(original_rect, target_rect);
-    images::change_image(&mut doc, 0, 0, &images::ImageChange::Transform(t)).unwrap();
-    let doc = reopen(&doc);
+    let id = h.state().views[0].id;
+    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(initial_count, 1, "starts with 1 image");
 
-    // Inspect the resulting PDF content stream
-    let bytes = page_content_bytes(&doc, 0);
-    let content = String::from_utf8_lossy(&bytes);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
 
-    // Assert that no white fill operators were added
-    assert!(!content.contains("1 1 1 rg"), "must not emit white fill rgb: {content}");
-    assert!(!content.contains("1 g"), "must not emit white fill gray: {content}");
-    assert!(!content.contains("re\nf") && !content.contains("re f"), "must not emit whiteout rect fill: {content}");
+    // 1. Select the image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "image selected");
 
-    // Assert that the image's cm was cleanly updated to the new position
-    let moved_imgs = images::page_images(&doc, 0).unwrap();
-    assert_eq!(moved_imgs.len(), 1);
-    assert!(close(moved_imgs[0].rect, target_rect), "rect matches target: {:?}", moved_imgs[0].rect);
-    assert!(
-        content.contains(&format!("{} {} cm", moved_imgs[0].matrix[4] as i64, moved_imgs[0].matrix[5] as i64))
-            || content.contains("cm\n /Im0 Do")
-            || content.contains("cm /Im0 Do"),
-        "cm cleanly updated: {content}"
+    // 2. Copy via keyboard shortcut (COMMAND+C / Event::Copy)
+    h.event(egui::Event::Copy);
+    h.run_steps(2);
+    assert!(h.state().last_copied_image.is_some(), "image copied to clipboard buffer");
+
+    // 3. Paste via keyboard shortcut (COMMAND+V / Event::Paste)
+    h.event(egui::Event::Paste("".into()));
+    h.run_steps(3);
+    let after_paste = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(after_paste, 2, "now has 2 images");
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(1), "new image is selected");
+
+    // 4. Cut via keyboard shortcut (COMMAND+X / Event::Cut)
+    h.event(egui::Event::Cut);
+    h.run_steps(3);
+    let after_cut = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(after_cut, 1, "cut deleted the pasted image");
+    assert!(h.state().views[0].image_selection.is_none(), "selection cleared after cut");
+
+    // 5. Paste again via context menu on the page
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label_contains("Paste").click();
+    h.run_steps(3);
+    let after_paste2 = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(after_paste2, 2, "pasted via context menu");
+}
+
+#[test]
+fn stale_clipboard_plain_text_does_not_paste_image() {
+    let mut h = harness(1, |_| {});
+    h.run_steps(4);
+    // Put an image into internal cache
+    h.state_mut().last_copied_image = Some((10, 10, vec![0; 400]));
+    h.state_mut().last_copied_file = Some(("cached.png".to_string(), vec![1, 2, 3]));
+    // The text arrives in the paste event, as it does from the OS. The real system clipboard is
+    // shared by every test thread, so this test doesn't write it.
+    h.state_mut().system_clipboard = false;
+
+    // A paste event containing plain text clears internal image cache and does not paste image
+    h.event(egui::Event::Paste("just plain text".into()));
+    h.run_steps(2);
+
+    // can_paste_image should now be false because the clipboard has text, not an image!
+    assert!(!h.state().can_paste_image(), "cannot paste image when the clipboard has text");
+
+    // paste_image should fail and return false without pasting
+    assert!(!h.state_mut().paste_image(0, None), "must not paste stale cached image");
+
+    let doc = h.state().session.get(h.state().views[0].id).unwrap();
+    assert_eq!(doc.page_images(0).len(), 0, "no image pasted on the page");
+}
+
+#[test]
+fn rotated_image_selection_and_crop() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let id = h.state().views[0].id;
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+
+    // Select the image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+
+    // Right-click and rotate clockwise
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label("Rotate Clockwise").click();
+    h.run_steps(3);
+
+    let doc = h.state().session.get(id).unwrap();
+    let im_rotated = &doc.page_images(0)[0];
+    assert!(im_rotated.matrix[1].abs() > 1.0 || im_rotated.matrix[2].abs() > 1.0, "matrix is rotated: {:?}", im_rotated.matrix);
+
+    // Enter crop mode with normalized bounds [0.2, 0.2, 0.8, 0.8]
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new([0.2, 0.2, 0.8, 0.8]));
+    h.run_steps(2);
+
+    // Apply crop via Enter key
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+
+    let doc = h.state().session.get(id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Crop image"));
+    let im_cropped = &doc.page_images(0)[0];
+    assert!(im_cropped.matrix[1].abs() > 1.0 || im_cropped.matrix[2].abs() > 1.0, "matrix remains rotated: {:?}", im_cropped.matrix);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none()), "crop mode ended");
+}
+
+#[test]
+fn test_image_rotated_45_deg_obb_and_proportional_scale() {
+    use pdfcraft_ui_egui::ImageHandle;
+    use pdfcraft_ui_egui::canvas::ImageObb;
+    use std::f32::consts::FRAC_PI_4;
+
+    let center = egui::pos2(200.0, 200.0);
+    let width = 100.0_f32;
+    let height = 50.0_f32;
+    let theta = FRAC_PI_4;
+
+    let obb = ImageObb::from_center_size_angle(center, width, height, theta);
+
+    // 1. Verify it outputs an OBB (not an AABB):
+    assert!(obb.is_rotated);
+    let corners = obb.corners();
+    assert!((corners[0].x - corners[1].x).abs() > 1.0);
+    assert!((corners[0].y - corners[1].y).abs() > 1.0);
+    assert!((corners[1].x - corners[2].x).abs() > 1.0);
+    assert!((corners[1].y - corners[2].y).abs() > 1.0);
+
+    let edge_u = (corners[1] - corners[0]).length();
+    let edge_v = (corners[3] - corners[0]).length();
+    assert!((edge_u - width).abs() < 1e-4, "edge_u={edge_u}, width={width}");
+    assert!((edge_v - height).abs() < 1e-4, "edge_v={edge_v}, height={height}");
+
+    let dot = (corners[1] - corners[0]).dot(corners[3] - corners[0]);
+    assert!(dot.abs() < 1e-4, "adjacent edges must be perpendicular for OBB");
+
+    let handles = obb.handles();
+    assert_eq!(handles.len(), 8);
+
+    // 2. Drag TopRight handle with a pointer delta along local axes:
+    let delta = egui::vec2(10.0 * theta.cos(), 10.0 * theta.sin());
+    let anchor_before = obb.s00;
+
+    let scaled_obb = obb.scale_proportional(ImageHandle::TopRight, delta, 5.0);
+
+    // The diagonally opposite corner (s00) MUST remain locked as the fixed anchor point:
+    assert!((scaled_obb.s00.x - anchor_before.x).abs() < 1e-4);
+    assert!((scaled_obb.s00.y - anchor_before.y).abs() < 1e-4);
+
+    // Dimensions scale proportionally along local axes (aspect ratio preserved):
+    let new_aspect = scaled_obb.width / scaled_obb.height;
+    let old_aspect = width / height;
+    assert!((new_aspect - old_aspect).abs() < 1e-4, "aspect ratio preserved: {new_aspect} vs {old_aspect}");
+    assert!(scaled_obb.width > width, "width increased");
+    assert!(scaled_obb.height > height, "height increased proportionally");
+
+    // Rotation angle is preserved without skewing:
+    assert!((scaled_obb.theta - theta).abs() < 1e-4);
+}
+
+trait RectExt {
+    fn width(&self) -> f64;
+}
+
+impl RectExt for [f64; 4] {
+    fn width(&self) -> f64 {
+        (self[2] - self[0]).abs()
+    }
+}
+
+impl RectExt for egui::Rect {
+    fn width(&self) -> f64 {
+        f64::from(self.width())
+    }
+}
+
+#[test]
+fn test_image_8_handles_render_and_drag() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("square.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+
+    // Select the image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+
+    let view = &h.state().views[0];
+    let sel = view.image_selection.as_ref().unwrap();
+    let doc = h.state().session.get(view.id).unwrap();
+    let img = &doc.page_images(sel.page)[sel.index];
+    let xf =
+        pdfcraft_ui_egui::canvas::PageXform { rect: r, rot: view.rotation, pw: doc.info.pages[sel.page].width, ph: doc.info.pages[sel.page].height };
+    let obb = pdfcraft_ui_egui::canvas::ImageObb::from_image(img, &xf, &doc.info, sel.page);
+
+    // Assert that exactly 8 unique resize handles (4 corners, 4 midpoints) are generated
+    let handles = obb.handles();
+    assert_eq!(handles.len(), 8, "exactly 8 resize handles generated");
+
+    let corners = [
+        pdfcraft_ui_egui::ImageHandle::TopLeft,
+        pdfcraft_ui_egui::ImageHandle::TopRight,
+        pdfcraft_ui_egui::ImageHandle::BottomRight,
+        pdfcraft_ui_egui::ImageHandle::BottomLeft,
+    ];
+    let midpoints = [
+        pdfcraft_ui_egui::ImageHandle::TopCenter,
+        pdfcraft_ui_egui::ImageHandle::RightCenter,
+        pdfcraft_ui_egui::ImageHandle::BottomCenter,
+        pdfcraft_ui_egui::ImageHandle::LeftCenter,
+    ];
+    for corner in &corners {
+        assert!(handles.iter().any(|(h, _)| h == corner), "missing corner handle: {:?}", corner);
+    }
+    for midpoint in &midpoints {
+        assert!(handles.iter().any(|(h, _)| h == midpoint), "missing midpoint handle: {:?}", midpoint);
+    }
+
+    for i in 0..8 {
+        for j in (i + 1)..8 {
+            assert!((handles[i].1 - handles[j].1).length() > 1.0, "handles {} and {} must be unique positions", i, j);
+        }
+    }
+
+    // Simulate a pointer drag on a corner that shrinks the image to 5x5 pixels and assert it does not panic
+    let tr_pos = obb.handle_pos(pdfcraft_ui_egui::ImageHandle::TopRight);
+    let anchor = obb.s00;
+    let shrink_target = anchor + egui::vec2(5.0, 5.0);
+    h.hover_at(tr_pos);
+    h.run_steps(1);
+    h.drag_at(tr_pos);
+    h.run_steps(1);
+    h.hover_at(shrink_target);
+    h.run_steps(2);
+    h.drop_at(shrink_target);
+    h.run_steps(4);
+}
+
+#[test]
+fn test_image_context_menu_precedence() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+
+    // Select the image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+
+    // Simulate a secondary click strictly inside an image's bounds
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    // Assert that the image widget consumes the click and the canvas background menu does not trigger
+    h.get_by_label("Rotate Clockwise");
+    h.get_by_label("Flip horizontal");
+    assert!(h.query_all_by_label("Rotate view clockwise").next().is_none(), "canvas background menu must not trigger");
+    assert!(h.query_all_by_label("Add bookmark").next().is_none(), "canvas background menu must not trigger");
+    assert!(h.query_all_by_label("Take a snapshot").next().is_none(), "canvas background menu must not trigger");
+}
+
+#[test]
+fn test_crop_updates_rect_instantly() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(100, 50, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.text"));
+    h.run_steps(2);
+
+    // Add image via content_ui
+    h.state_mut().add_image("logo.png".into(), png);
+    h.run_steps(3);
+
+    let id = h.state().views[0].id;
+    let initial_img = match &h.state().session.get(id).unwrap().added()[0].content {
+        pdfcraft_engine::AddedContent::Image(img) => img.clone(),
+        _ => panic!("expected AddedContent::Image"),
+    };
+    let initial_w = initial_img.rect.width();
+
+    // Trigger a crop event that removes 50% of an image's width
+    let mut cropped = initial_img.clone();
+    pdfcraft_ui_egui::content_ui::update_image_crop(&mut cropped, [0.5, 0.0, 0.0, 0.0]);
+    let update_edit = pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Image(cropped) };
+    h.state_mut().apply_edit(update_edit);
+
+    // Assert that in the immediate next frame, the image.rect.width() is exactly 50% of the original, with no padding left over
+    h.run_steps(1);
+    let doc = h.state().session.get(id).unwrap();
+    let img = match &doc.added()[0].content {
+        pdfcraft_engine::AddedContent::Image(img) => img.clone(),
+        _ => panic!("expected AddedContent::Image"),
+    };
+    let w = img.rect.width();
+    let expected_w = initial_w * 0.5;
+    assert!((w - expected_w).abs() < 1e-3, "image.rect.width() must be exactly 50% ({expected_w}), got {w}");
+}
+
+#[test]
+fn crop_action_pills_interactive_and_apply_cancel_reset() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("square.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    // Select image
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some());
+
+    // Enter crop mode
+    let doc_id = h.state().views[0].id;
+    let original_rect = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(original_rect));
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_mode = true;
+    h.run_steps(2);
+
+    // Set smaller crop rect (50x50 in center)
+    let smaller = egui::Rect::from_center_size(c, egui::vec2(50.0, 50.0));
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
+    h.run_steps(2);
+
+    let pill_y = smaller.max.y + 17.0;
+    let done_pos = egui::pos2(smaller.max.x - 20.0, pill_y);
+    h.hover_at(done_pos);
+    h.run_steps(1);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Done pill has PointingHand cursor");
+
+    let cancel_pos = egui::pos2(smaller.max.x - 85.0, pill_y);
+    h.hover_at(cancel_pos);
+    h.run_steps(1);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Cancel pill has PointingHand cursor");
+
+    // Click Cancel pill: exits crop mode without applying changes
+    click_at(&mut h, cancel_pos);
+    h.run_steps(3);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none() && !s.crop_mode), "Cancel exits crop mode");
+    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(original_rect), "image is uncropped");
+
+    // Re-enter crop mode and set crop rect
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(original_rect));
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_mode = true;
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
+    h.run_steps(2);
+
+    // Click "Remove Crop" pill
+    let reset_pos = egui::pos2(smaller.max.x - 170.0, pill_y);
+    h.hover_at(reset_pos);
+    h.run_steps(1);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Remove Crop pill has PointingHand cursor");
+    click_at(&mut h, reset_pos);
+    h.run_steps(2);
+    let current_keep = h.state().views[0].image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
+    assert_eq!(current_keep, original_rect, "Remove Crop restored crop to full bounds");
+
+    // Re-set smaller crop and click "Done" pill to apply
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
+    h.run_steps(2);
+    let done_pos_after = egui::pos2(smaller.max.x - 20.0, pill_y);
+    click_at(&mut h, done_pos_after);
+    h.run_steps(4);
+
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none() && !s.crop_mode), "Done exits crop mode");
+    let after_images = h.state().session.get(doc_id).unwrap().page_images(0);
+    assert_ne!(after_images[0].visible_rect, Some(original_rect), "crop was applied");
+}
+
+#[test]
+fn test_cropped_image_selection_and_bounding_box() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("square.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+
+    let doc_id = h.state().views[0].id;
+    let full_rect = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
+
+    // Apply crop to the center quarter: [0.25, 0.25, 0.75, 0.75]
+    let crop_keep = [
+        full_rect[0] + (full_rect[2] - full_rect[0]) * 0.25,
+        full_rect[1] + (full_rect[3] - full_rect[1]) * 0.25,
+        full_rect[0] + (full_rect[2] - full_rect[0]) * 0.75,
+        full_rect[1] + (full_rect[3] - full_rect[1]) * 0.75,
+    ];
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Crop(crop_keep) });
+    h.run_steps(4);
+
+    let img = &h.state().session.get(doc_id).unwrap().page_images(0)[0];
+    assert_eq!(img.rect, full_rect, "underlying CTM rect is non-destructively preserved");
+    let vis = img.visible_rect.expect("has visible_rect");
+    assert!((vis[0] - crop_keep[0]).abs() < 1e-3);
+    assert!((vis[1] - crop_keep[1]).abs() < 1e-3);
+    assert!((vis[2] - crop_keep[2]).abs() < 1e-3);
+    assert!((vis[3] - crop_keep[3]).abs() < 1e-3);
+
+    // Verify selectable bounds helper gives the cropped intersection
+    assert_eq!(pdfcraft_ui_egui::canvas::image_selectable_bounds(img), vis);
+
+    // Select tool (mouse tool)
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
+    h.run_steps(2);
+
+    let page_rect = h.state().views[0].page_screen_rect(0).expect("on screen");
+    // Center point is inside the cropped area:
+    let center = page_rect.center();
+    click_at(&mut h, center);
+    h.run_steps(2);
+
+    let picked = h.state().views[0].picked_image.expect("image is picked when clicking inside crop");
+    assert_eq!(picked.page, 0);
+    assert_eq!(picked.index, 0);
+    // The selection bounding box wraps the visible cropped area, NOT the full CTM rect!
+    assert_eq!(picked.rect, vis, "picked rect wraps the cropped bounds");
+
+    // Deselect
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().views[0].picked_image.is_none());
+
+    // Corner point (e.g. top-left corner of the page) is outside the crop box but inside full CTM rect
+    let corner = page_rect.min + egui::vec2(10.0, 10.0);
+    click_at(&mut h, corner);
+    h.run_steps(2);
+    assert!(h.state().views[0].picked_image.is_none(), "clicking cropped-away region must not hit-test or select the image");
+}
+
+/// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as
+/// putting the Edit text tool down does; left open, it would stay drawn in Read mode with no tool.
+#[test]
+fn read_mode_shortcut_applies_the_open_paragraph() {
+    use pdfcraft_ui_egui::{Mode, QuickTool};
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    // The line "Page 1" sits at (20, 150) on a 200 × 300 page, 24 pt.
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some(), "the line opens for editing");
+    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Chapter One".into();
+    h.run_steps(1);
+    h.state_mut().run_command("view.read_mode");
+    h.run_steps(3);
+    let s = h.state();
+    assert_eq!(s.mode, Mode::Read);
+    assert_eq!(s.quick_tool, QuickTool::Select);
+    assert!(s.views[0].line_editor.is_none(), "no editor stays open in Read mode");
+    assert_eq!(s.session.get(s.views[0].id).unwrap().text_lines(0)[0].text, "Chapter One", "the edit is applied");
+}
     );
 }
 
@@ -5295,4 +6344,119 @@ fn removing_marks_strips_wrappers_that_closed_open_state() {
     place_tagged(&mut doc, &page, MarkKind::Watermark.tag(), b"q /PCProbe Do Q\n".to_vec(), false).unwrap();
     assert_eq!(remove_marks(&mut doc, &[0], MarkKind::Watermark).unwrap(), 1);
     assert_eq!(streams(&doc, 0), ["q 2 0 0 2 0 0 cm"]);
+}
+
+/// #3087: flattening comments leaves alone what isn't a comment: links, and the non-markup
+/// multimedia and print-production annotations (3D, Screen, Movie, RichMedia, PrinterMark,
+/// TrapNet, Watermark), which it used to bake into the page and delete with their data.
+/// Flattening fields only leaves them alone too; real comments are still flattened.
+#[test]
+fn flattening_comments_keeps_annotations_that_are_not_comments() {
+    let kept = ["Widget", "Link", "3D", "Screen", "Movie", "RichMedia", "PrinterMark", "TrapNet", "Watermark"];
+    let flattened = ["Text", "Square", "FileAttachment"];
+    let all: Vec<&str> = flattened.iter().chain(kept.iter()).copied().collect();
+    let form = "<< /Type /XObject /Subtype /Form /BBox [0 0 40 20] /Length 26 >>\nstream\n0 0 1 rg 0 0 40 20 re f\nendstream";
+    let annots: Vec<String> = all
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            format!("<< /Type /Annot /Subtype /{s} /Rect [{x} 700 {r} 720] /AP << /N 4 0 R >> /Contents ({s}) >>", x = 20 + 50 * i, r = 60 + 50 * i)
+        })
+        .collect();
+    let refs: Vec<String> = (0..all.len()).map(|i| format!("{} 0 R", 6 + i)).collect();
+    let page = format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << >> /Contents 5 0 R /Annots [{}] >>", refs.join(" "));
+    let content = stream("", " ");
+    let mut objs: Vec<&str> = vec!["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", &page, form, &content];
+    objs.extend(annots.iter().map(String::as_str));
+    let left = |doc: &Document| -> Vec<String> {
+        let p = &pdfcraft_model::pages(doc)[0];
+        let Some(a) = p.dict.get(b"Annots").map(|a| doc.resolve(a)) else { return Vec::new() };
+        a.as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|o| doc.resolve(o).as_dict().and_then(|d| d.name(b"Subtype")).map(|s| String::from_utf8_lossy(s).into_owned()))
+            .collect()
+    };
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], true, false).unwrap(), flattened.len());
+    assert_eq!(left(&reopen(&doc)), kept, "only the comments were flattened");
+    let mut doc = build(&objs);
+    assert_eq!(flatten(&mut doc, &[0], false, true).unwrap(), 1, "the widget");
+    let without_widget: Vec<&str> = all.iter().copied().filter(|s| *s != "Widget").collect();
+    assert_eq!(left(&reopen(&doc)), without_widget, "flattening fields touches no annotation that isn't a widget");
+}
+
+/// A page whose text is a clipping mask (`mode` Tr) with a fill painted through it.
+fn clipping_text_page(mode: i64) -> Document {
+    text_page(&format!("q\nBT {mode} Tr /F1 48 Tf 40 60 Td (MASK) Tj ET\n1 0 0 rg 0 0 300 150 re f\nQ\n"))
+}
+
+/// Rewriting text that is a clipping path destroyed the artwork it masked: the glyphs went, the
+/// mask with them, and the fill behind flooded its own rectangle, in a file that still opened
+/// without a warning (#3429). Photoshop exports draw every text object this way. The rewrite is
+/// refused instead, as `clear_block` already refuses a preview.
+#[test]
+fn rewriting_clipping_path_text_is_refused_for_every_clipping_mode() {
+    for mode in [4, 5, 6, 7] {
+        let before = text::text_lines(&clipping_text_page(mode), 0).unwrap();
+        assert_eq!(before.len(), 1, "mode {mode}: the mask is one line");
+
+        let mut doc = clipping_text_page(mode);
+        let line = text::replace_line(&mut doc, 0, 0, "EDITED");
+        assert!(matches!(&line, Err(EditError::Invalid(m)) if m.contains("clipping path")), "mode {mode}: {line:?}");
+
+        let mut doc = clipping_text_page(mode);
+        let block = text::rewrite_block(&mut doc, 0, 0, Some("EDITED"), &BlockStyle::default());
+        assert!(matches!(&block, Err(EditError::Invalid(m)) if m.contains("clipping path")), "mode {mode}: {block:?}");
+
+        // Refused means untouched: the mask is still there to shape what is painted through it.
+        let after = text::text_lines(&doc, 0).unwrap();
+        assert_eq!(after.len(), 1, "mode {mode}");
+        assert_eq!(after[0].text, "MASK", "mode {mode}");
+    }
+}
+
+/// The modes that paint ink are still editable: only 4 to 7 add to the clip path.
+#[test]
+fn painting_modes_are_still_rewritten() {
+    for mode in [0, 1, 2] {
+        let mut doc = clipping_text_page(mode);
+        assert!(text::replace_line(&mut doc, 0, 0, "EDITED").is_ok(), "mode {mode}");
+        assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "EDITED", "mode {mode}");
+    }
+}
+
+/// A line's runs need not share a rendering mode: nothing in the join requires it, so a line that
+/// starts as ink can continue as a mask. The refusal reads the whole line, not the mode its first
+/// run set -- otherwise the rewrite passed the guard and took the mask away with the ink.
+#[test]
+fn a_line_that_starts_as_ink_and_continues_as_a_mask_is_refused() {
+    let content = "q\nBT /F1 48 Tf 40 60 Td 0 Tr (TITLE) Tj 7 Tr (MASK) Tj ET\n1 0 0 rg 0 0 300 150 re f\nQ\n";
+    let before = text::text_lines(&text_page(content), 0).unwrap();
+    assert_eq!(before.len(), 1, "the two runs are one line: {:?}", before.iter().map(|l| &l.text).collect::<Vec<_>>());
+    assert_eq!(before[0].text, "TITLEMASK", "and the mask is the second half of it");
+
+    let mut doc = text_page(content);
+    let line = text::replace_line(&mut doc, 0, 0, "EDITED");
+    assert!(matches!(&line, Err(EditError::Invalid(m)) if m.contains("clipping path")), "{line:?}");
+    let block = text::rewrite_block(&mut doc, 0, 0, Some("EDITED"), &BlockStyle::default());
+    assert!(matches!(&block, Err(EditError::Invalid(m)) if m.contains("clipping path")), "{block:?}");
+    assert_eq!(text::text_lines(&doc, 0).unwrap()[0].text, "TITLEMASK", "refused means untouched");
+}
+
+/// Another drawing of the line on the same baseline goes with it, so that the replacement is all
+/// that shows -- and that copy can be the mask while the line being replaced is ink. Dropping it
+/// destroys the artwork as surely as rewriting the mask itself, so this is refused too.
+#[test]
+fn a_clipping_copy_on_the_same_baseline_is_refused() {
+    let content = "q\nBT 0 Tr /F1 48 Tf 40 60 Td (MASK) Tj ET\nBT 7 Tr /F1 48 Tf 40 60 Td (MASK) Tj ET\n1 0 0 rg 0 0 300 150 re f\nQ\n";
+    let before = text::text_lines(&text_page(content), 0).unwrap();
+    assert_eq!(before.len(), 2, "two drawings of the same line");
+
+    let mut doc = text_page(content);
+    let line = text::replace_line(&mut doc, 0, 0, "EDITED");
+    assert!(matches!(&line, Err(EditError::Invalid(m)) if m.contains("clipping path")), "{line:?}");
+    let block = text::rewrite_block(&mut doc, 0, 0, Some("EDITED"), &BlockStyle::default());
+    assert!(matches!(&block, Err(EditError::Invalid(m)) if m.contains("clipping path")), "{block:?}");
+    assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
 }
