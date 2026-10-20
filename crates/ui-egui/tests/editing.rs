@@ -5662,4 +5662,3 @@ fn read_mode_shortcut_applies_the_open_paragraph() {
     assert!(s.views[0].line_editor.is_none(), "no editor stays open in Read mode");
     assert_eq!(s.session.get(s.views[0].id).unwrap().text_lines(0)[0].text, "Chapter One", "the edit is applied");
 }
-}

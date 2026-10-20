@@ -368,7 +368,7 @@ pub struct Document {
     /// The working file: what Save writes.
     pub bytes: Arc<Vec<u8>>,
     /// What is displayed (the page view, `page_render`, page images): `bytes`, plus appearances
-    /// drawn for display only for comments that have none ([`display_bytes`]). Never saved.
+    /// drawn for display only for comments that have none (`display_bytes`). Never saved.
     pub display: Arc<Vec<u8>>,
     pub info: DocInfo,
     pub renderer: RenderPool,
@@ -1906,6 +1906,7 @@ pub const EDIT_LABELS: &[&str] = &[
     "Move object",
     "Move objects",
     "Move image",
+    "Transform image",
     "Rotate image",
     "Flip image",
     "Replace image",
@@ -3346,7 +3347,7 @@ impl Session {
     ///
     /// `password` is tried as either the user or owner password when the file is encrypted.
     /// Open saved revision `n` (1 = the oldest) of a document as a new, unsaved document named
-    /// "<name> (revision n)".
+    /// `"<name> (revision n)"`.
     pub fn open_revision(&mut self, id: DocId, n: usize) -> Result<DocId, String> {
         let doc = self.get(id).ok_or("no such document")?;
         let ends = doc.revision_ends();

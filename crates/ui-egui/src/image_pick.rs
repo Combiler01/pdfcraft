@@ -45,36 +45,27 @@ pub(crate) fn page_input(
     let (vx, vy) = xf.screen_to_view(p);
     let u = info_page.view_to_user(vx, vy);
     let at = [f64::from(u[0]), f64::from(u[1])];
+    let generation = doc.edit_generation();
     view.picked_image = doc.page_image_at(page, at).and_then(|index| {
         doc.page_images(page).get(index).and_then(|i| {
             let screen_rect = crate::canvas::image_screen_rect(i, xf, info, page);
             if screen_rect.is_positive() && screen_rect.contains(p) {
-                Some(PickedImage { page, index, rect: crate::canvas::image_selectable_bounds(i) })
+                Some(PickedImage { page, index, rect: crate::canvas::image_selectable_bounds(i), generation })
             } else {
                 None
             }
         })
     });
-    let generation = doc.edit_generation();
-        view.picked_image = doc.page_image_at(page, at).and_then(|index| {
-            doc.page_images(page).get(index).and_then(|i| {
-                let screen_rect = crate::canvas::image_screen_rect(i, xf, info, page);
-                if screen_rect.is_positive() && screen_rect.contains(p) {
-                    Some(PickedImage { page, index, rect: crate::canvas::image_selectable_bounds(i), generation })
-                } else {
-                    None
-                }
-            })
-        });
-    }
+}
 
-    /// Forget the selected picture once the document has been edited since it was picked: Edit text &
-    /// images (or Undo) may have deleted or moved it, and its highlight would stay behind on an empty
-    /// spot of the page.
-    pub(crate) fn drop_stale(doc: &pdfcraft_engine::Document, view: &mut DocView) {
-        if view.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
-            view.picked_image = None;
-        }
+/// Forget the selected picture once the document has been edited since it was picked: Edit text &
+/// images (or Undo) may have deleted or moved it, and its highlight would stay behind on an empty
+/// spot of the page.
+pub(crate) fn drop_stale(doc: &pdfcraft_engine::Document, view: &mut DocView) {
+    if view.picked_image.is_some_and(|p| p.generation != doc.edit_generation()) {
+        view.picked_image = None;
+    }
+}
 
 /// The selected picture's highlight on page `page`.
 pub(crate) fn paint(painter: &egui::Painter, xf: &PageXform, page: usize, info: &DocInfo, view: &DocView) {

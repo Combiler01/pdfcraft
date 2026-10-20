@@ -2691,3 +2691,16 @@ key	Space	Space
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Bạn đang xem bản sửa đổi {rev} của “{from}”. Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
+	Clear search	Xóa tìm kiếm
+	Pin	Ghim
+	Pin a tool…	Ghim công cụ…
+	Pin to Home	Ghim vào Trang chủ
+	Pin tools to Home	Ghim công cụ vào Trang chủ
+	Pin your favorite tools here for quick access.	Ghim các công cụ yêu thích của bạn vào đây để truy cập nhanh.
+	Pinned	Đã ghim
+	Pinned Tools	Công cụ đã ghim
+	Search tools…	Tìm kiếm công cụ…
+	Select tools to display on your Home page for quick access.	Chọn các công cụ hiển thị trên Trang chủ để truy cập nhanh.
+	Unpin from Home	Bỏ ghim khỏi Trang chủ
+	Unpin tool	Bỏ ghim công cụ
+	Transform image	Chuyển đổi hình ảnh

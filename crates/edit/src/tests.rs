@@ -2593,30 +2593,6 @@ fn image_arrange_with_transformed_clipping_path_succeeds() {
 }
 
 #[test]
-fn biomolecules_image_arrange_with_inherited_clips_succeeds() {
-    let Ok(data) = std::fs::read("C:\\Users\\Harsh\\Downloads\\Biomolecules.pdf") else { return };
-    let mut doc = Document::open(std::sync::Arc::new(data)).unwrap();
-
-    // Page 0, image 1
-    images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::SendBackward).unwrap();
-    images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::SendToBack).unwrap();
-
-    // Page 6, images
-    let imgs_p6 = images::page_images(&doc, 6).unwrap();
-    for i in 0..imgs_p6.len() {
-        images::arrange_image(&mut doc, 6, i, images::ArrangeOrder::BringToFront).unwrap();
-        images::arrange_image(&mut doc, 6, i, images::ArrangeOrder::SendBackward).unwrap();
-    }
-
-    // Page 8, images
-    let imgs_p8 = images::page_images(&doc, 8).unwrap();
-    for i in 0..imgs_p8.len() {
-        images::arrange_image(&mut doc, 8, i, images::ArrangeOrder::BringToFront).unwrap();
-        images::arrange_image(&mut doc, 8, i, images::ArrangeOrder::SendBackward).unwrap();
-    }
-}
-
-#[test]
 fn inherited_source_opacity_is_preserved() {
     // Outer q sets /GS0 gs; inner q draws /Im0 Do; outer Q restores state before External Text
     let content = "q /GS0 gs q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 72 700 Td (External Text) Tj ET";
@@ -3334,6 +3310,53 @@ fn the_graphics_state_carries_over_between_content_streams() {
     let doc = split_page("q 0.5 0 0 0.5 0 0 cm", "Q BT /F1 10 Tf 100 100 Td (Footpath) Tj ET");
     let l = &text::text_lines(&doc, 0).unwrap()[0];
     assert!(close(l.rect[0], 100.0) && close(l.size, 10.0), "{l:?}");
+}
+
+fn two_stream_image_page(first: &str, second: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents [4 0 R 5 0 R] /Resources << /Font << /F1 6 0 R >> /XObject << /Im0 7 0 R /Im1 7 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{first}\nendstream", first.len()),
+        format!("<< /Length {} >>\nstream\n{second}\nendstream", second.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\0\0\0\0\0\0\0\0\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+#[test]
+fn arrange_and_crop_image_in_second_content_stream_succeeds() {
+    let first = "q 100 0 0 100 50 50 cm /Im0 Do Q";
+    let second = "q 100 0 0 100 200 200 cm /Im1 Do Q";
+    let mut doc = two_stream_image_page(first, second);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 2);
+    assert_eq!(before[0].name, "Im0");
+    assert_eq!(before[1].name, "Im1");
+
+    // Arrange second image (located in the second content stream)
+    images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::SendToBack).unwrap();
+    let after_arrange = images::page_images(&reopen(&doc), 0).unwrap();
+    assert_eq!(after_arrange.len(), 2);
+
+    // Crop image in second stream
+    images::crop_image(&mut doc, 0, 0, [210.0, 210.0, 290.0, 290.0]).unwrap();
+    let after_crop = images::page_images(&reopen(&doc), 0).unwrap();
+    assert_eq!(after_crop.len(), 2);
+    assert!(after_crop[0].clip_rect.is_some() || after_crop[0].visible_rect.is_some());
 }
 
 /// One page whose font draws a few Hebrew letters (ToUnicode): A ב, B ד, C י, D ו, E ק, F ש,
@@ -5568,559 +5591,6 @@ fn japanese_paragraphs_wrap_between_characters_without_closing_marks_at_a_row_st
             assert!(!row.starts_with(['、', '。', '」', 'っ']) && !row.ends_with('「'), "{row:?} in {rows:?}");
         }
     }
-}
-
-#[test]
-#[test]
-fn image_copy_cut_paste_keyboard_and_context_menu() {
-    let mut png = Vec::new();
-    image::RgbImage::from_pixel(60, 40, image::Rgb([180, 50, 50])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.system_clipboard = false;
-        app.open_bytes("picture.png", None, png.clone()).expect("opens");
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("edit.edit_text"));
-    h.run_steps(2);
-
-    let id = h.state().views[0].id;
-    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
-    assert_eq!(initial_count, 1, "starts with 1 image");
-
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let c = r.center();
-
-    // 1. Select the image
-    h.hover_at(c);
-    h.run_steps(1);
-    h.drag_at(c);
-    h.run_steps(1);
-    h.drop_at(c);
-    h.run_steps(2);
-    assert!(h.state().views[0].image_selection.is_some(), "image selected");
-
-    // 2. Copy via keyboard shortcut (COMMAND+C / Event::Copy)
-    h.event(egui::Event::Copy);
-    h.run_steps(2);
-    assert!(h.state().last_copied_image.is_some(), "image copied to clipboard buffer");
-
-    // 3. Paste via keyboard shortcut (COMMAND+V / Event::Paste)
-    h.event(egui::Event::Paste("".into()));
-    h.run_steps(3);
-    let after_paste = h.state().session.get(id).unwrap().page_images(0).len();
-    assert_eq!(after_paste, 2, "now has 2 images");
-    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(1), "new image is selected");
-
-    // 4. Cut via keyboard shortcut (COMMAND+X / Event::Cut)
-    h.event(egui::Event::Cut);
-    h.run_steps(3);
-    let after_cut = h.state().session.get(id).unwrap().page_images(0).len();
-    assert_eq!(after_cut, 1, "cut deleted the pasted image");
-    assert!(h.state().views[0].image_selection.is_none(), "selection cleared after cut");
-
-    // 5. Paste again via context menu on the page
-    h.hover_at(c);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
-    h.get_by_label_contains("Paste").click();
-    h.run_steps(3);
-    let after_paste2 = h.state().session.get(id).unwrap().page_images(0).len();
-    assert_eq!(after_paste2, 2, "pasted via context menu");
-}
-
-#[test]
-fn stale_clipboard_plain_text_does_not_paste_image() {
-    let mut h = harness(1, |_| {});
-    h.run_steps(4);
-    // Put an image into internal cache
-    h.state_mut().last_copied_image = Some((10, 10, vec![0; 400]));
-    h.state_mut().last_copied_file = Some(("cached.png".to_string(), vec![1, 2, 3]));
-    // The text arrives in the paste event, as it does from the OS. The real system clipboard is
-    // shared by every test thread, so this test doesn't write it.
-    h.state_mut().system_clipboard = false;
-
-    // A paste event containing plain text clears internal image cache and does not paste image
-    h.event(egui::Event::Paste("just plain text".into()));
-    h.run_steps(2);
-
-    // can_paste_image should now be false because the clipboard has text, not an image!
-    assert!(!h.state().can_paste_image(), "cannot paste image when the clipboard has text");
-
-    // paste_image should fail and return false without pasting
-    assert!(!h.state_mut().paste_image(0, None), "must not paste stale cached image");
-
-    let doc = h.state().session.get(h.state().views[0].id).unwrap();
-    assert_eq!(doc.page_images(0).len(), 0, "no image pasted on the page");
-}
-
-#[test]
-fn rotated_image_selection_and_crop() {
-    let mut png = Vec::new();
-    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("picture.png", None, png.clone()).expect("opens");
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("edit.edit_text"));
-    h.run_steps(2);
-    let id = h.state().views[0].id;
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let c = r.center();
-
-    // Select the image
-    h.hover_at(c);
-    h.run_steps(1);
-    h.drag_at(c);
-    h.run_steps(1);
-    h.drop_at(c);
-    h.run_steps(2);
-    assert!(h.state().views[0].image_selection.is_some(), "selected");
-
-    // Right-click and rotate clockwise
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
-    h.get_by_label("Rotate Clockwise").click();
-    h.run_steps(3);
-
-    let doc = h.state().session.get(id).unwrap();
-    let im_rotated = &doc.page_images(0)[0];
-    assert!(im_rotated.matrix[1].abs() > 1.0 || im_rotated.matrix[2].abs() > 1.0, "matrix is rotated: {:?}", im_rotated.matrix);
-
-    // Enter crop mode with normalized bounds [0.2, 0.2, 0.8, 0.8]
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new([0.2, 0.2, 0.8, 0.8]));
-    h.run_steps(2);
-
-    // Apply crop via Enter key
-    h.key_press(egui::Key::Enter);
-    h.run_steps(4);
-
-    let doc = h.state().session.get(id).unwrap();
-    assert_eq!(doc.can_undo(), Some("Crop image"));
-    let im_cropped = &doc.page_images(0)[0];
-    assert!(im_cropped.matrix[1].abs() > 1.0 || im_cropped.matrix[2].abs() > 1.0, "matrix remains rotated: {:?}", im_cropped.matrix);
-    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none()), "crop mode ended");
-}
-
-#[test]
-fn test_image_rotated_45_deg_obb_and_proportional_scale() {
-    use pdfcraft_ui_egui::ImageHandle;
-    use pdfcraft_ui_egui::canvas::ImageObb;
-    use std::f32::consts::FRAC_PI_4;
-
-    let center = egui::pos2(200.0, 200.0);
-    let width = 100.0_f32;
-    let height = 50.0_f32;
-    let theta = FRAC_PI_4;
-
-    let obb = ImageObb::from_center_size_angle(center, width, height, theta);
-
-    // 1. Verify it outputs an OBB (not an AABB):
-    assert!(obb.is_rotated);
-    let corners = obb.corners();
-    assert!((corners[0].x - corners[1].x).abs() > 1.0);
-    assert!((corners[0].y - corners[1].y).abs() > 1.0);
-    assert!((corners[1].x - corners[2].x).abs() > 1.0);
-    assert!((corners[1].y - corners[2].y).abs() > 1.0);
-
-    let edge_u = (corners[1] - corners[0]).length();
-    let edge_v = (corners[3] - corners[0]).length();
-    assert!((edge_u - width).abs() < 1e-4, "edge_u={edge_u}, width={width}");
-    assert!((edge_v - height).abs() < 1e-4, "edge_v={edge_v}, height={height}");
-
-    let dot = (corners[1] - corners[0]).dot(corners[3] - corners[0]);
-    assert!(dot.abs() < 1e-4, "adjacent edges must be perpendicular for OBB");
-
-    let handles = obb.handles();
-    assert_eq!(handles.len(), 8);
-
-    // 2. Drag TopRight handle with a pointer delta along local axes:
-    let delta = egui::vec2(10.0 * theta.cos(), 10.0 * theta.sin());
-    let anchor_before = obb.s00;
-
-    let scaled_obb = obb.scale_proportional(ImageHandle::TopRight, delta, 5.0);
-
-    // The diagonally opposite corner (s00) MUST remain locked as the fixed anchor point:
-    assert!((scaled_obb.s00.x - anchor_before.x).abs() < 1e-4);
-    assert!((scaled_obb.s00.y - anchor_before.y).abs() < 1e-4);
-
-    // Dimensions scale proportionally along local axes (aspect ratio preserved):
-    let new_aspect = scaled_obb.width / scaled_obb.height;
-    let old_aspect = width / height;
-    assert!((new_aspect - old_aspect).abs() < 1e-4, "aspect ratio preserved: {new_aspect} vs {old_aspect}");
-    assert!(scaled_obb.width > width, "width increased");
-    assert!(scaled_obb.height > height, "height increased proportionally");
-
-    // Rotation angle is preserved without skewing:
-    assert!((scaled_obb.theta - theta).abs() < 1e-4);
-}
-
-trait RectExt {
-    fn width(&self) -> f64;
-}
-
-impl RectExt for [f64; 4] {
-    fn width(&self) -> f64 {
-        (self[2] - self[0]).abs()
-    }
-}
-
-impl RectExt for egui::Rect {
-    fn width(&self) -> f64 {
-        f64::from(self.width())
-    }
-}
-
-#[test]
-fn test_image_8_handles_render_and_drag() {
-    let mut png = Vec::new();
-    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("square.png", None, png.clone()).expect("opens");
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("edit.edit_text"));
-    h.run_steps(2);
-
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let c = r.center();
-
-    // Select the image
-    h.hover_at(c);
-    h.run_steps(1);
-    h.drag_at(c);
-    h.run_steps(1);
-    h.drop_at(c);
-    h.run_steps(2);
-    assert!(h.state().views[0].image_selection.is_some(), "selected");
-
-    let view = &h.state().views[0];
-    let sel = view.image_selection.as_ref().unwrap();
-    let doc = h.state().session.get(view.id).unwrap();
-    let img = &doc.page_images(sel.page)[sel.index];
-    let xf =
-        pdfcraft_ui_egui::canvas::PageXform { rect: r, rot: view.rotation, pw: doc.info.pages[sel.page].width, ph: doc.info.pages[sel.page].height };
-    let obb = pdfcraft_ui_egui::canvas::ImageObb::from_image(img, &xf, &doc.info, sel.page);
-
-    // Assert that exactly 8 unique resize handles (4 corners, 4 midpoints) are generated
-    let handles = obb.handles();
-    assert_eq!(handles.len(), 8, "exactly 8 resize handles generated");
-
-    let corners = [
-        pdfcraft_ui_egui::ImageHandle::TopLeft,
-        pdfcraft_ui_egui::ImageHandle::TopRight,
-        pdfcraft_ui_egui::ImageHandle::BottomRight,
-        pdfcraft_ui_egui::ImageHandle::BottomLeft,
-    ];
-    let midpoints = [
-        pdfcraft_ui_egui::ImageHandle::TopCenter,
-        pdfcraft_ui_egui::ImageHandle::RightCenter,
-        pdfcraft_ui_egui::ImageHandle::BottomCenter,
-        pdfcraft_ui_egui::ImageHandle::LeftCenter,
-    ];
-    for corner in &corners {
-        assert!(handles.iter().any(|(h, _)| h == corner), "missing corner handle: {:?}", corner);
-    }
-    for midpoint in &midpoints {
-        assert!(handles.iter().any(|(h, _)| h == midpoint), "missing midpoint handle: {:?}", midpoint);
-    }
-
-    for i in 0..8 {
-        for j in (i + 1)..8 {
-            assert!((handles[i].1 - handles[j].1).length() > 1.0, "handles {} and {} must be unique positions", i, j);
-        }
-    }
-
-    // Simulate a pointer drag on a corner that shrinks the image to 5x5 pixels and assert it does not panic
-    let tr_pos = obb.handle_pos(pdfcraft_ui_egui::ImageHandle::TopRight);
-    let anchor = obb.s00;
-    let shrink_target = anchor + egui::vec2(5.0, 5.0);
-    h.hover_at(tr_pos);
-    h.run_steps(1);
-    h.drag_at(tr_pos);
-    h.run_steps(1);
-    h.hover_at(shrink_target);
-    h.run_steps(2);
-    h.drop_at(shrink_target);
-    h.run_steps(4);
-}
-
-#[test]
-fn test_image_context_menu_precedence() {
-    let mut png = Vec::new();
-    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("picture.png", None, png.clone()).expect("opens");
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("edit.edit_text"));
-    h.run_steps(2);
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let c = r.center();
-
-    // Select the image
-    h.hover_at(c);
-    h.run_steps(1);
-    h.drag_at(c);
-    h.run_steps(1);
-    h.drop_at(c);
-    h.run_steps(2);
-    assert!(h.state().views[0].image_selection.is_some(), "selected");
-
-    // Simulate a secondary click strictly inside an image's bounds
-    h.hover_at(c);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
-
-    // Assert that the image widget consumes the click and the canvas background menu does not trigger
-    h.get_by_label("Rotate Clockwise");
-    h.get_by_label("Flip horizontal");
-    assert!(h.query_all_by_label("Rotate view clockwise").next().is_none(), "canvas background menu must not trigger");
-    assert!(h.query_all_by_label("Add bookmark").next().is_none(), "canvas background menu must not trigger");
-    assert!(h.query_all_by_label("Take a snapshot").next().is_none(), "canvas background menu must not trigger");
-}
-
-#[test]
-fn test_crop_updates_rect_instantly() {
-    let mut png = Vec::new();
-    image::RgbImage::from_pixel(100, 50, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
-
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("form.pdf", None, include_bytes!("data/form.pdf").to_vec()).unwrap();
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("edit.text"));
-    h.run_steps(2);
-
-    // Add image via content_ui
-    h.state_mut().add_image("logo.png".into(), png);
-    h.run_steps(3);
-
-    let id = h.state().views[0].id;
-    let initial_img = match &h.state().session.get(id).unwrap().added()[0].content {
-        pdfcraft_engine::AddedContent::Image(img) => img.clone(),
-        _ => panic!("expected AddedContent::Image"),
-    };
-    let initial_w = initial_img.rect.width();
-
-    // Trigger a crop event that removes 50% of an image's width
-    let mut cropped = initial_img.clone();
-    pdfcraft_ui_egui::content_ui::update_image_crop(&mut cropped, [0.5, 0.0, 0.0, 0.0]);
-    let update_edit = pdfcraft_engine::Edit::UpdateContent { page: 0, index: 0, content: pdfcraft_engine::AddedContent::Image(cropped) };
-    h.state_mut().apply_edit(update_edit);
-
-    // Assert that in the immediate next frame, the image.rect.width() is exactly 50% of the original, with no padding left over
-    h.run_steps(1);
-    let doc = h.state().session.get(id).unwrap();
-    let img = match &doc.added()[0].content {
-        pdfcraft_engine::AddedContent::Image(img) => img.clone(),
-        _ => panic!("expected AddedContent::Image"),
-    };
-    let w = img.rect.width();
-    let expected_w = initial_w * 0.5;
-    assert!((w - expected_w).abs() < 1e-3, "image.rect.width() must be exactly 50% ({expected_w}), got {w}");
-}
-
-#[test]
-fn crop_action_pills_interactive_and_apply_cancel_reset() {
-    let mut png = Vec::new();
-    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("square.png", None, png.clone()).expect("opens");
-        app
-    });
-    h.run_steps(4);
-    assert!(h.state_mut().execute("edit.edit_text"));
-    h.run_steps(2);
-
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let c = r.center();
-    // Select image
-    h.hover_at(c);
-    h.run_steps(1);
-    h.drag_at(c);
-    h.run_steps(1);
-    h.drop_at(c);
-    h.run_steps(2);
-    assert!(h.state().views[0].image_selection.is_some());
-
-    // Enter crop mode
-    let doc_id = h.state().views[0].id;
-    let original_rect = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(original_rect));
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_mode = true;
-    h.run_steps(2);
-
-    // Set smaller crop rect (50x50 in center)
-    let smaller = egui::Rect::from_center_size(c, egui::vec2(50.0, 50.0));
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
-    h.run_steps(2);
-
-    let pill_y = smaller.max.y + 17.0;
-    let done_pos = egui::pos2(smaller.max.x - 20.0, pill_y);
-    h.hover_at(done_pos);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Done pill has PointingHand cursor");
-
-    let cancel_pos = egui::pos2(smaller.max.x - 85.0, pill_y);
-    h.hover_at(cancel_pos);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Cancel pill has PointingHand cursor");
-
-    // Click Cancel pill: exits crop mode without applying changes
-    click_at(&mut h, cancel_pos);
-    h.run_steps(3);
-    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none() && !s.crop_mode), "Cancel exits crop mode");
-    assert_eq!(h.state().session.get(doc_id).unwrap().page_images(0)[0].visible_rect, Some(original_rect), "image is uncropped");
-
-    // Re-enter crop mode and set crop rect
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(original_rect));
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_mode = true;
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
-    h.run_steps(2);
-
-    // Click "Remove Crop" pill
-    let reset_pos = egui::pos2(smaller.max.x - 170.0, pill_y);
-    h.hover_at(reset_pos);
-    h.run_steps(1);
-    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::PointingHand, "Remove Crop pill has PointingHand cursor");
-    click_at(&mut h, reset_pos);
-    h.run_steps(2);
-    let current_keep = h.state().views[0].image_selection.as_ref().unwrap().crop.as_ref().unwrap().keep;
-    assert_eq!(current_keep, original_rect, "Remove Crop restored crop to full bounds");
-
-    // Re-set smaller crop and click "Done" pill to apply
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
-    h.run_steps(2);
-    let done_pos_after = egui::pos2(smaller.max.x - 20.0, pill_y);
-    click_at(&mut h, done_pos_after);
-    h.run_steps(4);
-
-    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop.is_none() && !s.crop_mode), "Done exits crop mode");
-    let after_images = h.state().session.get(doc_id).unwrap().page_images(0);
-    assert_ne!(after_images[0].visible_rect, Some(original_rect), "crop was applied");
-}
-
-#[test]
-fn test_cropped_image_selection_and_bounding_box() {
-    let mut png = Vec::new();
-    image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))
-        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-        .unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("square.png", None, png.clone()).expect("opens");
-        app
-    });
-    h.run_steps(4);
-
-    let doc_id = h.state().views[0].id;
-    let full_rect = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
-
-    // Apply crop to the center quarter: [0.25, 0.25, 0.75, 0.75]
-    let crop_keep = [
-        full_rect[0] + (full_rect[2] - full_rect[0]) * 0.25,
-        full_rect[1] + (full_rect[3] - full_rect[1]) * 0.25,
-        full_rect[0] + (full_rect[2] - full_rect[0]) * 0.75,
-        full_rect[1] + (full_rect[3] - full_rect[1]) * 0.75,
-    ];
-    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Crop(crop_keep) });
-    h.run_steps(4);
-
-    let img = &h.state().session.get(doc_id).unwrap().page_images(0)[0];
-    assert_eq!(img.rect, full_rect, "underlying CTM rect is non-destructively preserved");
-    let vis = img.visible_rect.expect("has visible_rect");
-    assert!((vis[0] - crop_keep[0]).abs() < 1e-3);
-    assert!((vis[1] - crop_keep[1]).abs() < 1e-3);
-    assert!((vis[2] - crop_keep[2]).abs() < 1e-3);
-    assert!((vis[3] - crop_keep[3]).abs() < 1e-3);
-
-    // Verify selectable bounds helper gives the cropped intersection
-    assert_eq!(pdfcraft_ui_egui::canvas::image_selectable_bounds(img), vis);
-
-    // Select tool (mouse tool)
-    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::Select;
-    h.run_steps(2);
-
-    let page_rect = h.state().views[0].page_screen_rect(0).expect("on screen");
-    // Center point is inside the cropped area:
-    let center = page_rect.center();
-    click_at(&mut h, center);
-    h.run_steps(2);
-
-    let picked = h.state().views[0].picked_image.expect("image is picked when clicking inside crop");
-    assert_eq!(picked.page, 0);
-    assert_eq!(picked.index, 0);
-    // The selection bounding box wraps the visible cropped area, NOT the full CTM rect!
-    assert_eq!(picked.rect, vis, "picked rect wraps the cropped bounds");
-
-    // Deselect
-    h.key_press(egui::Key::Escape);
-    h.run_steps(2);
-    assert!(h.state().views[0].picked_image.is_none());
-
-    // Corner point (e.g. top-left corner of the page) is outside the crop box but inside full CTM rect
-    let corner = page_rect.min + egui::vec2(10.0, 10.0);
-    click_at(&mut h, corner);
-    h.run_steps(2);
-    assert!(h.state().views[0].picked_image.is_none(), "clicking cropped-away region must not hit-test or select the image");
-}
-
-/// The Read mode command (not the mode bar) applies a paragraph still open in the editor, as
-/// putting the Edit text tool down does; left open, it would stay drawn in Read mode with no tool.
-#[test]
-fn read_mode_shortcut_applies_the_open_paragraph() {
-    use pdfcraft_ui_egui::{Mode, QuickTool};
-    let mut h = harness(1, |_| {});
-    assert!(h.state_mut().execute("edit.edit_text"));
-    h.run_steps(2);
-    // The line "Page 1" sits at (20, 150) on a 200 × 300 page, 24 pt.
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
-    h.hover_at(at);
-    h.run_steps(1);
-    h.drag_at(at);
-    h.run_steps(1);
-    h.drop_at(at);
-    h.run_steps(3);
-    assert!(h.state().views[0].line_editor.is_some(), "the line opens for editing");
-    h.state_mut().views[0].line_editor.as_mut().unwrap().text = "Chapter One".into();
-    h.run_steps(1);
-    h.state_mut().run_command("view.read_mode");
-    h.run_steps(3);
-    let s = h.state();
-    assert_eq!(s.mode, Mode::Read);
-    assert_eq!(s.quick_tool, QuickTool::Select);
-    assert!(s.views[0].line_editor.is_none(), "no editor stays open in Read mode");
-    assert_eq!(s.session.get(s.views[0].id).unwrap().text_lines(0)[0].text, "Chapter One", "the edit is applied");
-}
-    );
 }
 
 /// Small graphics-state oracle for synthetic streams: every tracked state change must

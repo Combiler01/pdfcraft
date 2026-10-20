@@ -1185,7 +1185,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
             }
             Dialog::PinTool => {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("Pin tools to Home").font(theme::semibold(18.0)));
+                    ui.label(egui::RichText::new(tl!("Pin tools to Home")).font(theme::semibold(18.0)));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if widgets::ghost_button(ui, "x", tl!("Close")).clicked() {
                             close = true;
@@ -1193,16 +1193,18 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                     });
                 });
                 ui.add_space(4.0);
-                ui.label(egui::RichText::new("Select tools to display on your Home page for quick access.").color(t.text_muted));
+                ui.label(egui::RichText::new(tl!("Select tools to display on your Home page for quick access.")).color(t.text_muted));
                 ui.add_space(10.0);
 
                 ui.horizontal(|ui| {
                     let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
                     crate::icons::paint(ui, icon_rect, "search", 16.0, t.text_muted);
                     ui.add(
-                        egui::TextEdit::singleline(&mut app.pin_tool_search).hint_text("Search tools…").desired_width(ui.available_width() - 32.0),
+                        egui::TextEdit::singleline(&mut app.pin_tool_search)
+                            .hint_text(tl!("Search tools…"))
+                            .desired_width(ui.available_width() - 32.0),
                     );
-                    if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", "Clear search").clicked() {
+                    if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", tl!("Clear search")).clicked() {
                         app.pin_tool_search.clear();
                     }
                 });
@@ -1250,11 +1252,11 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         let btn_hovered = btn_resp.hovered();
 
                         let (btn_fill, btn_stroke, text_color, btn_label) = if pinned {
-                            (t.accent, egui::Stroke::NONE, egui::Color32::WHITE, "Pinned")
+                            (t.accent, egui::Stroke::NONE, egui::Color32::WHITE, tl!("Pinned"))
                         } else if btn_hovered {
-                            (t.hover, egui::Stroke::new(1.0, t.border), t.text, "Pin")
+                            (t.hover, egui::Stroke::new(1.0, t.border), t.text, tl!("Pin"))
                         } else {
-                            (egui::Color32::TRANSPARENT, egui::Stroke::new(1.0, t.border), t.text_muted, "Pin")
+                            (egui::Color32::TRANSPARENT, egui::Stroke::new(1.0, t.border), t.text_muted, tl!("Pin"))
                         };
 
                         ui.painter().rect(btn_rect, egui::CornerRadius::same(6), btn_fill, btn_stroke, egui::StrokeKind::Inside);

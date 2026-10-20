@@ -944,7 +944,7 @@ fn crop_input(
     for (idx, h) in crop_handles(k).iter().enumerate() {
         let is_active = mode.drag.as_ref().is_some_and(|d| d.0 == idx);
         let is_hovered = hover_pos.is_some_and(|p| p.distance(*h) < 10.0);
-        draw_handle(painter, *h, true, is_hovered, is_active, CROP_ACCENT);
+        draw_handle(painter, *h, is_active, is_hovered, true, CROP_ACCENT);
     }
 
     // Action pills
@@ -1792,33 +1792,20 @@ pub(crate) fn image_context_menu(
     }
 
     ui.menu_button("Arrange image", |ui| {
-        let total = images.len();
         if ui.button("Bring to front").clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront) });
-            if let Some(s) = view.image_selection.as_mut() {
-                s.index = total.saturating_sub(1);
-            }
             ui.close();
         }
         if ui.button("Send to back").clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack) });
-            if let Some(s) = view.image_selection.as_mut() {
-                s.index = 0;
-            }
             ui.close();
         }
         if ui.button("Bring forward").clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringForward) });
-            if let Some(s) = view.image_selection.as_mut() {
-                s.index = (hit + 1).min(total.saturating_sub(1));
-            }
             ui.close();
         }
         if ui.button("Send backward").clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward) });
-            if let Some(s) = view.image_selection.as_mut() {
-                s.index = hit.saturating_sub(1);
-            }
             ui.close();
         }
     });

@@ -4744,7 +4744,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.views[index].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: -90 });
         }
         Some(PageMenuAction::RotateCW(page)) => {
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: 90 });
+            let _ = page;
+            app.views[index].rotate_view(true);
         }
         Some(PageMenuAction::Print) => {
             app.open_print();
@@ -4781,7 +4782,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.views[index].pending_edit = Some(pdfcraft_engine::Edit::DeletePages { pages: vec![page] });
         }
         Some(PageMenuAction::ExportPdf) => {
-            app.dialog = Some(crate::Dialog::Export(crate::export_ui::ExportKind::Image));
+            app.select_tool("export");
         }
         Some(PageMenuAction::Find) => {
             app.views[index].open_find();

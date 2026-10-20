@@ -160,7 +160,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, is_pinned: bool) -> (e
             t.text_faint
         };
         icons::paint(ui, pin_rect.shrink(3.0), "pin", 15.0, pin_tint);
-        let tip = if is_pinned { "Unpin from Home" } else { "Pin to Home" };
+        let tip = if is_pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
         pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
         if theme::hand(pin_resp).on_hover_text(tip).clicked() {
             pin_clicked = true;
@@ -489,6 +489,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             },
         );
 
+        let show_palette_id = ui.id().with("show-palette");
         ui.horizontal(|ui| {
             // Font size ComboBox
             egui::ComboBox::from_id_salt("font-size").selected_text(format!("{:.1}", ed.look.size)).width(55.0).show_ui(ui, |ui| {
@@ -501,7 +502,6 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             let color_val = crate::comments::color32(ed.look.color);
             ui.painter().rect_filled(color_rect, t.radius, color_val);
             ui.painter().rect_stroke(color_rect, t.radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-            let show_palette_id = ui.id().with("show-palette");
             let mut show_palette = ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false);
             if color_resp.on_hover_text("Text color").clicked() {
                 show_palette = !show_palette;
@@ -534,7 +534,6 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         });
 
         // Color Swatch Grid (when toggled or open)
-        let show_palette_id = ui.id().with("show-palette");
         if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false)
             && let Some(picked) = crate::comments::swatch_grid(ui, Some(ed.look.color))
         {

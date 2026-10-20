@@ -4,7 +4,7 @@
 //! or delete. Only the stream that draws it is rewritten, as a new object.
 
 use kurbo::{BezPath, Point, Shape};
-use pdfcraft_content::{Matrix, Op, Pieces, parse};
+use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use std::sync::Arc;
 
@@ -248,75 +248,58 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     let mut out = Vec::new();
     // The streams are one stream in pieces, so the graphics state and operators carry over.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
-let mut tracker = ExtendedGStateTracker::default();
-        let pieces = joined(&streams(doc, &p.dict));
-        for (i, op) in pieces.parse().ops.iter().enumerate() {
-            state.apply(op)?;
-            tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
-            let ctm = state.placement.matrix;
-            if op.is("Do") {
-                let Some(name) = op.name(0) else { continue };
-                let Some(resource) = xo.get(name) else { continue };
-                let obj = doc.resolve(resource);
-                let Object::Stream(s) = &*obj else { continue };
-                let is_form = s.dict.name(b"Subtype") == Some(b"Form");
-                let (matrix, bounds) = if is_form {
-                    let Some(bounds) = s.dict.get(b"BBox").map(|v| doc.resolve(v)).and_then(|v| {
-                        v.as_array().and_then(|a| {
-                            if a.len() != 4 {
-                                return None;
-                            }
-                            let mut b = [0.0; 4];
-                            for (n, v) in b.iter_mut().zip(a) {
-                                *n = v.as_f64()?;
+    let mut tracker = ExtendedGStateTracker::default();
+    let pieces = joined(&streams(doc, &p.dict));
+    for (i, op) in pieces.parse().ops.iter().enumerate() {
+        state.apply(op)?;
+        tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
+        let ctm = state.placement.matrix;
+        if op.is("Do") {
+            let Some(name) = op.name(0) else { continue };
+            let Some(resource) = xo.get(name) else { continue };
+            let obj = doc.resolve(resource);
+            let Object::Stream(s) = &*obj else { continue };
+            let is_form = s.dict.name(b"Subtype") == Some(b"Form");
+            let (matrix, bounds) = if is_form {
+                let Some(bounds) = s.dict.get(b"BBox").map(|v| doc.resolve(v)).and_then(|v| {
+                    v.as_array().and_then(|a| {
+                        if a.len() != 4 {
+                            return None;
+                        }
+                        let mut b = [0.0; 4];
+                        for (n, v) in b.iter_mut().zip(a) {
+                            *n = v.as_f64()?;
                         }
                         Some(b)
                     })
                 }) else {
                     continue;
                 };
-let matrix = match s.dict.get(b"Matrix") {
-            Some(v) => {
-                let v = doc.resolve(v);
-                let Some(m) = v.as_array().and_then(|a| Matrix::from_operands(a)) else { continue };
-                m
+                let matrix = match s.dict.get(b"Matrix") {
+                    Some(v) => {
+                        let v = doc.resolve(v);
+                        let Some(m) = v.as_array().and_then(|a| Matrix::from_operands(a)) else { continue };
+                        m
+                    }
+                    None => Matrix::IDENTITY,
+                };
+                (matrix.then(&ctm), bounds)
+            } else if s.dict.name(b"Subtype") == Some(b"Image") {
+                (ctm, [0.0, 0.0, 1.0, 1.0])
+            } else {
+                continue;
+            };
+
+            let rect = matrix.bbox(bounds);
+            if !bounds.iter().chain(matrix.0.iter()).chain(rect.iter()).all(|v| v.is_finite())
+                || bounds[2] <= bounds[0]
+                || bounds[3] <= bounds[1]
+                || rect[2] <= rect[0]
+                || rect[3] <= rect[1]
+            {
+                continue;
             }
-            None => Matrix::IDENTITY,
-        };
-        (matrix.then(&ctm), bounds)
-    } else if s.dict.name(b"Subtype") == Some(b"Image") {
-        (ctm, [0.0, 0.0, 1.0, 1.0])
-    } else {
-        continue;
-    };
-    
-    let rect = matrix.bbox(bounds);
-    if !bounds.iter().chain(matrix.0.iter()).chain(rect.iter()).all(|v| v.is_finite())
-        || bounds[2] <= bounds[0]
-        || bounds[3] <= bounds[1]
-        || rect[2] <= rect[0]
-        || rect[3] <= rect[1]
-    {
-        continue;
-    }
-    
-    out.push(PageImage {
-        rect,
-        visible_rect: intersection(rect, state.placement.clip),
-        clip_rect: Some(state.placement.clip),
-        matrix: matrix.0,
-        name: String::from_utf8_lossy(name).into_owned(),
-        object: resource.as_ref(),
-        is_form,
-        width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
-        height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
-        smask: tracker.current_state.smask.clone(),
-        stream: si,
-        op: i,
-        draw_matrix: ctm.0,
-        clips: state.placement.clips.clone(),
-    });
-            }
+
             out.push(PageImage {
                 rect,
                 visible_rect: intersection(rect, state.placement.clip),
@@ -327,6 +310,7 @@ let matrix = match s.dict.get(b"Matrix") {
                 is_form,
                 width: if is_form { 0 } else { s.dict.int(b"Width").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
                 height: if is_form { 0 } else { s.dict.int(b"Height").unwrap_or(0).clamp(0, u32::MAX as i64) as u32 },
+                smask: tracker.current_state.smask.clone(),
                 stream: pieces.piece_of(op.span.start),
                 op: i,
                 draw_matrix: ctm.0,
@@ -916,22 +900,12 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
     let p = page_of(doc, page)?;
     let all = streams(doc, &p.dict);
-    let mut offset = 0_usize;
-    for (_, data) in all.iter().take(img.stream) {
-        offset = offset
-            .checked_add(data.len())
-            .and_then(|n| n.checked_add(1))
-            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
-    }
-    let data = all.get(img.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
-    let op = parse(&data.1).ops.get(img.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
-    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
     let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
-    let target = ops
-        .iter()
-        .position(|op| op.span.start == span && op.is("Do"))
-        .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+    let target = img.op;
+    if !ops.get(target).is_some_and(|op| op.is("Do")) {
+        return Err(EditError::Invalid("the image operation could not be located".into()));
+    }
 
     let is_wrapped = is_entire_page_wrapped(&ops);
     let (scan_start, scan_end) = if is_wrapped { (1, ops.len().saturating_sub(1)) } else { (0, ops.len()) };
@@ -1309,22 +1283,12 @@ pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Resul
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
     let p = page_of(doc, page)?;
     let all = streams(doc, &p.dict);
-    let mut offset = 0_usize;
-    for (_, data) in all.iter().take(img.stream) {
-        offset = offset
-            .checked_add(data.len())
-            .and_then(|n| n.checked_add(1))
-            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
-    }
-    let data = all.get(img.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
-    let op = parse(&data.1).ops.get(img.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
-    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
     let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
-    let target = ops
-        .iter()
-        .position(|op| op.span.start == span && op.is("Do"))
-        .ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+    let target = img.op;
+    if !ops.get(target).is_some_and(|op| op.is("Do")) {
+        return Err(EditError::Invalid("the image operation could not be located".into()));
+    }
     if let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? {
         let drawing_ops = extract_image_drawing_ops(&ops, start, end, target, scope_matrix, Matrix(img.draw_matrix))?;
         let start_op = ops.get(start).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
@@ -1604,16 +1568,6 @@ fn crop_image_impl(
     let p11 = m.apply(u1, v1);
     let p01 = m.apply(u0, v1);
 
-    let mut offset = 0_usize;
-    for (_, data) in streams.iter().take(image.stream) {
-        offset = offset
-            .checked_add(data.len())
-            .and_then(|n| n.checked_add(1))
-            .ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
-    }
-    let data = streams.get(image.stream).ok_or_else(|| EditError::Invalid("the image stream is missing".into()))?;
-    let op = parse(&data.1).ops.get(image.op).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
-    let span = offset.checked_add(op.span.start).ok_or_else(|| EditError::Invalid("the image content is too large".into()))?;
     let pieces = joined(streams);
     let ops = pieces.parse().ops;
     let target = image.op;

@@ -1951,6 +1951,7 @@ action wizard	Start	Iniciar
 	Edit text	Editar texto
 	Load document font	Cargar fuente del documento
 	Move image	Mover imagen
+	Transform image	Transformar imagen
 	Rotate image	Girar imagen
 	Flip image	Voltear imagen
 	Delete image	Eliminar imagen
@@ -2580,3 +2581,15 @@ animation effects	Off	Desactivados
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
 	You are viewing revision {rev} of “{from}”. It is a snapshot: changes here won't affect the original.	Estás viendo la revisión {rev} de «{from}». Es una instantánea: los cambios aquí no afectarán al original.
+	Clear search	Borrar búsqueda
+	Pin	Anclar
+	Pin a tool…	Anclar una herramienta…
+	Pin to Home	Anclar en Inicio
+	Pin tools to Home	Anclar herramientas en Inicio
+	Pin your favorite tools here for quick access.	Ancla tus herramientas favoritas aquí para un acceso rápido.
+	Pinned	Anclado
+	Pinned Tools	Herramientas ancladas
+	Search tools…	Buscar herramientas…
+	Select tools to display on your Home page for quick access.	Selecciona las herramientas que se mostrarán en la página de Inicio para un acceso rápido.
+	Unpin from Home	Desanclar de Inicio
+	Unpin tool	Desanclar herramienta

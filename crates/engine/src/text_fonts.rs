@@ -39,9 +39,10 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
     let mut pending: Vec<_> = roots.iter().take(16).map(|r| (r.clone(), 0usize)).collect();
     let mut files = Vec::new();
     let mut entries = 0usize;
+    let mut budget = 64u64 << 20;
     let mut seen = std::collections::HashSet::new();
     while let Some((path, depth)) = pending.pop() {
-        if entries >= 4096 || files.len() >= 500 {
+        if entries >= 4096 || files.len() >= 500 || budget == 0 {
             break;
         }
         entries += 1;
@@ -55,6 +56,10 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
                 pending.extend(children.take(remaining).filter_map(Result::ok).map(|p| (p.path(), depth + 1)));
             }
         } else if meta.is_file() && meta.len() <= (16 << 20) && font_extension(&path) {
+            if meta.len() > budget {
+                continue;
+            }
+            budget = budget.saturating_sub(meta.len());
             let mut bytes = Vec::new();
             let read = std::fs::File::open(&path).and_then(|f| f.take((16 << 20) + 1).read_to_end(&mut bytes));
             if read.is_err() {
@@ -71,7 +76,7 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
         }
     }
     files.sort_by(|a, b| a.face.cmp(&b.face).then(a.path.cmp(&b.path)));
-    files.dedup_by(|a, b| a.face == b.face);
+    files.dedup_by(|a, b| a.path == b.path || (a.face == b.face && std::fs::read(&a.path).ok() == std::fs::read(&b.path).ok()));
     files
 }
 fn font_extension(path: &Path) -> bool {

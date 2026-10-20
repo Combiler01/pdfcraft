@@ -43,6 +43,12 @@ impl PdfCraftApp {
     pub fn apply_edit(&mut self, edit: Edit) -> bool {
         let Some((i, id)) = self.active_ids() else { return false };
         let label = edit.label();
+        let target_arrange_image = match &edit {
+            Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
+                self.session.get(id).and_then(|doc| doc.page_images(*page).get(*index).cloned())
+            }
+            _ => None,
+        };
         let (form_before, page_count_before, had_xfa) = if let Some(d) = self.session.get(id) {
             (Some(std::sync::Arc::clone(&d.form)), d.info.pages.len(), d.xfa.is_some())
         } else {
@@ -127,18 +133,18 @@ impl PdfCraftApp {
                     view.document_changed(info);
                 }
                 // Keep the pages the user acted on selected, where they now are.
-                match edit {
+                match &edit {
                     Edit::MovePages { pages, to } => {
                         let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-                        let to = to.min(info.pages.len() - n);
+                        let to = *to.min(&(info.pages.len() - n));
                         view.select_pages(&(to..to + n).collect::<Vec<_>>());
                     }
                     Edit::DuplicatePages { pages, at: Some(at) } => {
                         let n = pages.iter().collect::<std::collections::BTreeSet<_>>().len();
-                        let at = at.min(info.pages.len().saturating_sub(n));
+                        let at = *at.min(&(info.pages.len().saturating_sub(n)));
                         view.select_pages(&(at..at + n).collect::<Vec<_>>());
                     }
-                    Edit::InsertBlankPage { at, .. } => view.select_pages(&[at.min(info.pages.len() - 1)]),
+                    Edit::InsertBlankPage { at, .. } => view.select_pages(&[*at.min(&(info.pages.len() - 1))]),
                     Edit::DeletePages { .. } => view.select_pages(&[]),
                     // A stroke drawn with the pen stays unselected, so the selection box and
                     // author popup don't sit over the next stroke (#429).
@@ -165,6 +171,21 @@ impl PdfCraftApp {
                     Edit::DeleteAnnotation { .. } => view.comments.selected = None,
                     _ => {}
                 }
+                if let (Some(target), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
+                    let new_idx = doc
+                        .page_images(*page)
+                        .iter()
+                        .position(|img| img.name == target.name && img.object == target.object && img.rect == target.rect)
+                        .or_else(|| doc.page_images(*page).iter().position(|img| img.name == target.name && img.object == target.object))
+                        .or_else(|| doc.page_images(*page).iter().position(|img| img.name == target.name));
+                    if let Some(s) = view.image_selection.as_mut().filter(|s| s.page == *page) {
+                        if let Some(idx) = new_idx {
+                            s.index = idx;
+                        } else {
+                            view.image_selection = None;
+                        }
+                    }
+                }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
                 }
@@ -181,6 +202,9 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.
                     view.comments.drawings_refused();
+                    if matches!(edit, Edit::EditPageImage { .. }) {
+                        view.image_selection = None;
+                    }
                 }
                 let message = if matches!(edit, Edit::MoveObjects { .. }) { crate::object_ui::move_error(&e) } else { e.to_string() };
                 self.notify_fmt("{label} failed: {e}", &[("label", &crate::i18n::edit_label(&label)), ("e", &message)]);

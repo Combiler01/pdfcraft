@@ -639,6 +639,7 @@ fn finish(cv: &mut ContentView, d: TextDraft, added: &[Added]) -> Option<Edit> {
 /// Returns the changed style; for a selected item the caller turns it into an update.
 pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> Option<AddedText> {
     let mut s = style.clone();
+    let show_palette_id = ui.id().with("show-palette-added");
     widgets::section_title(ui, "FORMAT TEXT");
     egui::ComboBox::from_id_salt("font-family").selected_text(s.family.label()).width(ui.available_width().max(180.0)).show_ui(ui, |ui| {
         ui.label(egui::RichText::new("Standard fonts").weak().small());
@@ -656,7 +657,6 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
         let color_val = crate::comments::color32(s.color);
         ui.painter().rect_filled(color_rect, t.radius, color_val);
         ui.painter().rect_stroke(color_rect, t.radius, egui::Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-        let show_palette_id = ui.id().with("show-palette-added");
         let mut show_palette = ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false);
         if color_resp.on_hover_text("Text color").clicked() {
             show_palette = !show_palette;
@@ -683,7 +683,6 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
             }
         }
     });
-    let show_palette_id = ui.id().with("show-palette-added");
     if ui.data(|d| d.get_temp::<bool>(show_palette_id)).unwrap_or(false)
         && let Some(picked) = crate::comments::swatch_grid(ui, Some(s.color))
     {
@@ -698,8 +697,6 @@ pub(crate) fn format_panel(ui: &mut egui::Ui, t: &Tokens, style: &AddedText) -> 
         if i_resp.on_hover_text(tl!("Italic")).clicked() {
             s.italic = !s.italic;
         }
-        let u_resp = ui.selectable_label(false, egui::RichText::new("U̲").size(14.0));
-        let _ = u_resp;
         let sup_resp = ui.selectable_label(false, egui::RichText::new("T¹").size(13.0));
         if sup_resp.on_hover_text("Superscript").clicked() {
             let all_sup = !s.text.is_empty() && s.text.chars().all(|c| crate::edit_text_ui::char_from_superscript(c) != c);

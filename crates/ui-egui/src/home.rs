@@ -35,12 +35,12 @@ fn tool_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static c
     if allow_unpin && (ui.rect_contains_pointer(rect) || resp.hovered()) {
         let unpin_rect = Rect::from_center_size(body.right_top() + vec2(-18.0, 18.0), vec2(22.0, 22.0));
         let unpin_resp = ui.interact(unpin_rect, ui.id().with(("unpin_card_btn", g.id)), Sense::click());
-        unpin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Unpin tool"));
+        unpin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Unpin tool")));
         if unpin_resp.hovered() {
             ui.painter().rect_filled(unpin_rect, CornerRadius::same(4), t.pressed);
         }
         icons::paint(ui, unpin_rect.shrink(4.0), "x", 14.0, t.icon);
-        if unpin_resp.on_hover_text("Unpin from Home").clicked() {
+        if unpin_resp.on_hover_text(tl!("Unpin from Home")).clicked() {
             unpin_clicked = true;
         }
     }
@@ -139,16 +139,16 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
             ui.add_space(26.0);
             let mut unpin_tool = None;
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Pinned Tools").font(theme::semibold(17.0)));
+                ui.label(egui::RichText::new(tl!("Pinned Tools")).font(theme::semibold(17.0)));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::ghost_button(ui, "pin", "Pin a tool…").clicked() {
+                    if widgets::ghost_button(ui, "pin", tl!("Pin a tool…")).clicked() {
                         app.dialog = Some(crate::Dialog::PinTool);
                     }
                 });
             });
             ui.add_space(4.0);
             if app.pinned_tools.is_empty() {
-                ui.label(egui::RichText::new("Pin your favorite tools here for quick access.").color(t.text_muted));
+                ui.label(egui::RichText::new(tl!("Pin your favorite tools here for quick access.")).color(t.text_muted));
             } else {
                 ui.add_space(6.0);
                 let pinned = app.pinned_tools.clone();

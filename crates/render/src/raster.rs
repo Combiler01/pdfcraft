@@ -703,7 +703,7 @@ impl PoolParser {
 
 /// Renders pages on worker threads, most urgent request first.
 ///
-/// **Watchdog:** a render running longer than `stuck_after` (default [`STUCK_AFTER`]) is given
+/// **Watchdog:** a render running longer than `stuck_after` (default `STUCK_AFTER`) is given
 /// up on. A timed-out *shared* render retires that parser and retries still-desired work
 /// privately: the page may only have been waiting behind another page's decode. A private
 /// timeout is reported as an error for that page and the page is not attempted again. Threads
