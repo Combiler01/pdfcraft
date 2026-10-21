@@ -2279,6 +2279,55 @@ fn image_arrange_preserves_shared_group_drawings() {
     assert!(str_content.contains("End Text"), "text in page must be preserved");
 }
 
+/// The marked-content sequence that `mcid` opens (`/MCID n >> BDC` … its `EMC`), as content text.
+fn marked_sequence(content: &str, mcid: u32) -> &str {
+    let tag = format!("/MCID {mcid}");
+    let start = content.find(&tag).unwrap_or_else(|| panic!("no {tag} in {content}"));
+    let end = content[start..].find("EMC").map(|e| start + e).unwrap_or_else(|| panic!("{tag} has no EMC in {content}"));
+    &content[start..end]
+}
+
+/// #3145: Arrange treated marked-content boundaries as if they weren't there, so Bring to Front put
+/// the image inside the text's `BDC`…`EMC` (tagged as the text) and left its own sequence empty.
+#[test]
+fn image_arrange_keeps_marked_content_sequences_whole() {
+    let content = "/P <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q EMC /P <</MCID 1>> BDC BT /F1 12 Tf 72 700 Td (Text) Tj ET EMC";
+    let mut doc = image_page_with(content);
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(marked_sequence(&s, 0).contains("/Im0 Do"), "the image stays in its own sequence: {s}");
+    assert!(!marked_sequence(&s, 1).contains("/Im0 Do"), "the text's sequence holds no image: {s}");
+    assert!(marked_sequence(&s, 1).contains("(Text)"), "{s}");
+    assert!(s.find("/MCID 1").unwrap() < s.find("/MCID 0").unwrap(), "the image's sequence now comes after the text's: {s}");
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
+}
+
+/// A `BMC` sequence (here an artifact) moves as a whole too.
+#[test]
+fn image_arrange_moves_a_bmc_sequence_as_a_whole() {
+    let content = "/Artifact BMC q 100 0 0 100 50 50 cm /Im0 Do Q EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
+    let mut doc = image_page_with(content);
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let (art, emc, body, img) = (s.find("/Artifact BMC").unwrap(), s.rfind("EMC").unwrap(), s.find("(Body)").unwrap(), s.find("/Im0 Do").unwrap());
+    assert!(body < art && art < img && img < emc, "text first, then the whole artifact sequence: {s}");
+}
+
+/// An image that shares its marked-content sequence with other content can't move without leaving
+/// its tag or taking the other content along, so Arrange refuses and changes nothing.
+#[test]
+fn image_arrange_refuses_to_split_a_shared_marked_sequence() {
+    let content =
+        "/Figure <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Caption) Tj ET EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
+    let mut doc = image_page_with(content);
+    let before = page_content_bytes(&doc, 0);
+    assert!(images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
+    assert_eq!(page_content_bytes(&doc, 0), before, "a refused arrange leaves the page as it was");
+}
+
 #[test]
 fn image_crop_preserves_outer_cm_for_subsequent_drawings() {
     let content = "100 0 0 100 50 50 cm /Im0 Do /Im0 Do";
