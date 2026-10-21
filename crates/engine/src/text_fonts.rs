@@ -41,6 +41,7 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
     let mut entries = 0usize;
     let mut budget = 64u64 << 20;
     let mut seen = std::collections::HashSet::new();
+    let mut seen_face_content = std::collections::HashSet::new();
     while let Some((path, depth)) = pending.pop() {
         if entries >= 4096 || files.len() >= 500 || budget == 0 {
             break;
@@ -70,19 +71,14 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
             }
             if let Ok((family, face)) = pdfcraft_fonts::embedding::names(&bytes) {
                 let key = font_content_key(&bytes);
-                files.push((FontFile { path, family, face }, key));
+                if seen_face_content.insert((face.clone(), key)) {
+                    files.push(FontFile { path, family, face });
+                }
             }
         }
     }
-    files.sort_by(|(a, _), (b, _)| a.face.cmp(&b.face).then(a.path.cmp(&b.path)));
-    let mut seen_face_content = std::collections::HashSet::new();
-    let mut deduped = Vec::new();
-    for (file, key) in files {
-        if seen_face_content.insert((file.face.clone(), key)) {
-            deduped.push(file);
-        }
-    }
-    deduped
+    files.sort_by(|a, b| a.face.cmp(&b.face).then(a.path.cmp(&b.path)));
+    files
 }
 
 fn font_content_key(bytes: &[u8]) -> (usize, u64, u64) {

@@ -165,11 +165,7 @@ impl ImageState {
 
     fn point(&self, x: f64, y: f64) -> Point {
         let (x, y) = self.placement.matrix.apply(x, y);
-        if x.is_finite() && y.is_finite() {
-            Point::new(x, y)
-        } else {
-            Point::ZERO
-        }
+        if x.is_finite() && y.is_finite() { Point::new(x, y) } else { Point::ZERO }
     }
 
     fn apply(&mut self, op: &Op) -> Result<(), EditError> {

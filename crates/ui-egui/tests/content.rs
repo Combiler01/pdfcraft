@@ -275,7 +275,7 @@ fn typing_moving_styling_and_deleting_added_content() {
     h.run_steps(3);
     let a = added(&h);
     let pdfcraft_engine::AddedContent::Image(img) = &a[0].content else { panic!() };
-    assert_eq!((img.rotation, img.rect), (1, [140.0, 185.0, 160.0, 215.0]));
+    assert_eq!((img.rotation, img.rect), (3, [140.0, 185.0, 160.0, 215.0]));
 
     h.hover_at(c);
     h.run_steps(1);

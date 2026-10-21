@@ -49,10 +49,7 @@ impl PdfCraftApp {
                 let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
                 let ambiguous = doc.is_some_and(|d| {
                     if let Some(t) = &target {
-                        d.page_images(*page)
-                            .iter()
-                            .filter(|img| img.name == t.name && img.object == t.object && img.rect == t.rect)
-                            .count() > 1
+                        d.page_images(*page).iter().filter(|img| img.name == t.name && img.object == t.object && img.rect == t.rect).count() > 1
                     } else {
                         false
                     }
@@ -203,17 +200,9 @@ impl PdfCraftApp {
                         if name_obj_matches.len() == 1 {
                             Some(name_obj_matches[0])
                         } else if name_obj_matches.is_empty() {
-                            let name_matches: Vec<usize> = page_images
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, img)| img.name == target.name)
-                                .map(|(idx, _)| idx)
-                                .collect();
-                            if name_matches.len() == 1 {
-                                Some(name_matches[0])
-                            } else {
-                                None
-                            }
+                            let name_matches: Vec<usize> =
+                                page_images.iter().enumerate().filter(|(_, img)| img.name == target.name).map(|(idx, _)| idx).collect();
+                            if name_matches.len() == 1 { Some(name_matches[0]) } else { None }
                         } else {
                             None
                         }

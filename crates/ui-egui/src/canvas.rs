@@ -1007,15 +1007,15 @@ pub(crate) fn default_page_context_menu(
             *action = Some(PageMenuAction::Print);
             ui.close();
         }
-        if crate::icons::button(ui, "mouse-pointer-2", 24.0, false, "Select Tool").clicked() {
+        if crate::icons::button(ui, "mouse-pointer-2", 24.0, false, tl!("Select Tool")).clicked() {
             *action = Some(PageMenuAction::SelectTool);
             ui.close();
         }
-        if crate::icons::button(ui, "hand", 24.0, false, "Hand Tool").clicked() {
+        if crate::icons::button(ui, "hand", 24.0, false, tl!("Hand Tool")).clicked() {
             *action = Some(PageMenuAction::HandTool);
             ui.close();
         }
-        if crate::icons::button(ui, "zoom-in", 24.0, false, "Marquee Zoom").clicked() {
+        if crate::icons::button(ui, "zoom-in", 24.0, false, tl!("Marquee Zoom")).clicked() {
             *action = Some(PageMenuAction::MarqueeZoom);
             ui.close();
         }
@@ -1027,7 +1027,7 @@ pub(crate) fn default_page_context_menu(
         *action = Some(PageMenuAction::Copy);
         ui.close();
     }
-    if ui.add_enabled(can_paste, egui::Button::new("Paste").shortcut_text("Ctrl+V")).clicked() {
+    if ui.add_enabled(can_paste, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V")).clicked() {
         *action = Some(PageMenuAction::Paste(page, at));
         ui.close();
     }
@@ -1049,7 +1049,7 @@ pub(crate) fn default_page_context_menu(
 
     ui.separator();
 
-    if ui.add(egui::Button::new(egui::RichText::new("Edit this PDF").strong())).clicked() {
+    if ui.add(egui::Button::new(egui::RichText::new(tl!("Edit this PDF")).strong())).clicked() {
         *action = Some(PageMenuAction::EditPdf);
         ui.close();
     }
@@ -1065,14 +1065,14 @@ pub(crate) fn default_page_context_menu(
         *action = Some(PageMenuAction::DeletePage(page));
         ui.close();
     }
-    if ui.button("Export this PDF").clicked() {
+    if ui.button(tl!("Export this PDF")).clicked() {
         *action = Some(PageMenuAction::ExportPdf);
         ui.close();
     }
 
     ui.separator();
 
-    if ui.button("Find text or tools").clicked() {
+    if ui.button(tl!("Find text or tools")).clicked() {
         *action = Some(PageMenuAction::Find);
         ui.close();
     }
@@ -3213,9 +3213,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         || view.goto_point.is_some()
         || view.zoom_anchor.is_some()
         || view.sync_scroll.is_some()
-        || (app.quick_tool == QuickTool::Hand
-            && !middle_gesture
-            && view.page_widget.is_some_and(|id| ui.ctx().is_being_dragged(id)));
+        || (app.quick_tool == QuickTool::Hand && !middle_gesture && view.page_widget.is_some_and(|id| ui.ctx().is_being_dragged(id)));
     scroll = scroll.animated(view.continuous && animates && !has_jump);
     // A newly opened document starts at the top. eframe saves egui's memory with the settings
     // and document ids start again at 1 every launch, so the offset stored under this id can be
@@ -3456,7 +3454,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 if let Some(p) = pointer_pos {
                     for (page_idx, xf) in &view.screen_xforms {
                         let images = doc.page_images(*page_idx);
-                        for (idx, img) in images.iter().enumerate() {
+                        for (idx, img) in images.iter().enumerate().rev() {
                             let obb = ImageObb::from_image(img, xf, info, *page_idx);
                             let b = image_screen_rect(img, xf, info, *page_idx);
                             if (b.is_positive() && b.contains(p)) || crate::edit_text_ui::quad_contains(obb.corners(), p) {
@@ -4753,7 +4751,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.paste_image_at(page, at);
         }
         Some(PageMenuAction::RotateCCW(page)) => {
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: -90 });
+            let _ = page;
+            app.views[index].rotate_view(false);
         }
         Some(PageMenuAction::RotateCW(page)) => {
             let _ = page;

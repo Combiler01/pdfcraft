@@ -5704,14 +5704,8 @@ fn arrange_duplicate_image_clears_selection_when_ambiguous() {
     assert_eq!(images[0].name, images[1].name);
 
     // Select the second occurrence (index 1)
-    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::edit_text_ui::ImageSelection {
-        page: 0,
-        index: 1,
-        drag: None,
-        crop: None,
-        crop_mode: false,
-        crop_rect: None,
-    });
+    h.state_mut().views[0].image_selection =
+        Some(pdfcraft_ui_egui::edit_text_ui::ImageSelection { page: 0, index: 1, drag: None, crop: None, crop_mode: false, crop_rect: None });
     h.run_steps(2);
 
     // Arrange send to back
@@ -5725,10 +5719,7 @@ fn arrange_duplicate_image_clears_selection_when_ambiguous() {
 
     // Because there are duplicate occurrences matching name, object, and rect,
     // selection must be cleared rather than picking an arbitrary occurrence.
-    assert!(
-        h.state().views[0].image_selection.is_none(),
-        "selection is safely cleared when reordering ambiguous duplicate images"
-    );
+    assert!(h.state().views[0].image_selection.is_none(), "selection is safely cleared when reordering ambiguous duplicate images");
 }
 
 #[test]
@@ -5771,14 +5762,8 @@ fn arrange_unique_image_preserves_selection() {
     assert_eq!(images[1].name, "FigB");
 
     // Select FigA at index 0 and bring it to front (should move after FigB, becoming index 1)
-    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::edit_text_ui::ImageSelection {
-        page: 0,
-        index: 0,
-        drag: None,
-        crop: None,
-        crop_mode: false,
-        crop_rect: None,
-    });
+    h.state_mut().views[0].image_selection =
+        Some(pdfcraft_ui_egui::edit_text_ui::ImageSelection { page: 0, index: 0, drag: None, crop: None, crop_mode: false, crop_rect: None });
     h.run_steps(2);
 
     let applied = h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {

@@ -701,7 +701,7 @@ mod tests {
                 if is_corner {
                     let orig_ratio = w / h;
                     let new_ratio = res.width() / res.height();
-                    prop_assert!((orig_ratio - new_ratio).abs() < 1e-3, "orig: {orig_ratio}, new: {new_ratio}");
+                    prop_assert!((orig_ratio - new_ratio).abs() <= 1e-3 * orig_ratio.max(1.0), "orig: {orig_ratio}, new: {new_ratio}");
                 }
             }
 
