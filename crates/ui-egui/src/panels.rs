@@ -572,26 +572,6 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.separator();
         return;
     }
-    let image = app.active_ids().and_then(|(i, id)| {
-        let (page, index) = app.views[i].content.selected?;
-        let doc = app.session.get(id)?;
-        match &doc.added().iter().filter(|a| a.page == page).nth(index)?.content {
-            pdfcraft_engine::AddedContent::Image(img) => Some((page, index, img.clone())),
-            _ => None,
-        }
-    });
-    if let Some((page, index, img)) = image {
-        match crate::content_ui::image_panel(ui, t, &img) {
-            Some(crate::content_ui::ImageAction::Update(content)) => {
-                app.apply_edit(pdfcraft_engine::Edit::UpdateContent { page, index, content });
-            }
-            Some(crate::content_ui::ImageAction::Replace) => app.replace_image_dialog(page, index),
-            None => {}
-        }
-        ui.add_space(6.0);
-        ui.separator();
-        return;
-    }
     let selected = app.active_ids().and_then(|(i, id)| {
         let (page, index) = app.views[i].content.selected?;
         let doc = app.session.get(id)?;

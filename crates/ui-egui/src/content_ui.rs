@@ -7,7 +7,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Stroke};
 use pdfcraft_engine::{Added, AddedContent, AddedText, Edit, FontFamily, TextAlign};
 use pdfcraft_render::DocInfo;
 
-use crate::canvas::{DocView, ImageObb, PageXform, PainterExt};
+use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
 use crate::widgets;
 
@@ -253,7 +253,10 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
 }
 
 pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], point: Pos2) -> bool {
-    on_page(added, page).iter().any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
+    on_page(added, page)
+        .iter()
+        .filter(|(_, a)| matches!(a.content, AddedContent::Text(_)))
+        .any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
 }
 
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
@@ -287,7 +290,7 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
     }
 }
 
-/// Added text and images keep pointer ownership over a form field while editing content.
+/// Added text keeps pointer ownership over a form field while editing content.
 pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
     let cv = &view.content;
     if cv.grab.is_some_and(|(grab_page, _, _)| grab_page == page) {
@@ -296,7 +299,7 @@ pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &Do
     let Some(p) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos())).filter(|p| xf.rect.contains(*p)) else {
         return false;
     };
-    on_page(added, page).into_iter().any(|(index, item)| {
+    on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).any(|(index, item)| {
         let rect = screen_rect(xf, info, page, item.content.rect());
         rect.expand(2.0).contains(p)
             || cv.selected == Some((page, index)) && handles(rect).into_iter().any(|(corner, _, _)| corner.distance(p) <= 6.0)
@@ -328,13 +331,14 @@ pub(crate) fn page_input(
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             cv.grab = None;
             let end = pointer.unwrap_or(start);
+            let items: Vec<(usize, &Added)> =
+                on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
             if let Some((sp, si)) = cv.selected
                 && sp == page
-                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, _)| *i == si)
+                && let Some((_, a)) = items.iter().find(|(i, _)| *i == si)
                 && (end - start).length() >= 1.0
             {
-                let keep = matches!(a.content, AddedContent::Image(_));
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, keep);
+                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
                 let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
                 if let AddedContent::Text(t) = &a.content
@@ -349,7 +353,8 @@ pub(crate) fn page_input(
         return consumed;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return consumed };
-    let items = on_page(added, page);
+    let items: Vec<(usize, &Added)> =
+        on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
     let selected_rect = cv
         .selected
@@ -436,6 +441,9 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     let cv = &view.content;
     let pointer = ui.input(|i| i.pointer.hover_pos());
     for (i, a) in on_page(added, page) {
+        if !matches!(a.content, AddedContent::Text(_)) {
+            continue;
+        }
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
         }
@@ -445,42 +453,13 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             && let (Some((gp, g, start)), Some(p)) = (cv.grab, pointer)
             && gp == page
         {
-            r = dragged(r, g, p - start, matches!(a.content, AddedContent::Image(_)));
+            r = dragged(r, g, p - start, false);
         }
-        let is_rotated_image = match &a.content {
-            AddedContent::Image(img) => img.rotation != 0,
-            _ => false,
-        };
-        if is_rotated_image {
-            let theta = match &a.content {
-                AddedContent::Image(img) => (img.rotation as f32) * std::f32::consts::FRAC_PI_2,
-                _ => 0.0,
-            };
-            let obb = ImageObb::from_center_size_angle(r.center(), r.width(), r.height(), theta);
-            if selected {
-                painter.polygon(obb.corners().to_vec(), Color32::TRANSPARENT, Stroke::new(1.5, SELECT_BLUE));
-                for (_, c) in obb.handles() {
-                    painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
-                }
-            } else if pointer.is_some_and(|p| r.expand(2.0).contains(p)) {
-                painter.polygon(obb.corners().to_vec(), Color32::TRANSPARENT, Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)));
-            }
-        } else if selected {
+        if selected {
             painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.5, SELECT_BLUE), egui::StrokeKind::Outside);
             let er = r.expand(1.0);
-            if matches!(a.content, AddedContent::Image(_)) {
-                let (tl, tr, br, bl) = (er.left_top(), er.right_top(), er.right_bottom(), er.left_bottom());
-                let tm = Pos2::new((tl.x + tr.x) * 0.5, tl.y);
-                let rm = Pos2::new(tr.x, (tr.y + br.y) * 0.5);
-                let bm = Pos2::new((bl.x + br.x) * 0.5, bl.y);
-                let lm = Pos2::new(tl.x, (tl.y + bl.y) * 0.5);
-                for c in [tl, tm, tr, rm, br, bm, bl, lm] {
-                    painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
-                }
-            } else {
-                for (c, ..) in handles(er) {
-                    painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
-                }
+            for (c, ..) in handles(er) {
+                painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
             }
         } else if pointer.is_some_and(|p| r.expand(2.0).contains(p)) {
             painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.0, SELECT_BLUE.gamma_multiply(0.7)), egui::StrokeKind::Outside);
@@ -504,12 +483,12 @@ pub(crate) fn keys(ctx: &egui::Context, view: &mut DocView) {
 /// After an add: select the new item.
 pub(crate) fn after_refresh(view: &mut DocView, added: &[Added]) {
     if let Some((page, before)) = view.content.select_added.take()
-        && on_page(added, page).len() > before
+        && on_page(added, page).get(before).is_some_and(|(_, a)| matches!(a.content, AddedContent::Text(_)))
     {
         view.content.selected = Some((page, before));
     }
     if let Some((p, i)) = view.content.selected
-        && on_page(added, p).len() <= i
+        && on_page(added, p).get(i).is_none_or(|(_, a)| !matches!(a.content, AddedContent::Text(_)))
     {
         view.content.selected = None;
     }
@@ -1034,9 +1013,16 @@ impl crate::PdfCraftApp {
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
-        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
+        let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
-            self.views[i].content.select_added = Some((page, before));
+            if let Some(v) = self.views.get_mut(i) {
+                v.current = page;
+                v.content.selected = None;
+                v.content.select_added = None;
+                v.image_selection =
+                    Some(crate::edit_text_ui::ImageSelection { page, index: before, crop_mode: false, crop_rect: None, drag: None, crop: None });
+            }
+            self.quick_tool = crate::QuickTool::EditText;
             self.left = crate::LeftPanel::Tool("edit");
             self.left_open = true;
         }
@@ -1044,6 +1030,7 @@ impl crate::PdfCraftApp {
 }
 
 /// What the image tools ask for.
+#[cfg(test)]
 pub(crate) enum ImageAction {
     Update(pdfcraft_engine::AddedContent),
     Replace,
@@ -1051,11 +1038,14 @@ pub(crate) enum ImageAction {
 
 // Lucide names a flip icon after the axis it draws, Acrobat names the flip after the direction the
 // picture moves: Flip horizontal (left and right swap) shows Lucide's vertical axis.
-const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
-const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
+#[cfg(test)]
+pub(crate) const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
+#[cfg(test)]
+pub(crate) const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
-/// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
-pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
+/// Edit image: rotate, flip, replace (shown while an added image is selected).
+#[cfg(test)]
+pub(crate) fn image_panel(ui: &mut egui::Ui, _t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
     widgets::section_title(ui, tl!("Edit image"));
     ui.horizontal(|ui| {
@@ -1087,26 +1077,6 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::
             out = Some(ImageAction::Replace);
         }
     });
-    ui.label(egui::RichText::new(tl!("Crop (% trimmed from each side)")).small().color(t.text_muted));
-    let mut crop = img.crop.map(|v| (v * 100.0).round());
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        for (k, label) in ["L", "B", "R", "T"].into_iter().enumerate() {
-            ui.label(label);
-            // Applied when the drag ends, so a drag is one undo step.
-            let r = ui.add(egui::DragValue::new(&mut crop[k]).range(0.0..=95.0).speed(0.5).suffix("%"));
-            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
-        }
-    });
-    if changed {
-        let mut i = img.clone();
-        let new_crop = crop.map(|v| (v / 100.0).clamp(0.0, 0.95));
-        if new_crop != img.crop {
-            update_image_crop(&mut i, new_crop);
-            ui.ctx().request_repaint();
-            out = Some(ImageAction::Update(AddedContent::Image(i)));
-        }
-    }
     out
 }
 

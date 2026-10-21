@@ -45,7 +45,19 @@ impl PdfCraftApp {
         let label = edit.label();
         let target_arrange_image = match &edit {
             Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Arrange(_) } => {
-                self.session.get(id).and_then(|doc| doc.page_images(*page).get(*index).cloned())
+                let doc = self.session.get(id);
+                let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
+                let ambiguous = doc.is_some_and(|d| {
+                    if let Some(t) = &target {
+                        d.page_images(*page)
+                            .iter()
+                            .filter(|img| img.name == t.name && img.object == t.object && img.rect == t.rect)
+                            .count() > 1
+                    } else {
+                        false
+                    }
+                });
+                target.map(|t| (t, ambiguous))
             }
             _ => None,
         };
@@ -171,13 +183,43 @@ impl PdfCraftApp {
                     Edit::DeleteAnnotation { .. } => view.comments.selected = None,
                     _ => {}
                 }
-                if let (Some(target), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
-                    let new_idx = doc
-                        .page_images(*page)
+                if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
+                    let page_images = doc.page_images(*page);
+                    let exact_matches: Vec<usize> = page_images
                         .iter()
-                        .position(|img| img.name == target.name && img.object == target.object && img.rect == target.rect)
-                        .or_else(|| doc.page_images(*page).iter().position(|img| img.name == target.name && img.object == target.object))
-                        .or_else(|| doc.page_images(*page).iter().position(|img| img.name == target.name));
+                        .enumerate()
+                        .filter(|(_, img)| img.name == target.name && img.object == target.object && img.rect == target.rect)
+                        .map(|(idx, _)| idx)
+                        .collect();
+                    let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
+                        Some(exact_matches[0])
+                    } else if !ambiguous_before && exact_matches.is_empty() {
+                        let name_obj_matches: Vec<usize> = page_images
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, img)| img.name == target.name && img.object == target.object)
+                            .map(|(idx, _)| idx)
+                            .collect();
+                        if name_obj_matches.len() == 1 {
+                            Some(name_obj_matches[0])
+                        } else if name_obj_matches.is_empty() {
+                            let name_matches: Vec<usize> = page_images
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, img)| img.name == target.name)
+                                .map(|(idx, _)| idx)
+                                .collect();
+                            if name_matches.len() == 1 {
+                                Some(name_matches[0])
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
                     if let Some(s) = view.image_selection.as_mut().filter(|s| s.page == *page) {
                         if let Some(idx) = new_idx {
                             s.index = idx;

@@ -156,9 +156,20 @@ impl ImageState {
         Self { placement: Placement { matrix, clip, clips }, stack: Vec::new(), path: BezPath::new(), pending_clip: None }
     }
 
+    fn has_current_point(&self) -> bool {
+        matches!(
+            self.path.elements().last(),
+            Some(kurbo::PathEl::MoveTo(_) | kurbo::PathEl::LineTo(_) | kurbo::PathEl::QuadTo(_, _) | kurbo::PathEl::CurveTo(_, _, _))
+        )
+    }
+
     fn point(&self, x: f64, y: f64) -> Point {
         let (x, y) = self.placement.matrix.apply(x, y);
-        Point::new(x, y)
+        if x.is_finite() && y.is_finite() {
+            Point::new(x, y)
+        } else {
+            Point::ZERO
+        }
     }
 
     fn apply(&mut self, op: &Op) -> Result<(), EditError> {
@@ -179,7 +190,10 @@ impl ImageState {
             }
             b"cm" => {
                 if let Some(m) = op.nums::<6>() {
-                    self.placement.matrix = Matrix(m).then(&self.placement.matrix);
+                    let next_mat = Matrix(m).then(&self.placement.matrix);
+                    if next_mat.0.iter().all(|v| v.is_finite()) {
+                        self.placement.matrix = next_mat;
+                    }
                 }
             }
             b"m" => {
@@ -189,28 +203,52 @@ impl ImageState {
             }
             b"l" => {
                 if let Some([x, y]) = op.nums::<2>() {
-                    self.path.line_to(self.point(x, y));
+                    let pt = self.point(x, y);
+                    if !self.has_current_point() {
+                        self.path.move_to(pt);
+                    } else {
+                        self.path.line_to(pt);
+                    }
                 }
             }
             b"c" => {
                 if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>() {
-                    self.path.curve_to(self.point(x1, y1), self.point(x2, y2), self.point(x3, y3));
+                    let p1 = self.point(x1, y1);
+                    let p2 = self.point(x2, y2);
+                    let p3 = self.point(x3, y3);
+                    if !self.has_current_point() {
+                        self.path.move_to(p1);
+                    }
+                    self.path.curve_to(p1, p2, p3);
                 }
             }
             b"v" => {
-                if let Some([x1, y1, x2, y2]) = op.nums::<4>()
-                    && let Some(current) = self.path.elements().last().and_then(|e| e.end_point())
-                {
-                    self.path.curve_to(current, self.point(x1, y1), self.point(x2, y2));
+                if let Some([x1, y1, x2, y2]) = op.nums::<4>() {
+                    let p1 = self.point(x1, y1);
+                    let p2 = self.point(x2, y2);
+                    if let Some(current) = self.path.elements().last().and_then(|e| e.end_point()) {
+                        self.path.curve_to(current, p1, p2);
+                    } else {
+                        self.path.move_to(p1);
+                        self.path.curve_to(p1, p1, p2);
+                    }
                 }
             }
             b"y" => {
                 if let Some([x1, y1, x2, y2]) = op.nums::<4>() {
+                    let p1 = self.point(x1, y1);
                     let end = self.point(x2, y2);
-                    self.path.curve_to(self.point(x1, y1), end, end);
+                    if !self.has_current_point() {
+                        self.path.move_to(p1);
+                    }
+                    self.path.curve_to(p1, end, end);
                 }
             }
-            b"h" => self.path.close_path(),
+            b"h" => {
+                if self.has_current_point() {
+                    self.path.close_path();
+                }
+            }
             b"re" => {
                 if let Some([x, y, w, h]) = op.nums::<4>() {
                     self.path.move_to(self.point(x, y));
@@ -494,7 +532,7 @@ fn clip_matrix(draw: Matrix, cm: Matrix, t: Matrix) -> Option<Matrix> {
     Some(outer.then(&t).then(&outer.invert()?))
 }
 
-fn is_entire_page_wrapped(ops: &[Op]) -> bool {
+pub(crate) fn is_entire_page_wrapped(ops: &[Op]) -> bool {
     if ops.len() < 2 || !ops.first().is_some_and(|o| o.is("q")) || !ops.last().is_some_and(|o| o.is("Q")) {
         return false;
     }
@@ -512,7 +550,7 @@ fn is_entire_page_wrapped(ops: &[Op]) -> bool {
     depth == 0
 }
 
-fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> Vec<std::ops::Range<usize>> {
     let mut units = Vec::new();
     let mut i = scan_start;
     while i < scan_end {

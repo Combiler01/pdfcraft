@@ -139,7 +139,7 @@ pub const MIN_RECT_SIZE: f32 = 10.0;
 /// - Mid-edge handles: The opposite edge coordinate is fixed in 1D. The perpendicular axis is
 ///   completely unaffected.
 pub fn apply_resize(image_rect: Rect, handle: HandleId, delta: Vec2) -> Rect {
-    if !delta.x.is_finite() || !delta.y.is_finite() {
+    if !image_rect.is_finite() || !delta.x.is_finite() || !delta.y.is_finite() {
         return image_rect;
     }
     let mut min = image_rect.min;
@@ -235,7 +235,7 @@ pub fn apply_resize(image_rect: Rect, handle: HandleId, delta: Vec2) -> Rect {
 /// width and height uniformly from the locked anchor point, clamped to `>= MIN_RECT_SIZE`.
 /// For mid-edge handles, delegates to `apply_resize`.
 pub fn apply_resize_proportional(image_rect: Rect, handle: HandleId, delta: Vec2) -> Rect {
-    if !delta.x.is_finite() || !delta.y.is_finite() {
+    if !image_rect.is_finite() || !delta.x.is_finite() || !delta.y.is_finite() {
         return image_rect;
     }
     let w0 = image_rect.width().max(1.0);
@@ -411,7 +411,7 @@ pub fn apply_crop(image_rect: Rect, uv_rect: Rect, handle: HandleId, delta: Vec2
 /// Resets the crop boundary back to [0.0..1.0] and expands `image_rect`
 /// to reveal the full image at the current screen pixel scale without shifting existing pixels.
 pub fn reset_crop(image_rect: Rect, uv_rect: Rect) -> (Rect, Rect) {
-    if uv_rect.width() <= 0.0 || uv_rect.height() <= 0.0 || !uv_rect.width().is_finite() || !uv_rect.height().is_finite() {
+    if !image_rect.is_finite() || uv_rect.width() <= 0.0 || uv_rect.height() <= 0.0 || !uv_rect.width().is_finite() || !uv_rect.height().is_finite() {
         return (image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
     }
 
@@ -641,5 +641,140 @@ mod tests {
         assert_eq!(resized.min, pos2(50.0, 50.0), "TopLeft anchor strictly locked");
         assert_eq!(resized.width(), 120.0);
         assert_eq!(resized.height(), 240.0);
+    }
+
+    #[cfg(test)]
+    mod proptests {
+        use super::*;
+        use proptest::prelude::*;
+
+        fn arb_handle() -> impl Strategy<Value = HandleId> {
+            prop_oneof![
+                Just(HandleId::TopLeft),
+                Just(HandleId::TopMid),
+                Just(HandleId::TopRight),
+                Just(HandleId::RightMid),
+                Just(HandleId::BottomRight),
+                Just(HandleId::BottomMid),
+                Just(HandleId::BottomLeft),
+                Just(HandleId::LeftMid),
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn prop_apply_resize_never_inverts_and_respects_min_size(
+                min_x in -5000.0f32..5000.0,
+                min_y in -5000.0f32..5000.0,
+                w in 10.0f32..2000.0,
+                h in 10.0f32..2000.0,
+                handle in arb_handle(),
+                dx in -10000.0f32..10000.0,
+                dy in -10000.0f32..10000.0,
+            ) {
+                let rect = Rect::from_min_size(pos2(min_x, min_y), vec2(w, h));
+                let res = apply_resize(rect, handle, vec2(dx, dy));
+                prop_assert!(res.is_finite());
+                prop_assert!(res.width() >= MIN_RECT_SIZE - 1e-3);
+                prop_assert!(res.height() >= MIN_RECT_SIZE - 1e-3);
+                prop_assert!(res.min.x <= res.max.x);
+                prop_assert!(res.min.y <= res.max.y);
+            }
+
+            #[test]
+            fn prop_apply_resize_proportional_preserves_aspect_ratio(
+                min_x in -2000.0f32..2000.0,
+                min_y in -2000.0f32..2000.0,
+                w in 20.0f32..1000.0,
+                h in 20.0f32..1000.0,
+                handle in arb_handle(),
+                dx in -5000.0f32..5000.0,
+                dy in -5000.0f32..5000.0,
+            ) {
+                let rect = Rect::from_min_size(pos2(min_x, min_y), vec2(w, h));
+                let res = apply_resize_proportional(rect, handle, vec2(dx, dy));
+                prop_assert!(res.is_finite());
+                prop_assert!(res.width() >= MIN_RECT_SIZE - 1e-3);
+                prop_assert!(res.height() >= MIN_RECT_SIZE - 1e-3);
+
+                let is_corner = matches!(handle, HandleId::TopLeft | HandleId::TopRight | HandleId::BottomLeft | HandleId::BottomRight);
+                if is_corner {
+                    let orig_ratio = w / h;
+                    let new_ratio = res.width() / res.height();
+                    prop_assert!((orig_ratio - new_ratio).abs() < 1e-3, "orig: {orig_ratio}, new: {new_ratio}");
+                }
+            }
+
+            #[test]
+            fn prop_apply_crop_uv_clamped(
+                min_x in 0.0f32..1000.0,
+                min_y in 0.0f32..1000.0,
+                w in 50.0f32..500.0,
+                h in 50.0f32..500.0,
+                uv_u0 in 0.0f32..0.4,
+                uv_v0 in 0.0f32..0.4,
+                uv_w in 0.3f32..0.5,
+                uv_h in 0.3f32..0.5,
+                handle in arb_handle(),
+                dx in -2000.0f32..2000.0,
+                dy in -2000.0f32..2000.0,
+            ) {
+                let screen = Rect::from_min_size(pos2(min_x, min_y), vec2(w, h));
+                let uv = Rect::from_min_size(pos2(uv_u0, uv_v0), vec2(uv_w, uv_h));
+                let (new_screen, new_uv) = apply_crop(screen, uv, handle, vec2(dx, dy));
+
+                prop_assert!(new_screen.is_finite());
+                prop_assert!(new_uv.is_finite());
+                prop_assert!(new_uv.min.x >= 0.0 - 1e-5);
+                prop_assert!(new_uv.min.y >= 0.0 - 1e-5);
+                prop_assert!(new_uv.max.x <= 1.0 + 1e-5);
+                prop_assert!(new_uv.max.y <= 1.0 + 1e-5);
+                prop_assert!(new_uv.width() > 0.0);
+                prop_assert!(new_uv.height() > 0.0);
+
+                let scale_x_orig = w / uv_w;
+                let scale_x_new = new_screen.width() / new_uv.width();
+                prop_assert!((scale_x_orig - scale_x_new).abs() < 1e-2);
+            }
+
+            #[test]
+            fn prop_reset_crop_invariants(
+                min_x in -1000.0f32..1000.0,
+                min_y in -1000.0f32..1000.0,
+                w in 50.0f32..500.0,
+                h in 50.0f32..500.0,
+                uv_u0 in 0.0f32..0.4,
+                uv_v0 in 0.0f32..0.4,
+                uv_w in 0.2f32..0.5,
+                uv_h in 0.2f32..0.5,
+            ) {
+                let screen = Rect::from_min_size(pos2(min_x, min_y), vec2(w, h));
+                let uv = Rect::from_min_size(pos2(uv_u0, uv_v0), vec2(uv_w, uv_h));
+                let (full_screen, full_uv) = reset_crop(screen, uv);
+
+                prop_assert_eq!(full_uv, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
+                prop_assert!(full_screen.is_finite());
+                prop_assert!(full_screen.width() >= screen.width());
+                prop_assert!(full_screen.height() >= screen.height());
+            }
+
+            #[test]
+            fn prop_quad_contains_never_panics(
+                q0_x in -1000.0f32..1000.0,
+                q0_y in -1000.0f32..1000.0,
+                q1_x in -1000.0f32..1000.0,
+                q1_y in -1000.0f32..1000.0,
+                q2_x in -1000.0f32..1000.0,
+                q2_y in -1000.0f32..1000.0,
+                q3_x in -1000.0f32..1000.0,
+                q3_y in -1000.0f32..1000.0,
+                px in -2000.0f32..2000.0,
+                py in -2000.0f32..2000.0,
+            ) {
+                let quad = [pos2(q0_x, q0_y), pos2(q1_x, q1_y), pos2(q2_x, q2_y), pos2(q3_x, q3_y)];
+                let p = pos2(px, py);
+                let _ = crate::edit_text_ui::quad_contains(quad, p);
+            }
+        }
     }
 }

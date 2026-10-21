@@ -65,19 +65,34 @@ pub fn discover(roots: &[PathBuf]) -> Vec<FontFile> {
             if read.is_err() {
                 continue;
             }
-            if let Ok(bytes) = read.map(|_| bytes) {
-                if pdfcraft_fonts::embedding::validate_document_input(&bytes).is_err() {
-                    continue;
-                }
-                if let Ok((family, face)) = pdfcraft_fonts::embedding::names(&bytes) {
-                    files.push(FontFile { path, family, face });
-                }
+            if pdfcraft_fonts::embedding::validate_document_input(&bytes).is_err() {
+                continue;
+            }
+            if let Ok((family, face)) = pdfcraft_fonts::embedding::names(&bytes) {
+                let key = font_content_key(&bytes);
+                files.push((FontFile { path, family, face }, key));
             }
         }
     }
-    files.sort_by(|a, b| a.face.cmp(&b.face).then(a.path.cmp(&b.path)));
-    files.dedup_by(|a, b| a.path == b.path || (a.face == b.face && std::fs::read(&a.path).ok() == std::fs::read(&b.path).ok()));
-    files
+    files.sort_by(|(a, _), (b, _)| a.face.cmp(&b.face).then(a.path.cmp(&b.path)));
+    let mut seen_face_content = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for (file, key) in files {
+        if seen_face_content.insert((file.face.clone(), key)) {
+            deduped.push(file);
+        }
+    }
+    deduped
+}
+
+fn font_content_key(bytes: &[u8]) -> (usize, u64, u64) {
+    use std::hash::{DefaultHasher, Hasher};
+    let mut h1 = DefaultHasher::new();
+    h1.write(bytes);
+    let mut h2 = DefaultHasher::new();
+    h2.write_u8(0xff);
+    h2.write(bytes);
+    (bytes.len(), h1.finish(), h2.finish())
 }
 fn font_extension(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
@@ -91,5 +106,70 @@ mod tests {
     fn test_installed_directories() {
         let dirs = installed_directories();
         assert!(!dirs.is_empty());
+    }
+
+    #[test]
+    fn test_font_extension() {
+        assert!(font_extension(Path::new("Arial.ttf")));
+        assert!(font_extension(Path::new("Noto.otf")));
+        assert!(font_extension(Path::new("CUSTOM.TTF")));
+        assert!(font_extension(Path::new("ROBOTO.OTF")));
+        assert!(!font_extension(Path::new("document.pdf")));
+        assert!(!font_extension(Path::new("font.woff")));
+        assert!(!font_extension(Path::new("font.woff2")));
+        assert!(!font_extension(Path::new("no_extension")));
+    }
+
+    #[test]
+    fn test_font_content_key() {
+        let empty = font_content_key(&[]);
+        assert_eq!(empty.0, 0);
+
+        let a = font_content_key(b"TrueType font sample data bytes");
+        let b = font_content_key(b"TrueType font sample data bytes");
+        let c = font_content_key(b"Different font sample data bytes");
+
+        assert_eq!(a, b, "identical bytes must produce identical keys");
+        assert_ne!(a, c, "differing bytes must produce distinct keys");
+        assert_eq!(a.0, b"TrueType font sample data bytes".len());
+    }
+
+    #[test]
+    fn test_discover_empty_and_nonexistent_roots() {
+        let empty = discover(&[]);
+        assert!(empty.is_empty());
+
+        let nonexistent = discover(&[PathBuf::from("Z:\\nonexistent_font_path_xyz_12345")]);
+        assert!(nonexistent.is_empty());
+    }
+
+    #[test]
+    fn test_discover_deduplicates_non_adjacent_same_content() {
+        let root = std::env::temp_dir().join(format!("pdfcraft-font-dedup-test-{}", std::process::id()));
+        let dir_a = root.join("a");
+        let dir_b = root.join("b");
+        let dir_c = root.join("c");
+        let _ = std::fs::create_dir_all(&dir_a);
+        let _ = std::fs::create_dir_all(&dir_b);
+        let _ = std::fs::create_dir_all(&dir_c);
+
+        let inter_reg = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/Inter-Regular.ttf");
+        let inter_med = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts/Inter-Medium.ttf");
+
+        if inter_reg.exists() && inter_med.exists() {
+            let _ = std::fs::copy(&inter_reg, dir_a.join("FontA.ttf"));
+            let _ = std::fs::copy(&inter_med, dir_b.join("FontB.ttf"));
+            let _ = std::fs::copy(&inter_reg, dir_c.join("FontC.ttf"));
+
+            let discovered = discover(std::slice::from_ref(&root));
+            let _ = std::fs::remove_dir_all(&root);
+
+            assert_eq!(discovered.len(), 2, "identical content in non-adjacent paths is deduplicated");
+            let faces: Vec<&str> = discovered.iter().map(|f| f.face.as_str()).collect();
+            assert!(faces.contains(&"Inter-Regular"));
+            assert!(faces.contains(&"Inter-Medium"));
+        } else {
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 }

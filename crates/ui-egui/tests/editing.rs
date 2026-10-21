@@ -5581,6 +5581,8 @@ fn test_cropped_image_selection_and_bounding_box() {
         app
     });
     h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
 
     let doc_id = h.state().views[0].id;
     let full_rect = h.state().session.get(doc_id).unwrap().page_images(0)[0].rect;
@@ -5661,4 +5663,132 @@ fn read_mode_shortcut_applies_the_open_paragraph() {
     assert_eq!(s.quick_tool, QuickTool::Select);
     assert!(s.views[0].line_editor.is_none(), "no editor stays open in Read mode");
     assert_eq!(s.session.get(s.views[0].id).unwrap().text_lines(0)[0].text, "Chapter One", "the edit is applied");
+}
+
+#[test]
+fn arrange_duplicate_image_clears_selection_when_ambiguous() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
+    let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::Int).to_vec()));
+    let artwork = doc.add(Object::Stream(Stream::flate(form, b"0.2 0.5 0.9 rg 20 20 160 260 re f")));
+    // Paint two occurrences of the same figure at the exact same position
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 1 0 0 1 0 0 cm /Figure Do Q q 1 0 0 1 0 0 cm /Figure Do Q")));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        let mut xo = Dict::new();
+        xo.set(b"Figure".to_vec(), Object::Ref(artwork));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xo));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("dup.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let doc_id = h.state().views[0].id;
+    let images = h.state().session.get(doc_id).unwrap().page_images(0);
+    assert_eq!(images.len(), 2, "two duplicate image occurrences exist");
+    assert_eq!(images[0].rect, images[1].rect);
+    assert_eq!(images[0].name, images[1].name);
+
+    // Select the second occurrence (index 1)
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::edit_text_ui::ImageSelection {
+        page: 0,
+        index: 1,
+        drag: None,
+        crop: None,
+        crop_mode: false,
+        crop_rect: None,
+    });
+    h.run_steps(2);
+
+    // Arrange send to back
+    let applied = h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 1,
+        change: pdfcraft_engine::ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack),
+    });
+    assert!(applied);
+    h.run_steps(2);
+
+    // Because there are duplicate occurrences matching name, object, and rect,
+    // selection must be cleared rather than picking an arbitrary occurrence.
+    assert!(
+        h.state().views[0].image_selection.is_none(),
+        "selection is safely cleared when reordering ambiguous duplicate images"
+    );
+}
+
+#[test]
+fn arrange_unique_image_preserves_selection() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
+    let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::Int).to_vec()));
+    let artwork1 = doc.add(Object::Stream(Stream::flate(form.clone(), b"0.2 0.5 0.9 rg 20 20 160 260 re f")));
+    let artwork2 = doc.add(Object::Stream(Stream::flate(form, b"0.9 0.2 0.5 rg 40 40 100 100 re f")));
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 1 0 0 1 0 0 cm /FigA Do Q q 1 0 0 1 0 0 cm /FigB Do Q")));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        let mut xo = Dict::new();
+        xo.set(b"FigA".to_vec(), Object::Ref(artwork1));
+        xo.set(b"FigB".to_vec(), Object::Ref(artwork2));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xo));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("unique.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let doc_id = h.state().views[0].id;
+    let images = h.state().session.get(doc_id).unwrap().page_images(0);
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0].name, "FigA");
+    assert_eq!(images[1].name, "FigB");
+
+    // Select FigA at index 0 and bring it to front (should move after FigB, becoming index 1)
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::edit_text_ui::ImageSelection {
+        page: 0,
+        index: 0,
+        drag: None,
+        crop: None,
+        crop_mode: false,
+        crop_rect: None,
+    });
+    h.run_steps(2);
+
+    let applied = h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+    });
+    assert!(applied);
+    h.run_steps(2);
+
+    let sel = h.state().views[0].image_selection.as_ref().expect("selection is preserved for unique image");
+    assert_eq!(sel.index, 1, "selection index tracks the unique image's new position");
 }

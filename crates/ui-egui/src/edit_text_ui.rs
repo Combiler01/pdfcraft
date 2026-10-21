@@ -810,6 +810,9 @@ fn screen_to_user(xf: &PageXform, info: &DocInfo, page: usize, pt: Pos2) -> (f64
 }
 
 pub(crate) fn quad_contains(quad: [Pos2; 4], p: Pos2) -> bool {
+    if !p.x.is_finite() || !p.y.is_finite() || quad.iter().any(|pt| !pt.x.is_finite() || !pt.y.is_finite()) {
+        return false;
+    }
     let mut sign = 0;
     for i in 0..4 {
         let p1 = quad[i];

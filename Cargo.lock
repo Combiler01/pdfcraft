@@ -4098,6 +4098,7 @@ dependencies = [
  "pdfcraft-fonts",
  "pdfcraft-model",
  "pdfcraft-render",
+ "proptest",
  "thiserror 2.0.21",
  "unicode-bidi",
 ]
@@ -4385,6 +4386,7 @@ dependencies = [
  "pdfcraft-xfa",
  "png 0.18.1",
  "pollster 1.0.1",
+ "proptest",
  "rfd",
  "rustix 1.1.5",
  "serde",

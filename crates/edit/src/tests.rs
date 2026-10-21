@@ -5930,3 +5930,85 @@ fn a_clipping_copy_on_the_same_baseline_is_refused() {
     assert!(matches!(&block, Err(EditError::Invalid(m)) if m.contains("clipping path")), "{block:?}");
     assert_eq!(text::text_lines(&doc, 0).unwrap().len(), 2, "refused means untouched");
 }
+
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
+
+    proptest! {
+        #[test]
+        fn prop_crop_ctm_finite_for_valid_inputs(
+            a in -1000.0f64..1000.0,
+            b in -1000.0f64..1000.0,
+            c in -1000.0f64..1000.0,
+            d in -1000.0f64..1000.0,
+            e in -1000.0f64..1000.0,
+            f in -1000.0f64..1000.0,
+            x1 in -1000.0f64..1000.0,
+            y1 in -1000.0f64..1000.0,
+            w in 1.0f64..1000.0,
+            h in 1.0f64..1000.0,
+        ) {
+            let ctm = [a, b, c, d, e, f];
+            let crop = [x1, y1, x1 + w, y1 + h];
+            let res = images::crop_ctm(ctm, crop);
+            for v in res {
+                prop_assert!(v.is_finite());
+            }
+        }
+
+        #[test]
+        fn prop_is_entire_page_wrapped_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+            let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
+            let ops = pieces.parse().ops;
+            let _ = images::is_entire_page_wrapped(&ops);
+        }
+
+        #[test]
+        fn prop_content_units_arbitrary_bytes(
+            bytes in proptest::collection::vec(any::<u8>(), 0..2048),
+            start in 0usize..50,
+            end in 0usize..50,
+        ) {
+            let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
+            let ops = pieces.parse().ops;
+            let scan_start = start.min(ops.len());
+            let scan_end = end.min(ops.len()).max(scan_start);
+            let units = images::content_units(&ops, scan_start, scan_end);
+            for u in units {
+                prop_assert!(u.start <= u.end);
+                prop_assert!(u.end <= ops.len());
+            }
+        }
+
+        #[test]
+        fn prop_arrange_image_arbitrary_malformed(
+            index in 0usize..10,
+            order_idx in 0u8..4,
+            bytes in proptest::collection::vec(any::<u8>(), 0..1024),
+        ) {
+            let order = match order_idx {
+                0 => images::ArrangeOrder::BringToFront,
+                1 => images::ArrangeOrder::SendToBack,
+                2 => images::ArrangeOrder::BringForward,
+                _ => images::ArrangeOrder::SendBackward,
+            };
+            let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
+            let _ = images::arrange_image(&mut doc, 0, index, order);
+        }
+
+        #[test]
+        fn prop_crop_image_malformed_inputs(
+            x1 in -500.0f64..500.0,
+            y1 in -500.0f64..500.0,
+            x2 in -500.0f64..500.0,
+            y2 in -500.0f64..500.0,
+            bytes in proptest::collection::vec(any::<u8>(), 0..1024),
+        ) {
+            let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
+            let _ = images::crop_image(&mut doc, 0, 0, [x1, y1, x2, y2]);
+            let _ = images::remove_image_crop(&mut doc, 0, 0);
+        }
+    }
+}

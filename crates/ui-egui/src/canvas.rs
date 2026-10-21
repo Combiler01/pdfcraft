@@ -3203,9 +3203,20 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     });
     // Each document keeps its own scroll position when switching tabs (#189).
     scroll = scroll.id_salt(("page-view", view.id));
-    // Every scroll here asks for no animation. An animated area would still queue a zero-length
-    // offset target for the next frame, which overwrites the jump a page turn just set.
-    scroll = scroll.animated(false);
+    // When a page jump or programmatic reposition occurs, or in non-continuous page display
+    // where single-page wheel turns jump to the page edge, disable animation so egui's
+    // queued target does not overwrite or ease the jump. For continuous page scrolling,
+    // animate if motion effects are enabled.
+    let has_jump = !view.shown
+        || edge_turned
+        || view.goto.is_some()
+        || view.goto_point.is_some()
+        || view.zoom_anchor.is_some()
+        || view.sync_scroll.is_some()
+        || (app.quick_tool == QuickTool::Hand
+            && !middle_gesture
+            && view.page_widget.is_some_and(|id| ui.ctx().is_being_dragged(id)));
+    scroll = scroll.animated(view.continuous && animates && !has_jump);
     // A newly opened document starts at the top. eframe saves egui's memory with the settings
     // and document ids start again at 1 every launch, so the offset stored under this id can be
     // where an earlier session left another document.
@@ -3391,7 +3402,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let wheel_delta = if selection_wheel { Vec2::ZERO } else { precise_scroll + boost_extra };
         let delta = auto_delta + edge_delta - vec2(0.0, key_scroll) + wheel_delta + glide;
         if delta != Vec2::ZERO && delta.is_finite() {
-            ui.scroll_with_delta_animation(delta, egui::style::ScrollAnimation::none());
+            let anim = if animates && key_scroll != 0.0 { ui.style().scroll_animation } else { egui::style::ScrollAnimation::none() };
+            ui.scroll_with_delta_animation(delta, anim);
         }
         let (resp_rect, resp) = ui.allocate_exact_size(vec2(content_w, content_h), Sense::click_and_drag());
         view.page_widget = Some(resp.id);

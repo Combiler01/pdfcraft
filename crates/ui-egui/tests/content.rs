@@ -262,17 +262,64 @@ fn typing_moving_styling_and_deleting_added_content() {
     let a = added(&h);
     assert_eq!(a.len(), 1);
     assert_eq!(a[0].content.rect(), [135.0, 190.0, 165.0, 210.0]);
-    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
-    // Edit image: rotate clockwise turns the box around its centre.
-    h.get_by_label("Rotate clockwise").click();
+    assert!(h.state().views[0].image_selection.is_some());
+    assert_eq!(h.state().views[0].content.selected, None);
+    // Right-click image to rotate clockwise via refactored context menu
+    let c = at(&h, 150.0, 200.0);
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label("Rotate Clockwise").click();
     h.run_steps(3);
     let a = added(&h);
     let pdfcraft_engine::AddedContent::Image(img) = &a[0].content else { panic!() };
-    assert_eq!((img.rotation, img.rect), (3, [140.0, 185.0, 160.0, 215.0]));
+    assert_eq!((img.rotation, img.rect), (1, [140.0, 185.0, 160.0, 215.0]));
+
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
     h.get_by_label("Flip horizontal").click();
     h.run_steps(3);
     let pdfcraft_engine::AddedContent::Image(img) = &added(&h)[0].content else { panic!() };
     assert!(img.flip_h);
+}
+
+#[test]
+fn add_image_activates_refactored_image_selection_and_crop() {
+    let mut h = harness();
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 40, 40);
+        enc.set_color(png::ColorType::Rgb);
+        let mut w = enc.write_header().unwrap();
+        w.write_image_data(&[128u8; 4800]).unwrap();
+    }
+    h.state_mut().add_image("test_crop.png".into(), png);
+    h.run_steps(3);
+
+    // Verify image_selection is activated and content.selected is None
+    let sel = h.state().views[0].image_selection.clone().expect("image_selection should be active");
+    assert_eq!(h.state().views[0].content.selected, None);
+    assert!(!sel.crop_mode);
+
+    // Right-click image to open context menu and click Crop
+    let c = at(&h, 150.0, 200.0);
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label("Crop").click();
+    h.run_steps(3);
+
+    // Verify refactored crop mode is now active
+    let sel_after = h.state().views[0].image_selection.clone().expect("image_selection active");
+    assert!(sel_after.crop_mode, "crop_mode must be true");
+    assert!(sel_after.crop.is_some(), "crop must be initialized");
 }
 
 /// #125: text the standard fonts can't draw stays in the editor with a warning instead of being
