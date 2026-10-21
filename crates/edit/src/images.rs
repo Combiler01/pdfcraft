@@ -1565,32 +1565,20 @@ fn crop_image_impl(
     if !keep.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
         return Err(EditError::Invalid("the crop box must be finite and no larger than 1e12".into()));
     }
-    let is_normalized = keep[0] >= 0.0
-        && keep[1] >= 0.0
-        && keep[2] <= 1.0
-        && keep[3] <= 1.0
-        && keep[2] > keep[0]
-        && keep[3] > keep[1]
-        && ((image.rect[2] - image.rect[0]).abs() > 1.5 || (image.rect[3] - image.rect[1]).abs() > 1.5);
-
-    let (u0, v0, u1, v1) = if is_normalized {
-        (keep[0], keep[1], keep[2], keep[3])
-    } else {
-        let [x0, y0, x1, y1] = [keep[0].min(keep[2]), keep[1].min(keep[3]), keep[0].max(keep[2]), keep[1].max(keep[3])];
-        if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
-            return Err(EditError::Invalid("the crop box has no area".into()));
-        }
-        let inv = Matrix(image.matrix).invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
-        let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inv.apply(x, y));
-        let min_u = corners.iter().map(|(u, _)| *u).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
-        let max_u = corners.iter().map(|(u, _)| *u).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
-        let min_v = corners.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
-        let max_v = corners.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
-        if max_u - min_u < 1e-6 || max_v - min_v < 1e-6 {
-            return Err(EditError::Invalid("the crop box has no area".into()));
-        }
-        (min_u, min_v, max_u, max_v)
-    };
+    let [x0, y0, x1, y1] = [keep[0].min(keep[2]), keep[1].min(keep[3]), keep[0].max(keep[2]), keep[1].max(keep[3])];
+    if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
+        return Err(EditError::Invalid("the crop box has no area".into()));
+    }
+    let inv = Matrix(image.matrix).invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
+    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inv.apply(x, y));
+    let min_u = corners.iter().map(|(u, _)| *u).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
+    let max_u = corners.iter().map(|(u, _)| *u).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
+    let min_v = corners.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
+    let max_v = corners.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
+    if max_u - min_u < 1e-6 || max_v - min_v < 1e-6 {
+        return Err(EditError::Invalid("the crop box has no area".into()));
+    }
+    let (u0, v0, u1, v1) = (min_u, min_v, max_u, max_v);
 
     if u1 - u0 < 1e-6 || v1 - v0 < 1e-6 {
         return Err(EditError::Invalid("the crop box has no area".into()));

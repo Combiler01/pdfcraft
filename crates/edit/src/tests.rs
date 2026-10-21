@@ -2238,7 +2238,7 @@ fn crop_rotated_image_preserves_angle_and_in_place_geometry() {
     assert!((m_before[1] - 100.0).abs() < 1e-3);
     assert!((m_before[2] - (-50.0)).abs() < 1e-3);
 
-    images::crop_image(&mut doc, 0, 0, [0.25, 0.25, 0.75, 0.75]).unwrap();
+    images::crop_image(&mut doc, 0, 0, [140.0, 170.0, 180.0, 210.0]).unwrap();
     let doc = reopen(&doc);
     let img_cropped = &images::page_images(&doc, 0).unwrap()[0];
 
