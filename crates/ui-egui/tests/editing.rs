@@ -5237,8 +5237,15 @@ fn rotated_image_selection_and_crop() {
     let im_rotated = &doc.page_images(0)[0];
     assert!(im_rotated.matrix[1].abs() > 1.0 || im_rotated.matrix[2].abs() > 1.0, "matrix is rotated: {:?}", im_rotated.matrix);
 
-    // Enter crop mode with normalized bounds [0.2, 0.2, 0.8, 0.8]
-    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new([0.2, 0.2, 0.8, 0.8]));
+    // Enter crop mode with user-space bounds [0.2..0.8] of rotated image rect
+    let full = im_rotated.rect;
+    let crop_keep = [
+        full[0] + (full[2] - full[0]) * 0.2,
+        full[1] + (full[3] - full[1]) * 0.2,
+        full[0] + (full[2] - full[0]) * 0.8,
+        full[1] + (full[3] - full[1]) * 0.8,
+    ];
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop = Some(pdfcraft_ui_egui::CropMode::new(crop_keep));
     h.run_steps(2);
 
     // Apply crop via Enter key
