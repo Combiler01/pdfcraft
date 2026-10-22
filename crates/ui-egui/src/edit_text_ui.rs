@@ -1469,7 +1469,8 @@ pub(crate) fn image_input(
         if let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none()) {
             match (s.settled, raster) {
                 (Some((from, to)), Some(tex)) if out_of_date => {
-                    stretched_picture(painter, xf, tex, &[screen(from)], screen(from), screen(to));
+                    let source = if raster_old { from } else { to };
+                    stretched_picture(painter, xf, tex, &[screen(from)], screen(source), screen(to));
                 }
                 _ if !out_of_date => s.settled = None,
                 _ => {}

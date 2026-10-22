@@ -885,7 +885,7 @@ impl crate::PdfCraftApp {
         if let Some(doc) = self.session.get(id)
             && !doc.allows_modification()
         {
-            self.notify_error(tl!("The document's security settings don't allow changes"));
+            self.notify_error(tl!("The document's security settings don't allow this change"));
             return false;
         }
 
