@@ -227,6 +227,19 @@ fn is_dct(s: &Stream) -> Option<bool> {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Pixels decoded from JPEG data, for the test that keeps a mismatched JPEG from decoding.
+    static DECODED_PIXELS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts `n` decoded pixels (tests only).
+#[inline]
+fn count_decoded(_n: u64) {
+    #[cfg(test)]
+    DECODED_PIXELS.with(|c| c.set(c.get().saturating_add(_n)));
+}
+
 /// 8-bit samples of an image (`n` components), decoded.
 pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
     let (w, h) = (u32::try_from(s.dict.int(b"Width")?).ok()?, u32::try_from(s.dict.int(b"Height")?).ok()?);
@@ -235,7 +248,15 @@ pub(crate) fn pixels(s: &Stream, n: usize) -> Option<Vec<u8>> {
     }
     let bytes = usize::try_from(w).ok()?.checked_mul(usize::try_from(h).ok()?)?.checked_mul(n)?;
     if is_dct(s)? {
-        let img = image::load_from_memory_with_format(&s.raw, image::ImageFormat::Jpeg).ok()?;
+        use image::ImageDecoder as _;
+        // The JPEG's own size is what gets decoded: one other than the dictionary's is refused from
+        // its header, before any pixels are.
+        let decoder = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&s.raw[..])).ok()?;
+        if decoder.dimensions() != (w, h) {
+            return None;
+        }
+        let img = image::DynamicImage::from_decoder(decoder).ok()?;
+        count_decoded(u64::from(img.width()) * u64::from(img.height()));
         // Adobe CMYK/YCCK JPEGs aren't handled (the colour space check excludes them).
         let v = if n == 1 { img.into_luma8().into_raw() } else { img.into_rgb8().into_raw() };
         (v.len() == bytes).then_some(v)
@@ -431,5 +452,22 @@ mod dimension_tests {
         dict.set(b"Height".to_vec(), Object::Int(2));
         let stream = Stream::from_raw(dict, vec![1, 2, 3, 4, 5]);
         assert_eq!(pixels(&stream, 1), Some(vec![1, 2, 3, 4]));
+    }
+
+    /// A JPEG larger than its dictionary says is refused from its header, before its pixels are decoded.
+    #[test]
+    fn a_jpeg_of_another_size_than_its_dictionary_is_not_decoded() {
+        let data = jpeg(&vec![128; 1000 * 1000], 1, 1000, 1000, 50).unwrap_or_default();
+        let stream = |w: i64, h: i64| {
+            let mut dict = Dict::new();
+            dict.set(b"Width".to_vec(), Object::Int(w));
+            dict.set(b"Height".to_vec(), Object::Int(h));
+            dict.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+            Stream::from_raw(dict, data.clone())
+        };
+        DECODED_PIXELS.with(|c| c.set(0));
+        assert!(pixels(&stream(10, 10), 1).is_none());
+        assert_eq!(DECODED_PIXELS.with(|c| c.get()), 0, "pixels decoded");
+        assert_eq!(pixels(&stream(1000, 1000), 1).map(|p| p.len()), Some(1000 * 1000));
     }
 }
