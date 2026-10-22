@@ -2849,16 +2849,48 @@ fn image_arrange_moves_a_bmc_sequence_as_a_whole() {
     assert!(body < art && art < img && img < emc, "text first, then the whole artifact sequence: {s}");
 }
 
-/// An image that shares its marked-content sequence with other content can't move without leaving
-/// its tag or taking the other content along, so Arrange refuses and changes nothing.
+/// An image that shares its marked-content sequence with other content is extracted into its own
+/// tag (/Artifact) when arranged, keeping the remaining content in its original tag.
 #[test]
-fn image_arrange_refuses_to_split_a_shared_marked_sequence() {
+fn image_arrange_splits_a_shared_marked_sequence_into_own_tag() {
     let content =
         "/Figure <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Caption) Tj ET EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
     let mut doc = image_page_with(content);
-    let before = page_content_bytes(&doc, 0);
-    assert!(images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
-    assert_eq!(page_content_bytes(&doc, 0), before, "a refused arrange leaves the page as it was");
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    // The caption remains inside its original Figure tag.
+    let fig = s.find("/Figure <</MCID 0>> BDC").expect("figure tag preserved");
+    let caption = s.find("(Caption)").expect("caption preserved");
+    let emc1 = s.find("EMC").expect("first EMC");
+    assert!(fig < caption && caption < emc1, "caption stays in Figure sequence: {s}");
+    // The moved image is placed after Body, wrapped in its own Artifact sequence.
+    let body = s.find("(Body)").expect("body text");
+    let art = s.find("/Artifact BMC").expect("image has its own Artifact tag");
+    let img = s.find("/Im0 Do").expect("image moved");
+    let emc2 = s.rfind("EMC").expect("second EMC");
+    assert!(emc1 < body && body < art && art < img && img < emc2, "image moved after body in own tag: {s}");
+    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
+}
+
+/// Send backward also splits out the image into its own tag when it shares its sequence with text,
+/// placing it before the preceding unit and keeping the remaining content tagged.
+#[test]
+fn image_arrange_send_backward_splits_shared_marked_sequence() {
+    let content =
+        "BT /F1 12 Tf 72 700 Td (Header) Tj ET /Table <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Cell) Tj ET EMC";
+    let mut doc = image_page_with(content);
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).unwrap();
+    let doc = reopen(&doc);
+    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
+    let header = s.find("(Header)").expect("header text");
+    let img = s.find("/Im0 Do").expect("image");
+    let cell = s.find("(Cell)").expect("cell text");
+    assert!(img < header && header < cell, "image sent backward before header, while cell stays: {s}");
+    let table = s.find("/Table <</MCID 0>> BDC").expect("table tag preserved");
+    let emc = s.rfind("EMC").expect("EMC");
+    assert!(s.find("/Artifact BMC").is_some(), "image has own artifact tag: {s}");
+    assert!(table < cell && cell < emc, "cell text stays in table sequence: {s}");
 }
 
 #[test]

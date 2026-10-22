@@ -1025,29 +1025,33 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             )
     });
 
-    // #3145: the image's marked-content sequence also holds other content, so moving the image
-    // alone would take it out of its tag (or the move would carry the other content along). Refuse
-    // rather than change the tagged structure.
+    // A marked-content sequence that holds other content too moves only the image out of the
+    // sequence, wrapping it in its own tag at the destination so it is not grouped with the
+    // other content and leaves the remaining tagged content intact.
     let marked_unit = ops.get(target_unit.start).is_some_and(|o| o.is("BDC") || o.is("BMC"));
-    if has_other_paint && marked_unit {
-        return Err(EditError::Invalid(
-            "this image shares its marked content (a tag) with other content, so arranging it alone isn't supported".into(),
-        ));
-    }
 
-    // A marked-content unit holding only this image moves whole, with its BDC…EMC.
-    let (mut target_span, scope_start) = if !marked_unit
-        && let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+    let (mut target_span, scope_start) = if has_other_paint {
+        if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+            && sub_start >= target_unit.start
+            && sub_end < target_unit.end
+        {
+            let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
+            let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
+            (start_op.span.start..end_op.span.end, sub_start)
+        } else {
+            let target_op = &ops[target];
+            (target_op.span.start..target_op.span.end, target)
+        }
+    } else if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
         && sub_start >= target_unit.start
         && sub_end < target_unit.end
+        && !marked_unit
     {
         let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
         let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
         (start_op.span.start..end_op.span.end, sub_start)
-    } else if has_other_paint {
-        let target_op = &ops[target];
-        (target_op.span.start..target_op.span.end, target_unit.start)
     } else if marked_unit {
+        // A marked-content unit holding only this image moves whole, with its BDC…EMC.
         // The whole sequence is removed; the image's state is rebuilt from the ops inside it.
         let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
         let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
@@ -1113,7 +1117,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         Some(ext) => ext,
         None if scope_start != target => {
             let target_op = ops.get(target).cloned().ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
-            if !marked_unit {
+            if !marked_unit || has_other_paint {
                 target_span = target_op.span.start..target_op.span.end;
             }
             extract_scope_state(&ops, target, target, Matrix(img.draw_matrix))?
@@ -1176,7 +1180,18 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     }
 
     let mut unit_ops = Vec::new();
-    let marked_open = if marked_unit { ops.get(target_unit.start).cloned() } else { None };
+    let marked_open = if marked_unit {
+        if has_other_paint {
+            let open = ops.get(target_unit.start);
+            let has_mcid =
+                open.is_some_and(|o| o.is("BDC") && o.operands.get(1).and_then(|dict| dict.as_dict()).is_some_and(|d| d.get(b"MCID").is_some()));
+            if has_mcid { Some(Op::new("BMC", vec![Object::name("Artifact")])) } else { open.cloned() }
+        } else {
+            ops.get(target_unit.start).cloned()
+        }
+    } else {
+        None
+    };
     if let Some(open) = &marked_open {
         unit_ops.push(open.clone());
     }
@@ -1230,7 +1245,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     unit_ops.push(extracted.do_op);
     unit_ops.push(Op::new("Q", vec![]));
     // An unbalanced sequence had no EMC; it doesn't gain one.
-    if marked_open.is_some() && target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC")) {
+    if marked_open.is_some() && (has_other_paint || target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC"))) {
         unit_ops.push(Op::new("EMC", vec![]));
     }
 
