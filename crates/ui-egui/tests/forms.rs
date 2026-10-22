@@ -501,7 +501,10 @@ fn wait_for_file(h: &mut Harness<'static, PdfCraftApp>, path: &std::path::Path) 
 }
 
 fn scratch(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("pdfcraft-forms-{name}-{}", std::process::id()));
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-forms-{name}-{}-{count}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -536,7 +539,7 @@ fn tabbing_back_to_the_same_field_then_saving_keeps_the_committed_value() {
         ("single-backward", false, true, false),
         ("shared-forward", true, false, false),
         ("shared-backward", true, true, false),
-        ("same-frame", false, false, true),
+        ("tab-same-frame", false, false, true),
     ] {
         let dir = scratch(case);
         let out = dir.join("saved.pdf");
