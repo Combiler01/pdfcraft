@@ -1880,6 +1880,39 @@ fn page_grid_zooms_with_its_buttons_keys_and_pinch() {
     assert!(!dirty(&h), "zooming is not an edit");
 }
 
+/// As in Acrobat, Organize pages keeps the size last chosen: every document's grid opens at it,
+/// and so does the next start of the app.
+#[test]
+fn page_grid_size_is_remembered_for_every_document_and_restart() {
+    let mut h = organize(3);
+    h.get_by_label("Larger pages").click();
+    h.run_steps(3);
+    assert_eq!(grid_zoom(&h), 1.25);
+    h.state_mut().open_bytes("other.pdf", None, fixture(2)).expect("second fixture opens");
+    h.state_mut().set_option("organize", "on").unwrap();
+    h.run_steps(4);
+    let other = h.state().active.expect("the new document is active");
+    assert_ne!(other, 0);
+    assert_eq!(h.state().views[other].grid_zoom(), 1.25, "the other document");
+    let settings = h.state().persist();
+    let h = harness(3, move |app| {
+        app.restore(&settings);
+        app.set_option("organize", "on").unwrap();
+    });
+    assert_eq!(grid_zoom(&h), 1.25, "after a restart");
+}
+
+#[test]
+fn a_damaged_remembered_page_grid_size_is_ignored_or_clamped() {
+    let mut app = PdfCraftApp::new();
+    app.restore(r#"{"organize_zoom": "huge"}"#);
+    assert_eq!(app.organize_zoom, 1.0);
+    app.restore(r#"{"organize_zoom": 40.0}"#);
+    assert_eq!(app.organize_zoom, 3.0);
+    app.restore(r#"{"organize_zoom": -2}"#);
+    assert_eq!(app.organize_zoom, 0.5);
+}
+
 #[test]
 fn zoomed_pages_in_view_are_rendered_at_the_size_drawn() {
     // A long document: sharpness must not depend on how many pages there are.
@@ -3231,7 +3264,7 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     assert!(h.state().views[0].line_editor.is_some());
     // The Format text panel shows the paragraph's look; making it bold applies at once.
     h.get_by_label("FORMAT TEXT");
-    h.get_by_label("B").click();
+    h.get_by_label("Bold").click();
     h.run_steps(4);
     let s = h.state();
     let doc = s.session.get(s.views[0].id).unwrap();
@@ -3245,6 +3278,62 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.text_blocks(0)[0].base_font, "Helvetica-Bold");
     assert!(s.views[0].line_editor.as_ref().is_some_and(|e| e.extras.underline));
+}
+
+/// Horizontal scale and Character spacing take any value in their ranges, not only the listed
+/// ones: values between the listed ones and beyond them, typed in Format text, reach the saved
+/// file as the engine writes them.
+#[test]
+fn the_format_panel_takes_any_scale_and_character_spacing() {
+    let mut h = harness(1, |_| {});
+    let id = h.state().views[0].id;
+    let width = |h: &Harness<'static, PdfCraftApp>, view: usize| {
+        let s = h.state();
+        let r = s.session.get(s.views[view].id).unwrap().text_blocks(0)[0].rect;
+        r[2] - r[0]
+    };
+    let plain = width(&h, 0);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some());
+    // Typed the way a person does: click the field, type, Enter.
+    let type_in = |h: &mut Harness<'static, PdfCraftApp>, label: &str, value: &str| {
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.event(egui::Event::Text(value.into()));
+        h.run_steps(1);
+        h.key_press(Key::Enter);
+        h.run_steps(4);
+    };
+    let extras = |h: &Harness<'static, PdfCraftApp>| h.state().views[0].line_editor.as_ref().map(|e| (e.extras.scale, e.extras.char_spacing));
+    // Between the listed values (50…200 %, −1…5 pt) and beyond them, within what was always allowed.
+    type_in(&mut h, "Horizontal scale", "80");
+    assert_eq!(extras(&h), Some((80.0, 0.0)));
+    type_in(&mut h, "Horizontal scale", "250");
+    assert_eq!(extras(&h), Some((250.0, 0.0)));
+    type_in(&mut h, "Character spacing", "0.25");
+    assert_eq!(extras(&h), Some((250.0, 0.25)));
+    type_in(&mut h, "Character spacing", "-2");
+    assert_eq!(extras(&h), Some((250.0, -2.0)));
+    assert_eq!(h.state().session.get(id).unwrap().can_undo(), Some("Edit text"));
+    // Saved and reopened, the paragraph is as wide as the engine draws it with those values.
+    let bytes = h.state().session.save_bytes(id).unwrap();
+    h.state_mut().open_bytes("reference.pdf", None, fixture(1)).expect("opens");
+    let style = pdfcraft_engine::BlockStyle { scale: Some(250.0), char_spacing: Some(-2.0), ..Default::default() };
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::EditTextBlock { page: 0, block: 0, text: "Page 1".into(), style }));
+    h.state_mut().open_bytes("saved.pdf", None, bytes.as_ref().clone()).expect("the saved file opens");
+    h.run_steps(3);
+    let (reference, saved) = (width(&h, 1), width(&h, 2));
+    assert!(saved > plain * 1.5, "250 % widens it: {plain} → {saved}");
+    assert!((saved - reference).abs() < 0.5, "saved {saved}, the engine's own {reference}");
 }
 
 #[test]
@@ -3265,7 +3354,7 @@ fn selected_text_formatting_keeps_the_rest_of_the_paragraph_and_reopens() {
     h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
     h.run_steps(2);
     assert_eq!(h.state().views[0].line_editor.as_ref().unwrap().selection, Some(5..6));
-    h.get_by_label("B").click();
+    h.get_by_label("Bold").click();
     h.run_steps(5);
     let id = h.state().views[0].id;
     let doc = h.state().session.get(id).unwrap();
@@ -3492,11 +3581,17 @@ fn paragraph_drag_points(h: &Harness<'static, PdfCraftApp>, text: &str, offset: 
 
 fn drag_paragraph(h: &mut Harness<'static, PdfCraftApp>, text: &str, offset: [f64; 2]) {
     let (from, to) = paragraph_drag_points(h, text, offset);
-    h.get_by_label("Shift-click to select several objects. Drag empty space to select an area.");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
     assert!(h.state().views[0].line_editor.is_none());
     drag(h, from, to);
     assert!(h.state().views[0].line_editor.is_none(), "a body drag must not open the typing editor");
-    h.get_by_label("Shift-click to select several objects. Drag empty space to select an area.");
+    assert!(
+        h.query_all_by_label_contains("object selected").next().is_none() && h.query_all_by_label_contains("objects selected").next().is_none(),
+        "no objects selected"
+    );
 }
 
 fn assert_dragged_paragraphs(actual: &[pdfcraft_engine::TextBlock], expected: &[pdfcraft_engine::TextBlock]) {

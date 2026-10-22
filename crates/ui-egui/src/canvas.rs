@@ -831,6 +831,8 @@ pub struct DocView {
     pub forms: crate::forms_ui::FormView,
     /// Prepare a form: the selected field and the gesture in progress.
     pub prepare: crate::prepare::PrepareView,
+    /// Prepare a form ▸ Calculation order.
+    pub(crate) calc_order: crate::calc_order_ui::CalcOrderView,
     /// Edit a PDF: the selected added item, the text being typed.
     pub content: crate::content_ui::ContentView,
     /// Edit a PDF ▸ Link tool state.
@@ -1232,6 +1234,7 @@ impl DocView {
             measure: Default::default(),
             forms: Default::default(),
             prepare: Default::default(),
+            calc_order: Default::default(),
             content: Default::default(),
             links: Default::default(),
             redact_drag: None,
@@ -2937,6 +2940,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     // The Prepare a form panel is open (or a field tool is picked): fields are edited, not filled.
     let preparing = app.is_preparing();
+    // Prepare a form ▸ Calculation order: the order's steps and links on the page.
+    let calc_order = preparing && app.left_open && app.left == crate::LeftPanel::CalculationOrder;
     // Edit a PDF: added text and images can be selected, moved and edited.
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
@@ -2977,9 +2982,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
     let unobstructed = !app.modal_open() && !app.palette_open;
+    let organize_zoom = app.organize_zoom;
     let view = &mut app.views[index];
     if view.organize {
+        // One remembered grid size for every document, kept in the settings.
+        view.set_grid_zoom(organize_zoom);
         organize_grid(view, info, doc.allows_assembly(), doc.dirty, unobstructed, ui, &t);
+        app.organize_zoom = view.grid_zoom();
         return;
     }
 
@@ -3314,6 +3323,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut copy_selected = false;
     let comments_hidden = doc.comments_hidden();
     let form = doc.form.clone();
+    let generation = doc.edit_generation();
     let can_fill = doc.allows_form_filling();
     let can_crop = doc.allows_assembly();
     let mut open_boxes = false;
@@ -3352,6 +3362,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_props: Option<(usize, usize)> = None;
     let mut field_props = false;
     let mut field_placed = false;
+    let mut open_table: Option<(usize, [f64; 4])> = None;
+    // The table being set up in its window, shown on its own document's page.
+    let table_preview = app.field_table_draft.as_mut().filter(|d| d.doc == view.id).and_then(|d| Some(d.preview(info.pages.get(d.page)?, &form)));
     let can_modify = doc.allows_modification();
     if preparing {
         crate::prepare::after_refresh(view, &form);
@@ -3480,6 +3493,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             ui.ctx().data_mut(|d| d.insert_persisted(resp.id.with("image-menu"), over_image));
         }
+        let mut calc_hover = None;
         for &i in &visible_pages {
             badge_hover = None;
             let r = snap_to_pixels(rects[i].translate(origin.to_vec2()), ppp);
@@ -3772,9 +3786,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     QuickTool::Field(f) => Some(f),
                     _ => None,
                 };
-                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, can_modify, view);
+                // While a table is being set up, nothing else is drawn or moved.
+                let allowed = can_modify && table_preview.is_none() && open_table.is_none();
+                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, allowed, view);
                 field_props |= o.properties;
                 field_placed |= o.placed;
+                open_table = open_table.or(o.table);
                 (o.consumed || field_tool.is_some(), false)
             } else {
                 use crate::forms_ui::FieldPointer;
@@ -4087,6 +4104,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             if preparing {
                 crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
+                if let Some(preview) = &table_preview {
+                    crate::field_table_ui::paint_preview(painter, &xf, i, preview);
+                }
+                if calc_order {
+                    let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+                    if let Some(name) = crate::calc_order_ui::paint_page(ui, painter, &xf, i, info, &form, &view.calc_order, generation, selected) {
+                        calc_hover = Some(name);
+                    }
+                }
             } else {
                 crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
             }
@@ -4207,6 +4233,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             if hover_text.is_none() {
                 hover_text = badge_hover.take();
             }
+        }
+        if calc_order {
+            view.calc_order.set_hover_page(calc_hover);
+            let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
+            crate::calc_order_ui::paint_trace(ui, painter, visible, &view.calc_order, generation, selected);
         }
         // ScrollArea ignores the wheel while any widget is dragged, so a text-selection drag
         // scrolls the page itself (#721). After the page loop, so it keeps scrolling once the
@@ -4814,6 +4845,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         app.boxes_draft.range = crate::pageboxes::Range::Current;
         app.boxes_draft.seeded = None;
         app.dialog = Some(crate::Dialog::PageBoxes);
+    }
+    if let Some((page, rect)) = open_table {
+        app.field_table_draft = Some(crate::field_table_ui::FieldTableDraft::new(app.views[index].id, page, rect, &form, generation));
+        app.dialog = Some(crate::Dialog::FieldTable);
+        // The window lasts while the form is prepared. Drawn with the tool picked but its panel
+        // closed, the tool goes back to Select above, so the panel opens to keep it prepared.
+        app.left = crate::LeftPanel::Tool("form");
+        app.reveal_tools();
     }
     if let Some(n) = form_notice {
         match n {

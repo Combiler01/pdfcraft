@@ -1558,13 +1558,24 @@ mod tests {
         ]);
         shared_bad.entered.wait();
         shared_healthy.entered.wait();
-        assert!(pool.try_recv().is_none(), "shared timeouts retry instead of answering yet");
+        // This watchdog pass retries both pages privately. Page 1's retry has no gate, so on a
+        // loaded machine it can finish before this same call reads the results: that early
+        // answer is the healthy page, never a timeout error.
+        let early = pool.try_recv();
+        assert!(
+            early.as_ref().is_none_or(|page| page.request.page == 1 && page.error.is_none()),
+            "shared timeouts retry instead of answering with an error: {:?}",
+            early.as_ref().map(|page| (page.request.page, &page.error))
+        );
         shared_bad.release.wait();
         shared_healthy.release.wait();
         shared_bad.finished.wait();
         shared_healthy.finished.wait();
         private_bad.entered.wait();
-        let healthy = pool.results.recv_timeout(Duration::from_secs(30)).expect("healthy private retry");
+        let healthy = match early {
+            Some(page) => page,
+            None => pool.results.recv_timeout(Duration::from_secs(30)).expect("healthy private retry"),
+        };
         assert!(healthy.error.is_none(), "{:?}", healthy.error);
         assert_eq!((healthy.request.page, healthy.width, healthy.height, healthy.request.tag), (1, 100, 50, 41));
         pool.watchdog();
@@ -4604,6 +4615,88 @@ trailer << /Root 1 0 R >>
         pdf.extend_from_slice(stream);
         pdf.extend_from_slice(b"\nendstream endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
         pdf
+    }
+
+    /// A document whose `pages` page dictionaries all live in one (uncompressed) object stream,
+    /// found through a cross-reference stream: every page shows the content `0 0 1 rg 10 10 80 80
+    /// re f` on a 100 pt square, except the last, which is 50 × 100 pt.
+    fn pages_in_one_object_stream(pages: usize) -> Vec<u8> {
+        // 1 catalog, 2 page tree, 3 content, 4 the object stream, 5.. the pages, then the xref.
+        let page = |n: usize| {
+            let size = if n + 1 == pages { "50 100" } else { "100 100" };
+            format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {size}] /Contents 3 0 R >>\n")
+        };
+        let (mut index, mut body) = (String::new(), String::new());
+        for n in 0..pages {
+            index.push_str(&format!("{} {} ", n + 5, body.len()));
+            body.push_str(&page(n));
+        }
+        index.push('\n');
+        let kids: Vec<String> = (0..pages).map(|n| format!("{} 0 R", n + 5)).collect();
+        let content = "0 0 1 rg 10 10 80 80 re f";
+        let mut pdf = b"%PDF-1.5\n".to_vec();
+        let mut offsets = Vec::new();
+        for (num, obj) in [
+            (1, "<< /Type /Catalog /Pages 2 0 R >>".to_string()),
+            (2, format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.join(" "))),
+            (3, format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len())),
+            (
+                4,
+                format!(
+                    "<< /Type /ObjStm /N {pages} /First {} /Length {} >>\nstream\n{index}{body}\nendstream",
+                    index.len(),
+                    index.len() + body.len()
+                ),
+            ),
+        ] {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{num} 0 obj\n{obj}\nendobj\n").as_bytes());
+        }
+        // Cross-reference stream rows of /W [1 4 4]: free 0, objects 1–4 in the file, the pages
+        // at their index in object 4, and the cross-reference stream itself.
+        let xref_num = pages + 5;
+        let xref_at = pdf.len();
+        let mut rows = vec![0u8, 0, 0, 0, 0, 0, 0, 0xff, 0xff];
+        let row = |kind: u8, a: usize, b: usize| [[kind].as_slice(), &(a as u32).to_be_bytes(), &(b as u32).to_be_bytes()].concat();
+        for at in &offsets {
+            rows.extend(row(1, *at, 0));
+        }
+        for n in 0..pages {
+            rows.extend(row(2, 4, n));
+        }
+        rows.extend(row(1, xref_at, 0));
+        pdf.extend_from_slice(
+            format!("{xref_num} 0 obj\n<< /Type /XRef /Size {} /W [1 4 4] /Root 1 0 R /Length {} >>\nstream\n", xref_num + 1, rows.len()).as_bytes(),
+        );
+        pdf.extend_from_slice(&rows);
+        pdf.extend_from_slice(format!("\nendstream\nendobj\nstartxref\n{xref_at}\n%%EOF\n").as_bytes());
+        pdf
+    }
+
+    /// An object stream's index of `objnum offset` pairs is read once, not for every object
+    /// fetched from it (vendored hayro-syntax patch 22). Read again each time, all of a stream of
+    /// N objects took N² steps: a Firefox page keeping 65,542 objects in one stream took 37 s to
+    /// draw and 40 s to extract its text. These 40,000 pages in one stream took about a minute
+    /// to open that way; now a fraction of a second. The last page, at the end of the index,
+    /// still has its own size.
+    #[test]
+    fn objects_in_one_large_object_stream_are_read_in_linear_time() {
+        const PAGES: usize = 40_000;
+        let pdf = pages_in_one_object_stream(PAGES);
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut r = PageRenderer::new(Arc::new(pdf), RenderConfig::default());
+            let first = r.render(RenderRequest { page: 0, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+            let last = r.render(RenderRequest { page: PAGES - 1, kind: RequestKind::Pixels, tile: None, scale: 1.0, tag: 0, preview: false });
+            let _ = tx.send((first, last));
+        });
+        let (first, last) =
+            rx.recv_timeout(std::time::Duration::from_secs(20)).expect("reading every object of one object stream must not take quadratic time");
+        assert!(first.error.is_none(), "{:?}", first.error);
+        assert_eq!((first.width, first.height), (100, 100));
+        assert_eq!(rgb_at(&first.rgba, first.width as usize, 50, 50), [0, 0, 255]);
+        assert!(last.error.is_none(), "{:?}", last.error);
+        assert_eq!((last.width, last.height), (50, 100), "the last page is read from its own offset");
     }
 
     /// A page whose content expands far beyond its compressed stream stops at the expansion budget,

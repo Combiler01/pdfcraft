@@ -681,6 +681,36 @@ theme	Appearance	Giao diện
 	Larger pages	Trang lớn hơn
 	Later	Để sau
 	Later in tab order	Muộn hơn theo thứ tự tab
+	Calculation order	Thứ tự tính toán
+	Fix order	Sửa thứ tự
+	Move only what must move, so every field calculates after the fields it reads.	Chỉ di chuyển những gì cần di chuyển, để mỗi trường được tính sau các trường mà nó đọc.
+	Earlier in calculation order	Sớm hơn theo thứ tự tính toán
+	Later in calculation order	Muộn hơn theo thứ tự tính toán
+	Too early	Quá sớm
+	Reads {name}, which calculates later, so it shows an old value.	Đọc {name}, trường được tính sau, nên hiển thị giá trị cũ.
+	Loop	Vòng lặp
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Đọc {names}, các trường này lại đọc ngược nó. Không thứ tự nào sửa được vòng lặp: hãy đổi một trong các công thức.
+	Not in order	Không có trong thứ tự
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Không có trong thứ tự tính toán lưu trong PDF: các trình xem PDF khác có thể không tính trường này.
+	Back to Prepare a form	Quay lại Chuẩn bị biểu mẫu
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Chưa có trường nào trong biểu mẫu này tự tính giá trị. Hãy đặt phép tính cho một trường ở thẻ Tính toán trong thuộc tính của nó, trường đó sẽ hiện ở đây.
+	{names} and {last}	{names} và {last}
+	{field} reads no other field	{field} không đọc trường nào khác
+	{field} reads {fields}	{field} đọc {fields}
+	No field reads it	Không trường nào đọc nó
+	The order saved in the PDF needs tidying	Thứ tự lưu trong PDF cần được sắp xếp lại
+	Moves only what must move	Chỉ di chuyển những gì cần thiết
+	Every field calculates after the fields it reads.	Mọi trường đều được tính sau các trường mà nó đọc.
+	Every field outside a loop calculates after the fields it reads.	Mọi trường ngoài vòng lặp đều được tính sau các trường mà nó đọc.
+	{field} reads its own value	{field} đọc chính giá trị của nó
+	{fields} read each other	{fields} đọc lẫn nhau
+	No order can fix a loop. Change one of the formulas.	Không thứ tự nào sửa được vòng lặp. Hãy thay đổi một trong các công thức.
+	Edit {field}'s formula	Sửa công thức của {field}
+	Order · top calculates first	Thứ tự · trên cùng được tính trước
+	Script	Tập lệnh
+	Links on page	Liên kết trên trang
+	Show on the page which fields each field reads	Hiện trên trang các trường mà mỗi trường đọc
+	Drag a field to move it, or select it and press {up} or {down}.	Kéo một trường để di chuyển, hoặc chọn nó rồi nhấn {up} hoặc {down}.
 	Layers	Các lớp
 	Layers Panel and Page	Bảng Các lớp và trang
 	Layout and Magnification	Bố cục và độ phóng đại
@@ -2271,6 +2301,7 @@ comment menu	Edit	Sửa
 	Set status Rejected	Đặt trạng thái Đã từ chối
 	Set status Unmarked	Đặt trạng thái Chưa đánh dấu
 	Set tab order	Đặt thứ tự tab
+	Set calculation order	Đặt thứ tự tính toán
 	Set the image of {name}	Đặt hình ảnh của {name}
 	Shadings	Chuyển sắc
 	Show a field	Hiện một trường
@@ -2588,6 +2619,13 @@ certificate	SHA-256 digest	Giá trị băm SHA-256
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} tên trường trùng với các tệp trước và sẽ được đổi tên: {list}
 @plural	{n} object selected|{n} objects selected	Đã chọn {n} đối tượng
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Đã tải xuống {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} phép tính giờ dùng tên mới.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Thứ tự tính toán có {n} mục không tính gì. "Sửa thứ tự" sẽ xóa chúng.
+@plural	{fields} reads it|{fields} read it	{fields} đọc nó
+@plural	{n} field shows an old value|{n} fields show old values	{n} trường hiển thị giá trị cũ
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} được tính trước {fields} mà nó đọc.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Còn {n} trường khác được tính quá sớm.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} không có trong thứ tự lưu trong PDF, nên các trình xem PDF khác có thể không tính.
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
@@ -2687,6 +2725,14 @@ key	Space	Space
 	Words	Từ
 	“{name}” changed on disk after it was opened or last saved. Saving now replaces that newer version with this one.	“{name}” đã thay đổi trên đĩa sau khi được mở hoặc lưu lần cuối. Lưu lúc này sẽ thay thế phiên bản mới hơn đó bằng phiên bản này.
 @id	file.word_count	Đếm từ…
+	Bulleted list	Danh sách dấu đầu dòng
+	Numbered list	Danh sách đánh số
+	Alignment	Căn lề
+	Paragraph spacing	Khoảng cách đoạn
+	Superscript	Chỉ số trên
+	Subscript	Chỉ số dưới
+	Less	Ít hơn
+	Other options	Tùy chọn khác
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Bạn đang xem phiên bản đã ký của “{from}” (bản sửa đổi {rev}). Đây là ảnh nhanh: các thay đổi ở đây không được áp dụng đến bản gốc.
@@ -2710,3 +2756,27 @@ key	Space	Space
 	Edit this PDF	Chỉnh sửa PDF này
 	Export this PDF	Xuất PDF này
 	Find text or tools	Tìm văn bản hoặc công cụ
+
+# Prepare a form ▸ Text field table
+	Add text field table	Thêm bảng trường văn bản
+	Text field table	Bảng trường văn bản
+	Text Field Table	Bảng trường văn bản
+	Columns	Cột
+	Row spacing	Khoảng cách hàng
+	Column spacing	Khoảng cách cột
+	First row number	Số hàng đầu tiên
+	Column widths	Độ rộng cột
+	Distribute evenly	Phân bố đều
+	Field names	Tên trường
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N hoặc {row} là số hàng, {col} là số cột, {seq} là số ô. Nếu không có cái nào, số hàng được thêm vào cuối.
+	Column {n}	Cột {n}
+	Add fields	Thêm các trường
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	các hàng quá thấp: hãy làm vùng cao hơn, hoặc dùng ít hàng hơn hay khoảng cách hàng nhỏ hơn
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	một cột quá hẹp: hãy làm vùng rộng hơn, cho cột thêm độ rộng, hoặc dùng ít cột hơn hay khoảng cách cột nhỏ hơn
+	field names can't contain a period: {name}	tên trường không được chứa dấu chấm: {name}
+	two cells would both be named {name}	hai ô sẽ cùng có tên {name}
+	a field named {name} already exists	đã có trường tên {name}
+	a table has 1 to {max} rows	một bảng có từ 1 đến {max} hàng
+	a table has 1 to {max} columns	một bảng có từ 1 đến {max} cột
+	the first row number can be at most {max}	số hàng đầu tiên tối đa là {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	vùng, khoảng cách và độ rộng cột phải là số, khoảng cách từ 0 trở lên và mỗi độ rộng lớn hơn 0

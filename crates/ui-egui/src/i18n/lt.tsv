@@ -685,6 +685,36 @@
 	Larger pages	Didesni puslapiai
 	Later	Vėliau
 	Later in tab order	Vėlesnė skirtukų tvarka
+	Calculation order	Skaičiavimo tvarka
+	Fix order	Pataisyti tvarką
+	Move only what must move, so every field calculates after the fields it reads.	Perkelia tik tai, ką būtina, kad kiekvienas laukas būtų skaičiuojamas po laukų, kuriuos jis skaito.
+	Earlier in calculation order	Anksčiau skaičiavimo tvarkoje
+	Later in calculation order	Vėliau skaičiavimo tvarkoje
+	Too early	Per anksti
+	Reads {name}, which calculates later, so it shows an old value.	Skaito {name}, kuris skaičiuojamas vėliau, todėl rodo seną reikšmę.
+	Loop	Ciklas
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Skaito {names}, kurie savo ruožtu skaito jį. Jokia tvarka neištaisys ciklo: pakeiskite vieną iš formulių.
+	Not in order	Ne tvarkoje
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Trūksta PDF faile įrašytoje skaičiavimo tvarkoje: kitos PDF peržiūros programos gali jo neskaičiuoti.
+	Back to Prepare a form	Grįžti į „Rengti formą“
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Nė vienas šios formos laukas dar neskaičiuoja savo reikšmės. Nustatykite laukui skaičiavimą jo savybių kortelėje „Skaičiavimas“, ir jis bus rodomas čia.
+	{names} and {last}	{names} ir {last}
+	{field} reads no other field	{field} neskaito jokio kito lauko
+	{field} reads {fields}	{field} skaito {fields}
+	No field reads it	Jo neskaito joks laukas
+	The order saved in the PDF needs tidying	PDF faile įrašytą tvarką reikia sutvarkyti
+	Moves only what must move	Perkelia tik tai, ką būtina
+	Every field calculates after the fields it reads.	Kiekvienas laukas apskaičiuojamas po laukų, kuriuos skaito.
+	Every field outside a loop calculates after the fields it reads.	Kiekvienas laukas už ciklo ribų apskaičiuojamas po laukų, kuriuos skaito.
+	{field} reads its own value	{field} skaito savo paties reikšmę
+	{fields} read each other	{fields} skaito vienas kitą
+	No order can fix a loop. Change one of the formulas.	Jokia tvarka neištaisys ciklo. Pakeiskite vieną iš formulių.
+	Edit {field}'s formula	Redaguoti lauko {field} formulę
+	Order · top calculates first	Tvarka · viršutinis apskaičiuojamas pirmas
+	Script	Scenarijus
+	Links on page	Ryšiai puslapyje
+	Show on the page which fields each field reads	Rodyti puslapyje, kuriuos laukus skaito kiekvienas laukas
+	Drag a field to move it, or select it and press {up} or {down}.	Vilkite lauką, kad jį perkeltumėte, arba pažymėkite jį ir paspauskite {up} arba {down}.
 	Layers	Sluoksniai
 	Layers Panel and Page	Sluoksnių skydelis ir puslapis
 	Layout and Magnification	Išdėstymas ir mastelis
@@ -2281,6 +2311,7 @@ comment menu	Edit	Redaguoti
 	Set status Rejected	Nustatyti būseną „Atmesta“
 	Set status Unmarked	Nustatyti būseną „Nežymėta“
 	Set tab order	Nustatyti tabuliavimo tvarką
+	Set calculation order	Nustatyti skaičiavimo tvarką
 	Set the image of {name}	Nustatyti {name} paveikslėlį
 	Shadings	Spalvų perėjimai
 	Show a field	Rodyti lauką
@@ -2598,6 +2629,13 @@ certificate	SHA-256 digest	SHA-256 santrauka
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} lauko pavadinimas sutampa su ankstesniuose failuose esančių laukų pavadinimais ir bus pervadintas: {list}|{n} laukų pavadinimai sutampa su ankstesniuose failuose esančių laukų pavadinimais ir bus pervadinti: {list}|{n} laukų pavadinimų sutampa su ankstesniuose failuose esančių laukų pavadinimais ir bus pervadinta: {list}
 @plural	{n} object selected|{n} objects selected	Pažymėtas {n} objektas|Pažymėti {n} objektai|Pažymėta {n} objektų
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Atsisiųstas {n} PDF failas|Atsisiųsti {n} PDF failai|Atsisiųsta {n} PDF failų
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} skaičiavimas dabar naudoja naują pavadinimą.|{n} skaičiavimai dabar naudoja naują pavadinimą.|{n} skaičiavimų dabar naudoja naują pavadinimą.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Skaičiavimo tvarkoje yra {n} įrašas, kuris nieko neskaičiuoja. „Pataisyti tvarką“ jį pašalina.|Skaičiavimo tvarkoje yra {n} įrašai, kurie nieko neskaičiuoja. „Pataisyti tvarką“ juos pašalina.|Skaičiavimo tvarkoje yra {n} įrašų, kurie nieko neskaičiuoja. „Pataisyti tvarką“ juos pašalina.
+@plural	{fields} reads it|{fields} read it	{fields} jį skaito|{fields} jį skaito|{fields} jį skaito
+@plural	{n} field shows an old value|{n} fields show old values	{n} laukas rodo seną reikšmę|{n} laukai rodo senas reikšmes|{n} laukų rodo senas reikšmes
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} apskaičiuojamas anksčiau už {fields}, kurį skaito.|{field} apskaičiuojamas anksčiau už {fields}, kuriuos skaito.|{field} apskaičiuojamas anksčiau už {fields}, kuriuos skaito.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Dar {n} laukas apskaičiuojamas per anksti.|Dar {n} laukai apskaičiuojami per anksti.|Dar {n} laukų apskaičiuojama per anksti.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jo neapskaičiuoti.|{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jų neapskaičiuoti.|{fields} nėra PDF faile įrašytoje tvarkoje, todėl kitos PDF peržiūros programos gali jų neapskaičiuoti.
 key	Ctrl	Ctrl
 key	Shift	Shift
 key	Delete	Delete
@@ -2705,3 +2743,35 @@ theme	Appearance	Išvaizda
 	Edit this PDF	Redaguoti šį PDF
 	Export this PDF	Eksportuoti šį PDF
 	Find text or tools	Rasti tekstą arba įrankius
+	Bulleted list	Sąrašas su ženkleliais
+	Numbered list	Numeruotas sąrašas
+	Alignment	Lygiuotė
+	Superscript	Viršutinis indeksas
+	Subscript	Apatinis indeksas
+	Paragraph spacing	Tarpas tarp pastraipų
+	Less	Mažiau
+	Other options	Kitos parinktys
+
+# Prepare a form ▸ Text field table
+	Add text field table	Pridėti teksto laukų lentelę
+	Text field table	Teksto laukų lentelė
+	Text Field Table	Teksto laukų lentelė
+	Columns	Stulpeliai
+	Row spacing	Tarpas tarp eilučių
+	Column spacing	Tarpas tarp stulpelių
+	First row number	Pirmosios eilutės numeris
+	Column widths	Stulpelių pločiai
+	Distribute evenly	Paskirstyti tolygiai
+	Field names	Laukų pavadinimai
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N arba {row} – eilutės numeris, {col} – stulpelio numeris, {seq} – langelio numeris. Jei nė vieno nėra, eilutės numeris pridedamas gale.
+	Column {n}	Stulpelis {n}
+	Add fields	Pridėti laukus
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	eilutės per žemos: padidinkite srities aukštį arba naudokite mažiau eilučių ar mažesnį tarpą tarp jų
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	stulpelis per siauras: praplatinkite sritį, skirkite stulpeliui daugiau pločio arba naudokite mažiau stulpelių ar mažesnį tarpą tarp jų
+	field names can't contain a period: {name}	laukų pavadinimuose negali būti taško: {name}
+	two cells would both be named {name}	du langeliai būtų pavadinti {name}
+	a field named {name} already exists	laukas pavadinimu {name} jau yra
+	a table has 1 to {max} rows	lentelėje gali būti nuo 1 iki {max} eilučių
+	a table has 1 to {max} columns	lentelėje gali būti nuo 1 iki {max} stulpelių
+	the first row number can be at most {max}	pirmosios eilutės numeris gali būti ne didesnis nei {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	sritis, tarpai ir stulpelių pločiai turi būti skaičiai, tarpai – 0 arba daugiau, o kiekvienas plotis – daugiau nei 0

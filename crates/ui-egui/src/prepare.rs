@@ -17,12 +17,14 @@ use crate::widgets;
 
 const SELECT_BLUE: Color32 = Color32::from_rgb(0x14, 0x73, 0xE6);
 /// Acrobat's field fill in Prepare Form (light blue).
-const FIELD_FILL: Color32 = Color32::from_rgba_premultiplied(0x1B, 0x34, 0x54, 0x59);
+pub(crate) const FIELD_FILL: Color32 = Color32::from_rgba_premultiplied(0x1B, 0x34, 0x54, 0x59);
 
 /// The Add form components tools.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum FieldTool {
     Text,
+    /// Rows and columns of text fields in the area drawn, set up in a window first.
+    TextTable,
     CheckBox,
     Radio,
     Combo,
@@ -33,8 +35,9 @@ pub enum FieldTool {
     Signature,
 }
 
-pub const FIELD_TOOLS: [FieldTool; 9] = [
+pub const FIELD_TOOLS: [FieldTool; 10] = [
     FieldTool::Text,
+    FieldTool::TextTable,
     FieldTool::CheckBox,
     FieldTool::Radio,
     FieldTool::Combo,
@@ -49,6 +52,7 @@ impl FieldTool {
     pub fn command(self) -> &'static str {
         match self {
             FieldTool::Text => "form.add.text",
+            FieldTool::TextTable => "form.add.text_table",
             FieldTool::CheckBox => "form.add.checkbox",
             FieldTool::Radio => "form.add.radio",
             FieldTool::Combo => "form.add.combo",
@@ -67,6 +71,7 @@ impl FieldTool {
     pub fn label(self) -> &'static str {
         match self {
             FieldTool::Text => "Text field",
+            FieldTool::TextTable => "Text field table",
             FieldTool::CheckBox => "Checkbox",
             FieldTool::Radio => "Radio button",
             FieldTool::Combo => "Drop-down list",
@@ -82,7 +87,8 @@ impl FieldTool {
     /// join it with the next free choice.
     pub fn new_field(self, join: Option<&FormField>) -> NewField {
         match self {
-            FieldTool::Text => NewField::Text { multiline: false },
+            // A table's cells are text fields.
+            FieldTool::Text | FieldTool::TextTable => NewField::Text { multiline: false },
             FieldTool::CheckBox => NewField::CheckBox,
             FieldTool::Radio => match join.filter(|f| f.kind == FormFieldKind::Radio) {
                 Some(g) => {
@@ -105,6 +111,7 @@ impl FieldTool {
     /// Width and height in points of a field placed with a single click.
     pub fn default_size(self) -> (f64, f64) {
         match self {
+            FieldTool::TextTable => (180.0, 110.0),
             FieldTool::CheckBox | FieldTool::Radio => (14.0, 14.0),
             FieldTool::List => (144.0, 54.0),
             FieldTool::Button => (72.0, 22.0),
@@ -178,6 +185,23 @@ fn to_user(xf: &PageXform, info: &DocInfo, page: usize, p: Pos2) -> [f64; 2] {
     [u[0] as f64, u[1] as f64]
 }
 
+/// Where a table goes, in view space, for a screen rect drawn with the table tool: a click (a rect
+/// under 4 pixels either way) puts the default size's top-left corner at the pointer, moved in from
+/// the page's edges as far as it takes to stay on the page.
+fn table_rect(xf: &PageXform, r: Rect) -> [f64; 4] {
+    let (x0, y0) = xf.screen_to_view(r.min);
+    if r.width() < 4.0 || r.height() < 4.0 {
+        let (pw, ph) = (f64::from(xf.pw), f64::from(xf.ph));
+        let (dw, dh) = FieldTool::TextTable.default_size();
+        // Smaller than the default only on a page smaller than it.
+        let (w, h) = (dw.min(pw), dh.min(ph));
+        let (x, y) = (f64::from(x0).min(pw - w).max(0.0), f64::from(y0).min(ph - h).max(0.0));
+        return [x, y, x + w, y + h];
+    }
+    let (x1, y1) = xf.screen_to_view(r.max);
+    [x0, y0, x1, y1].map(f64::from)
+}
+
 /// A screen rect → a normalised user-space rect.
 fn user_rect(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     let (a, b) = (to_user(xf, info, page, r.min), to_user(xf, info, page, r.max));
@@ -208,6 +232,8 @@ pub(crate) struct Outcome {
     pub properties: bool,
     /// A field was placed: go back to the Select tool.
     pub placed: bool,
+    /// A table of text fields was drawn: open its window for this page and area (view space).
+    pub table: Option<(usize, [f64; 4])>,
 }
 
 /// Pointer input on one page while preparing a form.
@@ -223,7 +249,7 @@ pub(crate) fn page_input(
     allowed: bool,
     view: &mut DocView,
 ) -> Outcome {
-    let mut out = Outcome { consumed: false, properties: false, placed: false };
+    let mut out = Outcome { consumed: false, properties: false, placed: false, table: None };
     let pointer = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos()));
     let prep = &mut view.prepare;
 
@@ -267,6 +293,11 @@ pub(crate) fn page_input(
                 }
                 Grab::Draw(from) => {
                     let Some(tool) = tool else { return out };
+                    if tool == FieldTool::TextTable {
+                        out.table = Some((page, table_rect(xf, Rect::from_two_pos(from, end).intersect(xf.rect))));
+                        out.placed = true;
+                        return out;
+                    }
                     let r = Rect::from_two_pos(from, end).intersect(xf.rect);
                     let rect = user_rect(xf, info, page, r);
                     let rect = if r.width() < 4.0 || r.height() < 4.0 {
@@ -312,6 +343,11 @@ pub(crate) fn page_input(
             if resp.clicked() {
                 // A click without a drag: finish at once.
                 prep.grab = None;
+                if tool == FieldTool::TextTable {
+                    out.table = Some((page, table_rect(xf, Rect::from_min_size(p, egui::Vec2::ZERO))));
+                    out.placed = true;
+                    return out;
+                }
                 let at = to_user(xf, info, page, p);
                 let (w, h) = tool.default_size();
                 let join = prep.selected.as_ref().and_then(|(n, _)| form.iter().find(|f| &f.name == n));

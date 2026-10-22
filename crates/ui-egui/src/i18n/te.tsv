@@ -496,6 +496,36 @@ comment menu	Edit	సవరించు
 	Could not save: {e}	సేవ్ చేయడం సాధ్యం కాలేదు: {e}
 	Earlier in tab order	ట్యాబ్ క్రమంలో ముందు
 	Later in tab order	ట్యాబ్ క్రమంలో తర్వాత
+	Calculation order	గణన క్రమం
+	Fix order	క్రమాన్ని సరిచేయండి
+	Move only what must move, so every field calculates after the fields it reads.	ప్రతి ఫీల్డ్ అది చదివే ఫీల్డ్‌ల తర్వాత లెక్కించబడేలా, తప్పనిసరిగా కదలాల్సినవి మాత్రమే కదిలిస్తుంది.
+	Earlier in calculation order	గణన క్రమంలో ముందు
+	Later in calculation order	గణన క్రమంలో తర్వాత
+	Too early	చాలా ముందుగా
+	Reads {name}, which calculates later, so it shows an old value.	{name}ను చదువుతుంది, అది తర్వాత లెక్కించబడుతుంది, కాబట్టి పాత విలువను చూపుతుంది.
+	Loop	లూప్
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names}ను చదువుతుంది, అవి దీన్ని తిరిగి చదువుతాయి. ఏ క్రమమూ లూప్‌ను సరిచేయదు: సూత్రాలలో ఒకదాన్ని మార్చండి.
+	Not in order	క్రమంలో లేదు
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDFలో సేవ్ చేసిన గణన క్రమంలో లేదు: ఇతర PDF వీక్షకులు దీన్ని లెక్కించకపోవచ్చు.
+	Back to Prepare a form	‘ఫారాన్ని సిద్ధం చేయి’కి తిరిగి వెళ్లు
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	ఈ ఫారంలో ఏ ఫీల్డ్ ఇంకా తన విలువను గణించదు. ఫీల్డ్ లక్షణాలలోని గణన ట్యాబ్‌లో దానికి గణన ఇవ్వండి, అది ఇక్కడ కనిపిస్తుంది.
+	{names} and {last}	{names} మరియు {last}
+	{field} reads no other field	{field} మరే ఫీల్డ్‌నూ చదవదు
+	{field} reads {fields}	{field} {fields}ని చదువుతుంది
+	No field reads it	దాన్ని ఏ ఫీల్డ్ చదవదు
+	The order saved in the PDF needs tidying	PDFలో సేవ్ చేసిన క్రమాన్ని సరిదిద్దాలి
+	Moves only what must move	తప్పనిసరిగా జరపాల్సినవాటినే జరుపుతుంది
+	Every field calculates after the fields it reads.	ప్రతి ఫీల్డ్ తాను చదివే ఫీల్డ్‌ల తర్వాత గణించబడుతుంది.
+	Every field outside a loop calculates after the fields it reads.	లూప్ బయట ఉన్న ప్రతి ఫీల్డ్ తాను చదివే ఫీల్డ్‌ల తర్వాత గణించబడుతుంది.
+	{field} reads its own value	{field} తన సొంత విలువను చదువుతుంది
+	{fields} read each other	{fields} ఒకదానినొకటి చదువుతాయి
+	No order can fix a loop. Change one of the formulas.	ఏ క్రమమూ లూప్‌ను సరిచేయలేదు. సూత్రాల్లో ఒకదాన్ని మార్చండి.
+	Edit {field}'s formula	{field} సూత్రాన్ని సవరించు
+	Order · top calculates first	క్రమం · పైది ముందుగా గణించబడుతుంది
+	Script	స్క్రిప్ట్
+	Links on page	పేజీలో లింక్‌లు
+	Show on the page which fields each field reads	ప్రతి ఫీల్డ్ ఏ ఫీల్డ్‌లను చదువుతుందో పేజీలో చూపించు
+	Drag a field to move it, or select it and press {up} or {down}.	ఫీల్డ్‌ను జరపడానికి లాగండి, లేదా దాన్ని ఎంచుకుని {up} లేదా {down} నొక్కండి.
 	From:	కనిష్ఠం:
 	To:	గరిష్ఠం:
 	High Resolution	అధిక రిజల్యూషన్
@@ -1847,6 +1877,7 @@ action wizard	Start	ప్రారంభించు
 	Delete field	ఫీల్డ్‌ను తొలగించు
 	Duplicate field	ఫీల్డ్‌ను నకలు చేయి
 	Set tab order	ట్యాబ్ క్రమాన్ని సెట్ చేయి
+	Set calculation order	గణన క్రమాన్ని సెట్ చేయండి
 	Change initial view	ప్రారంభ వీక్షణను మార్చు
 	Set alternate text	ప్రత్యామ్నాయ టెక్స్ట్‌ను సెట్ చేయి
 	Mark figure as decorative	చిత్రాన్ని అలంకరణగా గుర్తించు
@@ -2242,6 +2273,13 @@ animation effects	Off	ఆఫ్
 	no unused output name	ఉపయోగించని అవుట్‌పుట్ పేరు లేదు
 	no output folder was chosen	అవుట్‌పుట్ ఫోల్డర్ ఎంచుకోలేదు
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF డౌన్‌లోడ్ చేయబడింది|{n} PDFలు డౌన్‌లోడ్ చేయబడ్డాయి
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} గణన ఇప్పుడు కొత్త పేరును ఉపయోగిస్తుంది.|{n} గణనలు ఇప్పుడు కొత్త పేరును ఉపయోగిస్తాయి.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	గణన క్రమంలో ఏదీ లెక్కించని {n} ఎంట్రీ ఉంది. "క్రమాన్ని సరిచేయండి" దాన్ని తొలగిస్తుంది.|గణన క్రమంలో ఏదీ లెక్కించని {n} ఎంట్రీలు ఉన్నాయి. "క్రమాన్ని సరిచేయండి" వాటిని తొలగిస్తుంది.
+@plural	{fields} reads it|{fields} read it	{fields} దాన్ని చదువుతుంది|{fields} దాన్ని చదువుతాయి
+@plural	{n} field shows an old value|{n} fields show old values	{n} ఫీల్డ్ పాత విలువను చూపుతోంది|{n} ఫీల్డ్‌లు పాత విలువలను చూపుతున్నాయి
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} తాను చదివే {fields} కంటే ముందు గణించబడుతుంది.|{field} తాను చదివే {fields} కంటే ముందు గణించబడుతుంది.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	మరో {n} ఫీల్డ్ చాలా ముందుగా గణించబడుతుంది.|మరో {n} ఫీల్డ్‌లు చాలా ముందుగా గణించబడతాయి.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} PDFలో సేవ్ చేసిన క్రమంలో లేదు, కాబట్టి ఇతర PDF వ్యూయర్‌లు దాన్ని గణించకపోవచ్చు.|{fields} PDFలో సేవ్ చేసిన క్రమంలో లేవు, కాబట్టి ఇతర PDF వ్యూయర్‌లు వాటిని గణించకపోవచ్చు.
 	Scan	స్కాన్
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	తెల్ల కాగితంపై సంతకం చేసి, ప్రకాశవంతమైన, సమానమైన వెలుతురులో దాని ఫోటో తీయండి (ఫ్లాష్ ఉపయోగించండి). ఫోటోను ఎంచుకోండి లేదా ఇక్కడ వదలండి: PdfCraft సంతకాన్ని కనుగొని కాగితాన్ని తొలగిస్తుంది.
 	Choose photo…	ఫోటో ఎంచుకోండి…
@@ -2363,3 +2401,32 @@ animation effects	Off	ఆఫ్
 	Edit this PDF	ఈ PDFను సవరించు
 	Export this PDF	ఈ PDFను ఎగుమти చేయి
 	Find text or tools	వచనం లేదా సాధనాలను కనుగొనండి
+	Font	ఫాంట్
+	Bulleted list	బుల్లెట్ జాబితా
+	Numbered list	సంఖ్యల జాబితా
+	Alignment	అమరిక
+	Superscript	సూపర్‌స్క్రిప్ట్
+	Subscript	సబ్‌స్క్రిప్ట్
+	Paragraph spacing	పేరా అంతరం
+	Less	తక్కువ
+	Other options	ఇతర ఎంపికలు
+
+# Prepare a form ▸ Text field table
+	Add text field table	టెక్స్ట్ ఫీల్డ్ పట్టిక జోడించు
+	Text field table	టెక్స్ట్ ఫీల్డ్ పట్టిక
+	Text Field Table	టెక్స్ట్ ఫీల్డ్ పట్టిక
+	Columns	నిలువు వరుసలు
+	Row spacing	వరుసల మధ్య దూరం
+	Column spacing	నిలువు వరుసల మధ్య దూరం
+	First row number	మొదటి వరుస సంఖ్య
+	Column widths	నిలువు వరుసల వెడల్పులు
+	Distribute evenly	సమానంగా పంచు
+	Field names	ఫీల్డ్ పేర్లు
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N లేదా {row} వరుస సంఖ్య, {col} నిలువు వరుస సంఖ్య, {seq} గడి సంఖ్య. వీటిలో ఏదీ లేకపోతే, వరుస సంఖ్య చివర చేరుతుంది.
+	Column {n}	నిలువు వరుస {n}
+	Add fields	ఫీల్డ్‌లు జోడించు
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	వరుసలు చాలా తక్కువ ఎత్తులో ఉన్నాయి: ప్రాంతాన్ని ఎత్తుగా చేయండి, లేదా తక్కువ వరుసలు లేదా తక్కువ వరుస దూరం వాడండి
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	ఒక నిలువు వరుస చాలా ఇరుకుగా ఉంది: ప్రాంతాన్ని వెడల్పు చేయండి, ఆ నిలువు వరుసకు ఎక్కువ వెడల్పు ఇవ్వండి, లేదా తక్కువ నిలువు వరుసలు లేదా తక్కువ దూరం వాడండి
+	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
+	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
+	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది

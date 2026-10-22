@@ -355,6 +355,27 @@ pub fn tools() -> Vec<ToolDef> {
             }),
             &["doc", "page", "type", "rect"],
         )),
+        t(
+            "form_add_field_table",
+            "Prepare form: add a table of text fields",
+            "Divide rect into rows and columns of text fields, one per cell, as one undo step. rect in points from the top-left of the displayed page [x0, y0, x1, y1]; rows 1-100 from the top; columns 1-50, or as many as names or widths list. Each column names its cells from its pattern in names: an N on its own after _ - / or : (price_N), # or {row} is the row number, {col} the column number, {seq} counts every cell along the rows, starting at first_row; with none of them the row number goes at the end. Rows count from first_row (default 1). Without names the columns are Table1_N, Table1_c2_N, … using the first free TableK. widths are relative (default equal); row_gap and column_gap are points between cells (default 0). Nothing is added if a cell would be under 4 points or a name would contain a period, repeat, or already exist; the error says which. Returns the fields' names. Undoable.",
+        )
+        .cmd("form.add.text_table")
+        .with(schema(
+            json!({
+                "doc": doc(),
+                "page": { "type": "integer", "minimum": 1 },
+                "rect": { "type": "array", "items": { "type": "number" }, "minItems": 4, "maxItems": 4 },
+                "rows": { "type": "integer", "minimum": 1, "maximum": 100 },
+                "columns": { "type": "integer", "minimum": 1, "maximum": 50 },
+                "names": { "type": "array", "items": { "type": "string" }, "description": "One name pattern per column." },
+                "widths": { "type": "array", "items": { "type": "number", "exclusiveMinimum": 0 }, "description": "Relative column widths, one per column." },
+                "row_gap": { "type": "number", "minimum": 0 },
+                "column_gap": { "type": "number", "minimum": 0 },
+                "first_row": { "type": "integer", "minimum": 0, "maximum": 99999 },
+            }),
+            &["doc", "page", "rect", "rows"],
+        )),
         t("stamp_custom", "Add a custom stamp", "Stamp a picture: a PDF page (file_page, default 1) or an image file, centred at at [x, y] (points from the top-left of the displayed page) at its natural size, at most 200 pt. name labels it (default: the file name). Undoable.")
             .cmd("comment.stamp")
             .with(schema(
@@ -374,7 +395,7 @@ pub fn tools() -> Vec<ToolDef> {
         t(
             "form_set_props",
             "Field properties",
-            "Change field properties: give field for one field, or fields for a list of unique field names (1–1000). A bulk change is atomic and one Undo step; an invalid or locked field leaves every field unchanged. Only the given properties change, and partial appearance changes preserve each field's other colours and font. name (rename), rect (position), rotation and caption require a single field. caption changes one push-button normal label (widget: 1-based index, default 1); an empty string clears it. Other widgets and icon-only layouts are preserved. General and Options: tooltip, read_only, required, multiline, max_length (0 = no limit), options (combo/list items), font_size (0 = auto), format, validate, calculate (Acrobat's native AF rules). Options: align (left, center, right), default (Reset form's value; check boxes/radio buttons use their on state, \"\" for off), flags { scroll, rich_text, password, file_select, spell_check, comb (needs max_length), sort, editable, multi_select, commit_immediately }, check_style (check boxes/radio buttons: check, circle, cross, diamond, square, star). rotation is 0, 90, 180 or 270 degrees counterclockwise and swaps width/height when the axis changes. Undoable.",
+            "Change field properties: give field for one field, or fields for a list of unique field names (1–1000). A bulk change is atomic and one Undo step; an invalid or locked field leaves every field unchanged. Only the given properties change, and partial appearance changes preserve each field's other colours and font. name (rename), rect (position), rotation and caption require a single field. A rename also renames the field in the calculations that read it (calculate field lists and notation, and getField calls naming it in a string literal; names built at run time are not rewritten), in the same Undo step, and formulas_updated lists the fields whose calculation changed. caption changes one push-button normal label (widget: 1-based index, default 1); an empty string clears it. Other widgets and icon-only layouts are preserved. General and Options: tooltip, read_only, required, multiline, max_length (0 = no limit), options (combo/list items), font_size (0 = auto), format, validate, calculate (Acrobat's native AF rules). Options: align (left, center, right), default (Reset form's value; check boxes/radio buttons use their on state, \"\" for off), flags { scroll, rich_text, password, file_select, spell_check, comb (needs max_length), sort, editable, multi_select, commit_immediately }, check_style (check boxes/radio buttons: check, circle, cross, diamond, square, star). rotation is 0, 90, 180 or 270 degrees counterclockwise and swaps width/height when the axis changes. Undoable.",
         )
         .with(schema(
             json!({
@@ -408,6 +429,12 @@ pub fn tools() -> Vec<ToolDef> {
         t("form_tab_order", "Set the tab order", "Set the tab order of pages (default all): row (top to bottom, left to right), column, structure, or annotations (unspecified). Or order tabs manually: `field` with `move` earlier|later moves that field one place on its page. Returns the resulting order of fields. Undoable.")
             .with(schema(
                 json!({ "doc": doc(), "order": { "type": "string", "enum": ["row", "column", "structure", "annotations"] }, "pages": pages("to set (default: all)"), "field": { "type": "string" }, "move": { "type": "string", "enum": ["earlier", "later"] } }),
+                &["doc"],
+            )),
+        t("form_calculation_order", "Read or set the calculation order", "The calculated fields in the order they calculate (Acrobat: Set Field Calculation Order), each with the fields its formula reads (`reads`; a script's names built at run time aren't known) and its `issues`: runs_too_early (it reads `field`, which calculates after it, so it shows a stale value), cycle (it reads `fields`, which read it back: no order fixes that, a formula has to change) and not_in_order (the PDF's order leaves it out, so other viewers may not calculate it). `extra` lists entries of the PDF's order that calculate nothing. Without a change it only reads. Changes, one at a time: `order` (these fields first, in this order, then the other calculated fields in their order), `field` with `move` earlier|later (one place), or `fix` true (only what must move moves, so every field calculates after the fields it reads, and the extra entries go). A change recalculates the form. Undoable.")
+            .cmd("form.calculation_order")
+            .with(schema(
+                json!({ "doc": doc(), "order": { "type": "array", "items": { "type": "string" } }, "field": { "type": "string" }, "move": { "type": "string", "enum": ["earlier", "later"] }, "fix": { "type": "boolean" } }),
                 &["doc"],
             )),
         t("doc_export_data", "Export comments or form data", "Write comments and/or form data to path; the extension picks the format: .xfdf or .fdf (comments and/or fields), .xml, .csv or .txt (form data). For an XFA form, .xml is its data alone (rooted at the form's root data node, as Acrobat exports it) and .xdp an XML Data Package holding the whole datasets. what: all (default), comments, fields.")

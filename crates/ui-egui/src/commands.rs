@@ -313,6 +313,15 @@ impl PdfCraftApp {
                 }
             }
             "form.fields" => self.choose_right_panel(Some(RightPanel::Fields)),
+            "form.calculation_order" => {
+                self.left = crate::LeftPanel::CalculationOrder;
+                // The page edits the fields, so Preview ends; the page grid closes, as for a tool.
+                self.form_preview = false;
+                if let Some(v) = active.and_then(|i| self.views.get_mut(i)) {
+                    v.organize = false;
+                }
+                self.reveal_tools();
+            }
             "comment.flatten" => {
                 self.apply_edit(Edit::Flatten { comments: true, fields: false });
             }

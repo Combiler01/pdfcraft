@@ -477,6 +477,36 @@
 	Could not save: {e}	Kaydedilemedi: {e}
 	Earlier in tab order	Sekme sırasında daha önce
 	Later in tab order	Sekme sırasında daha sonra
+	Calculation order	Hesaplama sırası
+	Fix order	Sırayı düzelt
+	Move only what must move, so every field calculates after the fields it reads.	Her alan okuduğu alanlardan sonra hesaplansın diye yalnızca taşınması gerekenleri taşır.
+	Earlier in calculation order	Hesaplama sırasında daha önce
+	Later in calculation order	Hesaplama sırasında daha sonra
+	Too early	Çok erken
+	Reads {name}, which calculates later, so it shows an old value.	Daha sonra hesaplanan {name} alanını okur, bu yüzden eski bir değer gösterir.
+	Loop	Döngü
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	{names} alanlarını okur, onlar da bu alanı okur. Hiçbir sıra bir döngüyü düzeltemez: formüllerden birini değiştirin.
+	Not in order	Sırada değil
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF'te kayıtlı hesaplama sırasında yok: diğer PDF görüntüleyicileri bunu hesaplamayabilir.
+	Back to Prepare a form	Form hazırla'ya geri dön
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Bu formdaki hiçbir alan henüz değerini hesaplamıyor. Bir alana özelliklerinin Hesapla sekmesinde bir hesaplama verin, burada görünür.
+	{names} and {last}	{names} ve {last}
+	{field} reads no other field	{field} başka bir alanı okumuyor
+	{field} reads {fields}	{field} şunları okur: {fields}
+	No field reads it	Onu hiçbir alan okumuyor
+	The order saved in the PDF needs tidying	PDF'te kayıtlı sıranın düzenlenmesi gerekiyor
+	Moves only what must move	Yalnızca taşınması gerekeni taşır
+	Every field calculates after the fields it reads.	Her alan, okuduğu alanlardan sonra hesaplanır.
+	Every field outside a loop calculates after the fields it reads.	Döngü dışındaki her alan, okuduğu alanlardan sonra hesaplanır.
+	{field} reads its own value	{field} kendi değerini okuyor
+	{fields} read each other	{fields} birbirini okuyor
+	No order can fix a loop. Change one of the formulas.	Hiçbir sıra bir döngüyü düzeltemez. Formüllerden birini değiştirin.
+	Edit {field}'s formula	{field} formülünü düzenle
+	Order · top calculates first	Sıra · üstteki önce hesaplanır
+	Script	Betik
+	Links on page	Sayfadaki bağlantılar
+	Show on the page which fields each field reads	Her alanın hangi alanları okuduğunu sayfada göster
+	Drag a field to move it, or select it and press {up} or {down}.	Taşımak için bir alanı sürükleyin veya seçip {up} ya da {down} tuşuna basın.
 	From:	Başlangıç:
 	To:	Bitiş:
 	High Resolution	Yüksek Çözünürlük
@@ -1823,6 +1853,7 @@
 	Delete field	Alanı sil
 	Duplicate field	Alanı çoğalt
 	Set tab order	Sekme sırasını ayarla
+	Set calculation order	Hesaplama sırasını ayarla
 	Change initial view	İlk görünümü değiştir
 	Set alternate text	Alternatif metni ayarla
 	Mark figure as decorative	Şekli dekoratif olarak işaretle
@@ -2326,6 +2357,13 @@ animation effects	Off	Kapalı
 	no unused output name	kullanılmayan çıktı adı yok
 	no output folder was chosen	çıktı klasörü seçilmedi
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF indirildi
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} hesaplama artık yeni adı kullanıyor.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Hesaplama sırasında hiçbir şey hesaplamayan {n} giriş var. "Sırayı düzelt" bunları kaldırır.
+@plural	{fields} reads it|{fields} read it	Onu {fields} okuyor
+@plural	{n} field shows an old value|{n} fields show old values	{n} alan eski bir değer gösteriyor
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} önce hesaplanıyor; okuduğu {fields} daha sonra hesaplanıyor.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} alan daha çok erken hesaplanıyor.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields}, PDF'te kayıtlı sırada yok; bu yüzden diğer PDF görüntüleyicileri hesaplamayabilir.
 @plural	{n} field name collides with earlier files and will be renamed: {list}|{n} field names collide with earlier files and will be renamed: {list}	{n} alan adı önceki dosyalarla çakışıyor ve yeniden adlandırılacak: {list}
 	Scan	Tara
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Beyaz bir kâğıda imzanızı atın ve parlak, eşit ışıkta fotoğrafını çekin (flaş kullanın). Fotoğrafı seçin veya buraya bırakın: PdfCraft imzayı bulur ve kâğıdı kaldırır.
@@ -2450,3 +2488,32 @@ animation effects	Off	Kapalı
 	Edit this PDF	Bu PDF'i düzenle
 	Export this PDF	Bu PDF'i dışa aktar
 	Find text or tools	Metin veya araç bul
+	Font	Yazı tipi
+	Bulleted list	Madde işaretli liste
+	Numbered list	Numaralı liste
+	Alignment	Hizalama
+	Superscript	Üst simge
+	Subscript	Alt simge
+	Paragraph spacing	Paragraf aralığı
+	Less	Daha az
+	Other options	Diğer seçenekler
+
+# Prepare a form ▸ Text field table
+	Add text field table	Metin alanı tablosu ekle
+	Text field table	Metin alanı tablosu
+	Text Field Table	Metin alanı tablosu
+	Columns	Sütunlar
+	Row spacing	Satır aralığı
+	Column spacing	Sütun aralığı
+	First row number	İlk satır numarası
+	Column widths	Sütun genişlikleri
+	Distribute evenly	Eşit dağıt
+	Field names	Alan adları
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N veya {row} satır numarası, {col} sütun numarası, {seq} hücre numarasıdır. Hiçbiri yoksa satır numarası sona eklenir.
+	Column {n}	Sütun {n}
+	Add fields	Alanları ekle
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	satırlar çok kısa: alanı uzatın ya da daha az satır veya daha az satır aralığı kullanın
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	bir sütun çok dar: alanı genişletin, sütuna daha fazla yer verin ya da daha az sütun veya daha az sütun aralığı kullanın
+	field names can't contain a period: {name}	alan adları nokta içeremez: {name}
+	two cells would both be named {name}	iki hücrenin de adı {name} olurdu
+	a field named {name} already exists	{name} adlı bir alan zaten var

@@ -3401,6 +3401,65 @@ fn rotating_a_field_through_tools() {
     assert_eq!((rot, back), (0, before));
 }
 
+/// A table of text fields through the tool: laid out from the top of the page as displayed, named
+/// column by column, one undo step, and refused whole, with the reason, when any of it can't go in.
+#[test]
+fn adding_a_field_table_through_tools() {
+    let dir = workdir("field-table");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let table =
+        json!({ "doc": doc, "page": 1, "rect": [20, 20, 220, 120], "rows": 2, "names": ["desc_N", "price_N"], "widths": [3, 1], "row_gap": 10 });
+    assert_eq!(ok(&mut a, "form_add_field_table", table.clone())["fields"], json!(["desc_1", "price_1", "desc_2", "price_2"]));
+    let rects = |a: &mut Automation| {
+        let fields = ok(a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().clone();
+        fields.iter().map(|f| (f["name"].as_str().unwrap().to_owned(), f["rect"].clone())).collect::<Vec<_>>()
+    };
+    // 150 and 50 points wide, (100 - 10) / 2 = 45 high, the first row at the top.
+    let near = |v: &Value, want: [f64; 4]| v.as_array().unwrap().iter().zip(want).all(|(g, w)| (g.as_f64().unwrap() - w).abs() < 0.01);
+    let got = rects(&mut a);
+    for (name, want) in [
+        ("desc_1", [20.0, 20.0, 170.0, 65.0]),
+        ("price_1", [170.0, 20.0, 220.0, 65.0]),
+        ("desc_2", [20.0, 75.0, 170.0, 120.0]),
+        ("price_2", [170.0, 75.0, 220.0, 120.0]),
+    ] {
+        let rect = got.iter().find(|(n, _)| n == name).map(|(_, r)| r).unwrap();
+        assert!(near(rect, want), "{name}: {rect} != {want:?}");
+    }
+    // Without names, each table takes the first free base.
+    let plain = json!({ "doc": doc, "page": 2, "rect": [20, 20, 220, 120], "rows": 2 });
+    assert_eq!(ok(&mut a, "form_add_field_table", plain.clone())["fields"], json!(["Table1_1", "Table1_2"]));
+    assert_eq!(ok(&mut a, "form_add_field_table", plain)["fields"], json!(["Table2_1", "Table2_2"]));
+    let count = |a: &mut Automation| ok(a, "form_fields", json!({ "doc": doc }))["fields"].as_array().unwrap().len();
+    assert_eq!(count(&mut a), 8);
+    // Refused whole, saying why: nothing is added.
+    let refused = |a: &mut Automation, args: Value| match a.call("form_add_field_table", &args) {
+        Err(ToolError::InvalidArgs(m)) => m,
+        other => panic!("refused, not {other:?}"),
+    };
+    assert_eq!(refused(&mut a, table), "a field named \"desc_1\" already exists");
+    let small = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 30 });
+    assert!(refused(&mut a, small).starts_with("the rows are too short"));
+    let dotted = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 2, "names": ["a.{n}"] });
+    assert_eq!(refused(&mut a, dotted), "field names can't contain a period: \"a.1\"");
+    let disagree = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 2, "columns": 3, "names": ["a_N", "b_N"] });
+    assert!(refused(&mut a, disagree).contains("must agree"));
+    let wide = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": 2, "columns": 51 });
+    assert_eq!(refused(&mut a, wide), "a table has 1 to 50 columns");
+    let none = json!({ "doc": doc, "page": 1, "rect": [20, 200, 220, 300], "rows": -1 });
+    assert_eq!(refused(&mut a, none), "a table has 1 to 100 rows");
+    let huge = json!({ "doc": doc, "page": 1, "rect": [20, 200, 1e39, 300], "rows": 2 });
+    assert!(refused(&mut a, huge).starts_with("the area, the spacing and the column widths must be numbers"));
+    assert_eq!(count(&mut a), 8);
+    // The table tool's command runs it too.
+    let by_command = json!({ "id": "form.add.text_table", "params": { "doc": doc, "page": 3, "rect": [20, 20, 220, 120], "rows": 2 } });
+    assert_eq!(ok(&mut a, "command_run", by_command)["fields"], json!(["Table3_1", "Table3_2"]));
+    assert_eq!(count(&mut a), 10);
+    assert_eq!(ok(&mut a, "edit_undo", json!({ "doc": doc }))["undone"], "Add text field table");
+    assert_eq!(count(&mut a), 8, "one undo takes back the whole last table");
+}
+
 #[test]
 fn redacting_through_tools() {
     let dir = workdir("redact");
@@ -3809,6 +3868,121 @@ fn form_formats_and_calculations_through_tools() {
     ));
 }
 
+/// Renaming a field renames it in the formulas that read it: a sum dropped the field, notation
+/// read it as 0 and a script kept a stale value.
+#[test]
+fn renaming_a_field_keeps_the_formulas_that_read_it() {
+    let dir = workdir("formrename");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["a", "b", "c", "d", "e", "x", "sum", "product", "double", "total"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "sum", "calculate": { "op": "sum", "fields": ["a", "b"] } }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "product", "calculate": { "notation": "c * d" } }));
+    ok(
+        &mut a,
+        "form_set_script",
+        json!({ "doc": doc, "field": "double", "event": "calculate", "script": "event.value = getField(\"e\").value * 2;" }),
+    );
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": { "op": "sum", "fields": ["x"] } }));
+    let renamed = |a: &mut Automation, from: &str, to: &str| ok(a, "form_set_props", json!({ "doc": doc, "field": from, "name": to }));
+    assert_eq!(renamed(&mut a, "a", "qty")["formulas_updated"], json!(["sum"]));
+    assert_eq!(renamed(&mut a, "c", "price")["formulas_updated"], json!(["product"]));
+    assert_eq!(renamed(&mut a, "e", "base")["formulas_updated"], json!(["double"]));
+    assert_eq!(renamed(&mut a, "total", "grand")["formulas_updated"], json!([]), "a calculated field's own name is in no formula");
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "qty": "10", "b": "2", "price": "10", "d": "4", "base": "10", "x": "9" } }));
+    let values = |a: &mut Automation| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        let value = |name: &str| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).map(|x| x["value"].clone());
+        [value("sum"), value("product"), value("double"), value("grand")]
+    };
+    assert_eq!(values(&mut a), [Some(json!("12")), Some(json!("40")), Some(json!("20")), Some(json!("9"))]);
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let field = |name: &str| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).unwrap().clone();
+    assert_eq!(field("sum")["calculate"]["fields"], json!(["qty", "b"]));
+    assert_eq!(field("product")["calculate"]["notation"], "price * d");
+    // The rename and the formulas it changed are one undo step: undo the fill, then the last
+    // three renames.
+    for _ in 0..4 {
+        ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    }
+    let f = ok(&mut a, "form_fields", json!({ "doc": doc }));
+    let field = |name: &str| f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).cloned();
+    assert!(field("c").is_some() && field("price").is_none());
+    assert_eq!(field("product").unwrap()["calculate"]["notation"], "c * d", "undone together with the rename");
+    // The renamed field's own formula, changed in the same call, is not one the rename
+    // rewrote, though the name is stored trimmed.
+    let r = ok(
+        &mut a,
+        "form_set_props",
+        json!({ "doc": doc, "field": "sum", "name": " added ", "calculate": { "op": "sum", "fields": ["qty", "b", "x"] } }),
+    );
+    assert_eq!(r["formulas_updated"], json!([]));
+}
+
+/// The calculation order through the tool: read with what each formula reads and what is wrong,
+/// fixed so stale values come out right, moved, set, and undone.
+#[test]
+fn the_calculation_order_is_read_fixed_and_set() {
+    let dir = workdir("calcorder");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    for (i, name) in ["qty", "price", "sub", "total", "tax", "x", "y"].into_iter().enumerate() {
+        let y = 20 + 30 * i;
+        ok(&mut a, "form_add_field", json!({ "doc": doc, "page": 1, "type": "text", "rect": [20, y, 180, y + 22], "name": name }));
+    }
+    // Defined backwards: total and tax calculate before the fields they read.
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "total", "calculate": { "op": "sum", "fields": ["sub", "tax"] } }));
+    ok(
+        &mut a,
+        "form_set_script",
+        json!({ "doc": doc, "field": "tax", "event": "calculate", "script": "event.value = getField(\"sub\").value / 10;" }),
+    );
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "sub", "calculate": { "notation": "qty * price" } }));
+    // x and y read each other.
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "x", "calculate": { "notation": "y + 1" } }));
+    ok(&mut a, "form_set_props", json!({ "doc": doc, "field": "y", "calculate": { "notation": "x + 1" } }));
+    ok(&mut a, "form_fill", json!({ "doc": doc, "values": { "qty": "3", "price": "10" } }));
+    let value = |a: &mut Automation, name: &str| {
+        let f = ok(a, "form_fields", json!({ "doc": doc }));
+        f["fields"].as_array().unwrap().iter().find(|x| x["name"] == name).map(|x| x["value"].clone()).unwrap()
+    };
+    assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("0"), json!("0")), "stale: they calculate too early");
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+    assert_eq!(r["calculation_order"], json!(["total", "tax", "sub", "x", "y"]));
+    assert_eq!(r["fields"][0]["reads"], json!(["sub", "tax"]));
+    assert_eq!(r["fields"][0]["issues"], json!([{ "issue": "runs_too_early", "field": "tax" }, { "issue": "runs_too_early", "field": "sub" }]));
+    assert_eq!(r["fields"][1]["issues"], json!([{ "issue": "runs_too_early", "field": "sub" }]), "a script's reads are checked too");
+    assert_eq!(r["fields"][3]["issues"], json!([{ "issue": "cycle", "fields": ["y"] }]));
+    assert_eq!((r["fixable"].clone(), r["extra"].clone()), (json!(true), json!([])));
+    assert!(r.get("undo").is_none(), "reading changes nothing");
+    // Prepare a form ▸ Calculation order is this tool headlessly.
+    let r = ok(&mut a, "command_run", json!({ "id": "form.calculation_order", "params": { "doc": doc } }));
+    assert_eq!(r["calculation_order"], json!(["total", "tax", "sub", "x", "y"]));
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc, "fix": true }));
+    assert_eq!(r["calculation_order"], json!(["sub", "tax", "total", "x", "y"]), "only what must move moves; the loop stays");
+    assert_eq!(r["undo"], "Set calculation order");
+    assert_eq!(r["fixable"], false);
+    assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("33"), json!("3")), "recalculated in the new order");
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc, "field": "y", "move": "earlier" }));
+    assert_eq!(r["calculation_order"], json!(["sub", "tax", "total", "y", "x"]));
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc, "order": ["x"] }));
+    assert_eq!(r["calculation_order"], json!(["x", "sub", "tax", "total", "y"]), "the fields named first, the others after them");
+    for bad in [json!({ "order": ["qty"] }), json!({ "order": ["sub", "sub"] }), json!({ "field": "qty" }), json!({ "fix": true, "field": "x" })] {
+        let mut args = bad.clone();
+        args["doc"] = json!(doc);
+        assert!(a.call("form_calculation_order", &args).is_err(), "{bad}");
+    }
+    for _ in 0..3 {
+        ok(&mut a, "edit_undo", json!({ "doc": doc }));
+    }
+    let r = ok(&mut a, "form_calculation_order", json!({ "doc": doc }));
+    assert_eq!(r["calculation_order"], json!(["total", "tax", "sub", "x", "y"]));
+    assert_eq!((value(&mut a, "total"), value(&mut a, "tax")), (json!("0"), json!("0")), "undone with the values it recalculated");
+}
+
 #[test]
 fn tab_order_and_field_appearance_through_tools() {
     let dir = workdir("taborder");
@@ -3890,15 +4064,13 @@ fn natural_image_stamps_through_tools_on_rotated_pages() {
         let mut reader = png::Decoder::new(std::io::Cursor::new(data)).read_info().unwrap();
         let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
         let info = reader.next_frame(&mut pixels).unwrap();
-        assert_eq!(info.color_type, png::ColorType::Rgba);
-        for ((x, y), colour) in [(80, 90), (120, 90), (80, 110), (120, 110)].into_iter().zip([
-            [240, 20, 20, 255],
-            [20, 180, 20, 255],
-            [20, 20, 240, 255],
-            [230, 180, 20, 255],
-        ]) {
-            let offset = ((y * info.width + x) * 4) as usize;
-            assert_eq!(&pixels[offset..offset + 4], &colour, "page rotation {degrees}");
+        // A rendered page is opaque, so it comes as RGB.
+        assert_eq!(info.color_type, png::ColorType::Rgb);
+        for ((x, y), colour) in
+            [(80, 90), (120, 90), (80, 110), (120, 110)].into_iter().zip([[240, 20, 20], [20, 180, 20], [20, 20, 240], [230, 180, 20]])
+        {
+            let offset = ((y * info.width + x) * 3) as usize;
+            assert_eq!(&pixels[offset..offset + 3], &colour, "page rotation {degrees}");
         }
     }
 }
@@ -6525,7 +6697,8 @@ fn reading_colors_workdir() -> PathBuf {
     dir
 }
 
-/// Decodes a `page_render` PNG (pages here are 200×300 pt) into RGBA pixels.
+/// Decodes a `page_render` PNG (pages here are 200×300 pt) into RGBA pixels. Opaque pages
+/// come as RGB; their alpha is 255.
 fn png_pixels(content: &Content) -> Vec<u8> {
     let Content::Png { data, width, height } = content else { panic!("expected a PNG") };
     assert_eq!((*width, *height), (200, 300));
@@ -6533,7 +6706,11 @@ fn png_pixels(content: &Content) -> Vec<u8> {
     let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
     let info = reader.next_frame(&mut pixels).unwrap();
     assert_eq!((info.width, info.height), (200, 300));
-    pixels
+    match info.color_type {
+        png::ColorType::Rgba => pixels,
+        png::ColorType::Rgb => pixels.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect(),
+        other => panic!("unexpected colour type {other:?}"),
+    }
 }
 
 /// The RGBA pixel at (`x`, `y`), top-left origin, of a 200-wide image.

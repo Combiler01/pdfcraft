@@ -25,6 +25,14 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if app.dialog != Some(Dialog::WordCount) {
         app.word_count_draft.cancel();
     }
+    if app.dialog != Some(Dialog::FieldTable) {
+        app.field_table_draft = None;
+    }
+    // A movable window, not this modal: the page under it shows the table as it changes.
+    if app.dialog == Some(Dialog::FieldTable) {
+        crate::field_table_ui::show(app, ctx);
+        return;
+    }
     let Some(dialog) = app.dialog else {
         app.props_draft = None;
         app.view_draft = None;
@@ -720,6 +728,9 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 });
                 return;
             }
+            // Never reached: `dialogs` shows this movable window above and returns before the modal.
+            // The arm keeps the match exhaustive.
+            Dialog::FieldTable => close = true,
             Dialog::Optimize => {
                 let (ok, cancel) = crate::optimize_ui::body(ui, &mut app.optimize_draft, &t);
                 optimize_now = ok;
@@ -1427,12 +1438,29 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
     if field_props_now
         && let Some(d) = app.field_props.take()
         && let Some(props) = d.props()
-        && app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) })
-        && let Some(i) = app.active
     {
-        // Keep the (possibly renamed) field selected.
-        let prefix = d.field.rsplit_once('.').map(|(p, _)| format!("{p}.")).unwrap_or_default();
-        app.views[i].prepare.selected = Some((format!("{prefix}{}", d.name.trim()), d.widget));
+        let form = |app: &PdfCraftApp| app.active_ids().and_then(|(_, id)| app.session.get(id)).map(|doc| doc.form.clone());
+        // A rename also renames the field in the formulas that read it.
+        let before = props.name.as_ref().and_then(|_| form(app));
+        if app.apply_edit(Edit::SetFieldProps { name: d.field.clone(), props: Box::new(props) })
+            && let Some(i) = app.active
+        {
+            // Keep the (possibly renamed) field selected.
+            let prefix = d.field.rsplit_once('.').map(|(p, _)| format!("{p}.")).unwrap_or_default();
+            let name = format!("{prefix}{}", d.name.trim());
+            if let (Some(before), Some(after)) = (before, form(app)) {
+                let n = pdfcraft_engine::form_calculations_changed(&before, &after).iter().filter(|f| **f != name).count();
+                if n > 0 {
+                    app.notify(crate::i18n::trn(
+                        crate::i18n::current(),
+                        n as u64,
+                        "{n} calculation now uses the new name.",
+                        "{n} calculations now use the new name.",
+                    ));
+                }
+            }
+            app.views[i].prepare.selected = Some((name, d.widget));
+        }
     }
     if props_now && let Some(d) = app.comment_props.take() {
         let mut edits = crate::comment_props::edits(&d);

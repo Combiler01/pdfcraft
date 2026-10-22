@@ -514,6 +514,36 @@
 	Could not save: {e}	Nie można zapisać: {e}
 	Earlier in tab order	Wcześniej w kolejności tabulacji
 	Later in tab order	Później w kolejności tabulacji
+	Calculation order	Kolejność obliczeń
+	Fix order	Popraw kolejność
+	Move only what must move, so every field calculates after the fields it reads.	Przenosi tylko to, co musi, aby każde pole było obliczane po polach, które odczytuje.
+	Earlier in calculation order	Wcześniej w kolejności obliczeń
+	Later in calculation order	Później w kolejności obliczeń
+	Too early	Za wcześnie
+	Reads {name}, which calculates later, so it shows an old value.	Odczytuje {name}, które jest obliczane później, więc pokazuje starą wartość.
+	Loop	Pętla
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Odczytuje {names}, które z kolei odczytują je. Żadna kolejność nie naprawi pętli: zmień jedną z formuł.
+	Not in order	Poza kolejnością
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Brakuje go w kolejności obliczeń zapisanej w pliku PDF: inne przeglądarki PDF mogą go nie obliczać.
+	Back to Prepare a form	Wróć do „Przygotuj formularz”
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Żadne pole tego formularza nie oblicza jeszcze swojej wartości. Nadaj polu obliczenie na karcie Obliczenia w jego właściwościach, a pojawi się tutaj.
+	{names} and {last}	{names} i {last}
+	{field} reads no other field	{field} nie odczytuje żadnego innego pola
+	{field} reads {fields}	{field} odczytuje {fields}
+	No field reads it	Żadne pole go nie odczytuje
+	The order saved in the PDF needs tidying	Kolejność zapisana w pliku PDF wymaga uporządkowania
+	Moves only what must move	Przesuwa tylko to, co trzeba
+	Every field calculates after the fields it reads.	Każde pole jest obliczane po polach, które odczytuje.
+	Every field outside a loop calculates after the fields it reads.	Każde pole poza pętlą jest obliczane po polach, które odczytuje.
+	{field} reads its own value	{field} odczytuje własną wartość
+	{fields} read each other	{fields} odczytują się nawzajem
+	No order can fix a loop. Change one of the formulas.	Żadna kolejność nie naprawi pętli. Zmień jedną z formuł.
+	Edit {field}'s formula	Edytuj formułę pola {field}
+	Order · top calculates first	Kolejność · najpierw obliczane jest górne
+	Script	Skrypt
+	Links on page	Powiązania na stronie
+	Show on the page which fields each field reads	Pokaż na stronie, które pola odczytuje każde pole
+	Drag a field to move it, or select it and press {up} or {down}.	Przeciągnij pole, aby je przenieść, albo zaznacz je i naciśnij {up} lub {down}.
 	From:	Od:
 	To:	Do:
 	High Resolution	Wysoka rozdzielczość
@@ -1921,6 +1951,7 @@
 	Delete field	Usuń pole
 	Duplicate field	Powiel pole
 	Set tab order	Ustaw kolejność tabulacji
+	Set calculation order	Ustaw kolejność obliczeń
 	Change initial view	Zmień widok początkowy
 	Set alternate text	Ustaw tekst alternatywny
 	Mark figure as decorative	Oznacz ilustrację jako dekoracyjną
@@ -2309,6 +2340,13 @@ animation effects	Off	Wyłączone
 	no unused output name	brak wolnej nazwy pliku wyjściowego
 	no output folder was chosen	nie wybrano folderu wyjściowego
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Pobrano {n} plik PDF|Pobrano {n} pliki PDF|Pobrano {n} plików PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} obliczenie używa teraz nowej nazwy.|{n} obliczenia używają teraz nowej nazwy.|{n} obliczeń używa teraz nowej nazwy.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Kolejność obliczeń ma {n} wpis, który niczego nie oblicza. „Popraw kolejność” go usuwa.|Kolejność obliczeń ma {n} wpisy, które niczego nie obliczają. „Popraw kolejność” je usuwa.|Kolejność obliczeń ma {n} wpisów, które niczego nie obliczają. „Popraw kolejność” je usuwa.
+@plural	{fields} reads it|{fields} read it	{fields} go odczytuje|{fields} go odczytują|{fields} go odczytują
+@plural	{n} field shows an old value|{n} fields show old values	{n} pole pokazuje starą wartość|{n} pola pokazują stare wartości|{n} pól pokazuje stare wartości
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.|{field} jest obliczane przed {fields}, które odczytuje.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Jeszcze {n} pole jest obliczane za wcześnie.|Jeszcze {n} pola są obliczane za wcześnie.|Jeszcze {n} pól jest obliczanych za wcześnie.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą go nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.|W kolejności zapisanej w pliku PDF brakuje {fields}, więc inne przeglądarki PDF mogą ich nie obliczać.
 	Scan	Skanuj
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podpisz się na białej kartce i zrób jej zdjęcie przy jasnym, równomiernym świetle (użyj lampy błyskowej). Wybierz zdjęcie lub upuść je tutaj: PdfCraft znajdzie podpis i usunie papier.
 	Choose photo…	Wybierz zdjęcie…
@@ -2430,3 +2468,32 @@ animation effects	Off	Wyłączone
 	Edit this PDF	Edytuj ten plik PDF
 	Export this PDF	Eksportuj ten plik PDF
 	Find text or tools	Znajdź tekst lub narzędzia
+	Font	Czcionka
+	Bulleted list	Lista punktowana
+	Numbered list	Lista numerowana
+	Alignment	Wyrównanie
+	Superscript	Indeks górny
+	Subscript	Indeks dolny
+	Paragraph spacing	Odstęp między akapitami
+	Less	Mniej
+	Other options	Inne opcje
+
+# Prepare a form ▸ Text field table
+	Add text field table	Dodaj tabelę pól tekstowych
+	Text field table	Tabela pól tekstowych
+	Text Field Table	Tabela pól tekstowych
+	Columns	Kolumny
+	Row spacing	Odstęp między wierszami
+	Column spacing	Odstęp między kolumnami
+	First row number	Numer pierwszego wiersza
+	Column widths	Szerokości kolumn
+	Distribute evenly	Rozłóż równomiernie
+	Field names	Nazwy pól
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N lub {row} to numer wiersza, {col} numer kolumny, a {seq} numer komórki. Bez żadnego z nich numer wiersza trafia na koniec.
+	Column {n}	Kolumna {n}
+	Add fields	Dodaj pola
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	wiersze są za niskie: powiększ obszar w pionie albo użyj mniej wierszy lub mniejszego odstępu między wierszami
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	kolumna jest za wąska: poszerz obszar, daj kolumnie więcej miejsca albo użyj mniej kolumn lub mniejszego odstępu między kolumnami
+	field names can't contain a period: {name}	nazwy pól nie mogą zawierać kropki: {name}
+	two cells would both be named {name}	dwie komórki miałyby nazwę {name}
+	a field named {name} already exists	pole o nazwie {name} już istnieje

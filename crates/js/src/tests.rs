@@ -651,6 +651,17 @@ mod formcalc {
         assert_eq!(calc(r#"Num2Date(45350, "YYYY-MM-DD x")"#), "2024-02-29 x");
     }
 
+    /// Accepted day numbers past chrono's own date range (about year 262143) keep the dates the
+    /// pre-chrono algorithm gave, on both sides of the epoch, through Num2Date and Format.
+    #[test]
+    fn date_numbers_beyond_chronos_range_keep_their_dates() {
+        assert_eq!(calc(r#"Num2Date(99000000, "YYYY-MM-DD")"#), "272952-10-16");
+        assert_eq!(calc(r#"Format("YYYY-MM-DD", 99000000)"#), "272952-10-16");
+        assert_eq!(calc(r#"Num2Date(99999999, "YYYY-MM-DD")"#), "275690-09-11");
+        assert_eq!(calc(r#"Num2Date(-99000000, "YYYY-MM-DD")"#), "-269153-03-16");
+        assert_eq!(calc(r#"Num2Date(-99999999, "YYYY-MM-DD")"#), "-271891-04-20");
+    }
+
     #[test]
     fn str_and_format_round_exact_ties_away_from_zero() {
         assert_eq!(calc("Str(2.5, 3, 0)"), "  3");

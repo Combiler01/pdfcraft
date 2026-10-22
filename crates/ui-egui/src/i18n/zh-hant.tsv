@@ -153,6 +153,36 @@
 	Could not save: {e}	無法儲存：{e}
 	Earlier in tab order	在 Tab 順序中前移
 	Later in tab order	在 Tab 順序中後移
+	Calculation order	計算順序
+	Fix order	修正順序
+	Move only what must move, so every field calculates after the fields it reads.	只移動必須移動的欄位，讓每個欄位都在它讀取的欄位之後計算。
+	Earlier in calculation order	在計算順序中前移
+	Later in calculation order	在計算順序中後移
+	Too early	過早
+	Reads {name}, which calculates later, so it shows an old value.	讀取 {name}，而它之後才計算，因此顯示的是舊值。
+	Loop	迴圈
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	讀取 {names}，而它們又讀取此欄位。任何順序都無法修正迴圈：請修改其中一個公式。
+	Not in order	不在順序中
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中儲存的計算順序缺少此欄位：其他 PDF 檢視器可能不會計算它。
+	Back to Prepare a form	返回準備表單
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表單中還沒有計算自身值的欄位。在欄位內容的「計算」索引標籤中為欄位設定計算後，它會顯示在這裡。
+	{names} and {last}	{names}和{last}
+	{field} reads no other field	{field} 不讀取其他欄位
+	{field} reads {fields}	{field} 讀取 {fields}
+	No field reads it	沒有欄位讀取它
+	The order saved in the PDF needs tidying	PDF 中儲存的順序需要整理
+	Moves only what must move	只移動必須移動的
+	Every field calculates after the fields it reads.	每個欄位都在它讀取的欄位之後計算。
+	Every field outside a loop calculates after the fields it reads.	迴圈之外的每個欄位都在它讀取的欄位之後計算。
+	{field} reads its own value	{field} 讀取自身的值
+	{fields} read each other	{fields} 互相讀取
+	No order can fix a loop. Change one of the formulas.	任何順序都無法修正迴圈。請修改其中一個公式。
+	Edit {field}'s formula	編輯 {field} 的公式
+	Order · top calculates first	順序 · 上方的先計算
+	Script	指令碼
+	Links on page	頁面上的關聯
+	Show on the page which fields each field reads	在頁面上顯示每個欄位讀取哪些欄位
+	Drag a field to move it, or select it and press {up} or {down}.	拖曳欄位即可移動，或選取後按 {up} 或 {down}。
 	From:	從：
 	To:	至：
 	High Resolution	高解析度
@@ -1927,6 +1957,7 @@
 	Delete field	刪除欄位
 	Duplicate field	複製欄位
 	Set tab order	設定 Tab 順序
+	Set calculation order	設定計算順序
 	Change initial view	變更初始檢視
 	Set alternate text	設定替代文字
 	Mark figure as decorative	將圖片標記為裝飾用途
@@ -2204,6 +2235,13 @@ animation effects	Off	關
 	no unused output name	沒有可用的輸出檔名
 	no output folder was chosen	未選擇輸出資料夾
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	已下載 {n} 個 PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 個計算已改用新名稱。
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	計算順序中有 {n} 個不計算任何內容的項目。「修正順序」會將其刪除。
+@plural	{fields} reads it|{fields} read it	{fields} 讀取它
+@plural	{n} field shows an old value|{n} fields show old values	{n} 個欄位顯示舊值
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它讀取的 {fields} 之前計算。
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 個欄位計算過早。
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中儲存的順序裡，其他 PDF 檢視器可能不會計算。
 	Scan	掃描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白紙上簽名，並在明亮、均勻的光線下拍照（使用閃光燈）。選擇相片或將其拖放到此處：PdfCraft 會找到簽名並去除紙張背景。
 	Choose photo…	選擇相片…
@@ -2404,3 +2442,32 @@ animation effects	Off	關
 	Edit this PDF	編輯此 PDF
 	Export this PDF	匯出此 PDF
 	Find text or tools	尋找文字或工具
+	Font	字型
+	Bulleted list	項目符號清單
+	Numbered list	編號清單
+	Alignment	對齊
+	Superscript	上標
+	Subscript	下標
+	Paragraph spacing	段落間距
+	Less	收起
+	Other options	其他選項
+
+# Prepare a form ▸ Text field table
+	Add text field table	新增文字欄位表格
+	Text field table	文字欄位表格
+	Text Field Table	文字欄位表格
+	Columns	欄
+	Row spacing	列間距
+	Column spacing	欄間距
+	First row number	起始列號
+	Column widths	欄寬
+	Distribute evenly	平均分配
+	Field names	欄位名稱
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 代表列號，{col} 代表欄號，{seq} 代表儲存格序號。若都沒有，列號會加在結尾。
+	Column {n}	第 {n} 欄
+	Add fields	新增欄位
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	列太矮：請加高區域，或減少列數或列間距
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某欄太窄：請加寬區域、給該欄更多寬度，或減少欄數或欄間距
+	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
+	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
+	a field named {name} already exists	已有名為 {name} 的欄位

@@ -492,6 +492,36 @@
 	Could not save: {e}	Impossible d'enregistrer : {e}
 	Earlier in tab order	Plus tôt dans l'ordre de tabulation
 	Later in tab order	Plus tard dans l'ordre de tabulation
+	Calculation order	Ordre de calcul
+	Fix order	Corriger l'ordre
+	Move only what must move, so every field calculates after the fields it reads.	Ne déplacer que ce qui doit l'être, pour que chaque champ soit calculé après les champs qu'il lit.
+	Earlier in calculation order	Plus tôt dans l'ordre de calcul
+	Later in calculation order	Plus tard dans l'ordre de calcul
+	Too early	Trop tôt
+	Reads {name}, which calculates later, so it shows an old value.	Lit {name}, qui est calculé plus tard : il affiche donc une ancienne valeur.
+	Loop	Boucle
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lit {names}, qui le lisent en retour. Aucun ordre ne peut corriger une boucle : modifiez l'une des formules.
+	Not in order	Hors de l'ordre
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Absent de l'ordre de calcul enregistré dans le PDF : d'autres lecteurs PDF risquent de ne pas le calculer.
+	Back to Prepare a form	Retour à Préparer un formulaire
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Aucun champ de ce formulaire ne calcule encore sa valeur. Donnez un calcul à un champ dans l'onglet Calculer de ses propriétés, et il apparaîtra ici.
+	{names} and {last}	{names} et {last}
+	{field} reads no other field	{field} ne lit aucun autre champ
+	{field} reads {fields}	{field} lit {fields}
+	No field reads it	Aucun champ ne le lit
+	The order saved in the PDF needs tidying	L'ordre enregistré dans le PDF doit être nettoyé
+	Moves only what must move	Déplace seulement ce qui doit l'être
+	Every field calculates after the fields it reads.	Chaque champ est calculé après les champs qu'il lit.
+	Every field outside a loop calculates after the fields it reads.	Chaque champ hors d'une boucle est calculé après les champs qu'il lit.
+	{field} reads its own value	{field} lit sa propre valeur
+	{fields} read each other	{fields} se lisent mutuellement
+	No order can fix a loop. Change one of the formulas.	Aucun ordre ne peut corriger une boucle. Modifiez l'une des formules.
+	Edit {field}'s formula	Modifier la formule de {field}
+	Order · top calculates first	Ordre · le haut est calculé en premier
+	Script	Script
+	Links on page	Liens sur la page
+	Show on the page which fields each field reads	Afficher sur la page les champs que lit chaque champ
+	Drag a field to move it, or select it and press {up} or {down}.	Faites glisser un champ pour le déplacer, ou sélectionnez-le et appuyez sur {up} ou {down}.
 	From:	De :
 	To:	À :
 	High Resolution	Haute résolution
@@ -1858,6 +1888,7 @@
 	Delete field	Supprimer le champ
 	Duplicate field	Dupliquer le champ
 	Set tab order	Définir l'ordre de tabulation
+	Set calculation order	Définir l'ordre de calcul
 	Change initial view	Modifier l'affichage initial
 	Set alternate text	Définir le texte de remplacement
 	Mark figure as decorative	Marquer la figure comme décorative
@@ -2341,6 +2372,13 @@ animation effects	Off	Désactivés
 	no unused output name	aucun nom de sortie libre
 	no output folder was chosen	aucun dossier de sortie choisi
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF téléchargé|{n} PDF téléchargés
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} calcul utilise désormais le nouveau nom.|{n} calculs utilisent désormais le nouveau nom.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	L'ordre de calcul contient {n} entrée qui ne calcule rien. « Corriger l'ordre » la supprime.|L'ordre de calcul contient {n} entrées qui ne calculent rien. « Corriger l'ordre » les supprime.
+@plural	{fields} reads it|{fields} read it	{fields} le lit|{fields} le lisent
+@plural	{n} field shows an old value|{n} fields show old values	{n} champ affiche une ancienne valeur|{n} champs affichent d'anciennes valeurs
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} est calculé avant {fields}, qu'il lit.|{field} est calculé avant {fields}, qu'il lit.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} autre champ est calculé trop tôt.|{n} autres champs sont calculés trop tôt.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} manque dans l'ordre enregistré dans le PDF, donc d'autres lecteurs PDF risquent de ne pas le calculer.|{fields} manquent dans l'ordre enregistré dans le PDF, donc d'autres lecteurs PDF risquent de ne pas les calculer.
 	Scan	Numériser
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Signez une feuille de papier blanc et prenez-la en photo sous une lumière vive et uniforme (utilisez le flash). Choisissez la photo ou déposez-la ici : PdfCraft trouve la signature et retire le papier.
 	Choose photo…	Choisir une photo…
@@ -2454,3 +2492,32 @@ animation effects	Off	Désactivés
 	Edit this PDF	Modifier ce PDF
 	Export this PDF	Exporter ce PDF
 	Find text or tools	Rechercher du texte ou des outils
+	Font	Police
+	Bulleted list	Liste à puces
+	Numbered list	Liste numérotée
+	Alignment	Alignement
+	Superscript	Exposant
+	Subscript	Indice
+	Paragraph spacing	Espacement des paragraphes
+	Less	Moins
+	Other options	Autres options
+
+# Prepare a form ▸ Text field table
+	Add text field table	Ajouter un tableau de champs de texte
+	Text field table	Tableau de champs de texte
+	Text Field Table	Tableau de champs de texte
+	Columns	Colonnes
+	Row spacing	Espacement des lignes
+	Column spacing	Espacement des colonnes
+	First row number	Numéro de la première ligne
+	Column widths	Largeurs des colonnes
+	Distribute evenly	Répartir uniformément
+	Field names	Noms des champs
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N ou {row} est le numéro de ligne, {col} le numéro de colonne, {seq} le numéro de cellule. Sans aucun d'eux, le numéro de ligne est ajouté à la fin.
+	Column {n}	Colonne {n}
+	Add fields	Ajouter les champs
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	les lignes sont trop basses : agrandissez la zone en hauteur, ou utilisez moins de lignes ou un espacement des lignes plus petit
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	une colonne est trop étroite : élargissez la zone, donnez-lui plus de largeur, ou utilisez moins de colonnes ou un espacement des colonnes plus petit
+	field names can't contain a period: {name}	les noms de champ ne peuvent pas contenir de point : {name}
+	two cells would both be named {name}	deux cellules porteraient le nom {name}
+	a field named {name} already exists	un champ nommé {name} existe déjà

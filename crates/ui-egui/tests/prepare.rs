@@ -2,9 +2,11 @@
 //! Field Properties and deleting.
 
 use egui::Pos2;
+use egui::accesskit::Role;
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
-use pdfcraft_ui_egui::{PdfCraftApp, QuickTool};
+use egui_kittest::kittest::{Queryable, by};
+use pdfcraft_engine::field_table::TableColumn;
+use pdfcraft_ui_egui::{Dialog, PdfCraftApp, QuickTool};
 
 fn harness() -> Harness<'static, PdfCraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|cc| {
@@ -145,6 +147,45 @@ fn format_validate_and_calculate_tabs() {
     assert!(matches!(f.actions.format, Format::Number { decimals: 2, .. }));
     assert_eq!(f.actions.validate, Validate::Range { min: Some(0.0), max: None });
     assert_eq!(f.actions.calculate, Calculate::Notation("name".into()));
+}
+
+/// Renaming a field in Field Properties renames it in the formulas that read it, in the same undo
+/// step, and says how many changed.
+#[test]
+fn renaming_a_field_says_how_many_calculations_now_use_the_new_name() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(2);
+    let rename = |h: &mut Harness<'static, PdfCraftApp>, from: &str, to: &str| {
+        h.state_mut().open_field_props(from, 0);
+        h.run_steps(2);
+        h.state_mut().field_props.as_mut().expect("open").name = to.into();
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+    };
+    h.state_mut().open_field_props("city", 0);
+    h.run_steps(2);
+    h.state_mut().field_props.as_mut().expect("open").calculate = Calculate::Notation("name * 2".into());
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let calculation = |h: &Harness<'static, PdfCraftApp>| {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().form.iter().find(|f| f.name == "city").unwrap().actions.calculate.clone()
+    };
+    h.state_mut().toast = None;
+    rename(&mut h, "name", "full_name");
+    assert_eq!(calculation(&h), Calculate::Notation("full_name * 2".into()));
+    assert_eq!(h.state().toast.as_ref().map(|t| t.0.as_str()), Some("1 calculation now uses the new name."));
+    h.state_mut().toast = None;
+    rename(&mut h, "city", "town");
+    assert!(names(&h).contains(&"town".to_string()));
+    assert_eq!(h.state().toast, None, "no formula reads the calculated field itself");
+    h.state_mut().execute("edit.undo");
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert!(names(&h).contains(&"name".to_string()));
+    assert_eq!(calculation(&h), Calculate::Notation("name * 2".into()), "undone with the rename");
 }
 
 #[test]
@@ -615,4 +656,385 @@ fn actions_tab_adds_and_removes_actions() {
             (FieldTrigger::OnBlur, FieldAction::Uri("https://example.org".into()))
         ]
     );
+}
+
+/// Text field table: pick the tool and drag out an area in the empty lower part of page 1, 200 by
+/// 120 points from (40, 240) as displayed. The table's window opens for it.
+fn draw_table(h: &mut Harness<'static, PdfCraftApp>) {
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    let (a, b) = (at(h, 40.0, 240.0), at(h, 240.0, 360.0));
+    drag(h, a, b);
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable));
+}
+
+fn columns(patterns: &[(&str, f64)]) -> Vec<TableColumn> {
+    patterns.iter().map(|(p, w)| TableColumn { pattern: (*p).to_owned(), width: *w }).collect()
+}
+
+#[test]
+fn a_text_field_table_is_drawn_set_up_and_added_in_one_step() {
+    let mut h = harness();
+    let before = names(&h);
+    draw_table(&mut h);
+    assert_eq!(h.state().quick_tool, QuickTool::Select, "back to Select once the area is drawn");
+    {
+        let s = h.state_mut();
+        let id = s.views[0].id;
+        let d = s.field_table_draft.as_mut().expect("the table's window is open");
+        assert_eq!((d.doc, d.page), (id, 0));
+        let r = d.table.rect;
+        assert!([40.0, 240.0, 240.0, 360.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "drawn as displayed: {r:?}");
+        d.table.rows = 2;
+        d.table.columns = columns(&[("desc_N", 3.0), ("price_N", 1.0)]);
+    }
+    h.run_steps(2);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "added, the window closes");
+    let added: Vec<_> = names(&h).into_iter().filter(|n| !before.contains(n)).collect();
+    assert_eq!(added, ["desc_1", "price_1", "desc_2", "price_2"]);
+    // 150 and 50 points wide, 60 high, the first row at the top: user space has y up from 400.
+    let r = rect_of(&h, "desc_1");
+    assert!([40.0, 100.0, 190.0, 160.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    let r = rect_of(&h, "price_2");
+    assert!([190.0, 40.0, 240.0, 100.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "{r:?}");
+    assert_eq!(h.state().session.get(h.state().views[0].id).unwrap().can_undo(), Some("Add text field table"));
+    h.state_mut().execute("edit.undo");
+    h.run_steps(2);
+    assert_eq!(names(&h), before, "one undo takes the whole table back");
+}
+
+#[test]
+fn a_table_whose_names_are_taken_stays_open_saying_so() {
+    let mut h = harness();
+    draw_table(&mut h);
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert!(names(&h).contains(&"Table1_4".to_owned()), "{:?}", names(&h));
+    // The next table takes the next free names on its own.
+    draw_table(&mut h);
+    assert_eq!(h.state().field_table_draft.as_ref().unwrap().table.columns[0].pattern, "Table2_N");
+    // Named like the first, it can't be added: the window says why and keeps what was set up.
+    h.state_mut().field_table_draft.as_mut().unwrap().table.columns[0].pattern = "Table1_N".into();
+    h.run_steps(2);
+    let count = names(&h).len();
+    h.get_by_label("a field named \"Table1_1\" already exists");
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert_eq!(names(&h).len(), count, "nothing added");
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
+    // Escape closes it, adding nothing.
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some(), names(&h).len()), (None, false, count));
+}
+
+/// Enter commits a number being typed. It used to add the table there and then, before the rest
+/// of it was set up.
+#[test]
+fn enter_in_a_number_field_does_not_add_the_table() {
+    let mut h = harness();
+    let before = names(&h).len();
+    draw_table(&mut h);
+    let rows = h.query_all(by().role(Role::SpinButton)).next().map(|n| n.rect()).expect("the Rows field");
+    h.hover_at(rows.center());
+    h.drag_at(rows.center());
+    h.run_steps(1);
+    h.drop_at(rows.center());
+    h.run_steps(2);
+    h.key_press(egui::Key::Backspace);
+    h.event(egui::Event::Text("6".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(names(&h).len(), before, "nothing added");
+    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.rows), Some(6), "the number is in, the window open");
+}
+
+/// With 26 or more columns each pair of columns has less than twice the least share a divider
+/// keeps, and dragging one panicked in `f64::clamp`.
+#[test]
+fn dragging_a_column_divider_between_many_columns() {
+    let mut h = harness();
+    draw_table(&mut h);
+    h.state_mut().field_table_draft.as_mut().unwrap().table.columns = columns(&[("c{c}_N", 1.0); 30]);
+    h.run_steps(2);
+    let (above, below) = (h.get_by_label("Distribute evenly").rect(), h.get_by_label("Field names").rect());
+    let p = egui::pos2(above.center().x - 120.0, (above.bottom() + below.top()) / 2.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    for dx in [-10.0, -20.0] {
+        h.hover_at(p + egui::vec2(dx, 0.0));
+        h.run_steps(1);
+    }
+    h.drop_at(p + egui::vec2(-20.0, 0.0));
+    h.run_steps(2);
+    let widths: Vec<f64> = h.state().field_table_draft.as_ref().unwrap().table.columns.iter().map(|c| c.width).collect();
+    assert!(widths.iter().any(|w| (w - 1.0).abs() > 1e-9), "a divider moved: {widths:?}");
+    assert!((widths.iter().sum::<f64>() - 30.0).abs() < 1e-9 && widths.iter().all(|w| *w > 0.0), "{widths:?}");
+}
+
+#[test]
+fn the_table_window_closes_when_its_document_is_left() {
+    let mut h = harness();
+    let blank = pdfcraft_engine::Session::new().create_blank(300.0, 400.0, 1).unwrap().to_vec();
+    h.state_mut().open_bytes("other.pdf", None, blank).unwrap();
+    h.state_mut().active = Some(0);
+    h.run_steps(4);
+    let before = names(&h).len();
+    draw_table(&mut h);
+    // The other document's tab is still in reach of the pointer: choosing it closes the window.
+    let tab = h.get_all_by_label("other.pdf").next().map(|n| n.rect()).expect("its tab");
+    h.hover_at(tab.center());
+    h.run_steps(1);
+    h.drag_at(tab.center());
+    h.run_steps(1);
+    h.drop_at(tab.center());
+    h.run_steps(3);
+    assert_eq!(h.state().active, Some(1));
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
+    h.state_mut().active = Some(0);
+    h.run_steps(2);
+    assert_eq!(names(&h).len(), before, "nothing added to either document");
+    // So does leaving Prepare a form.
+    draw_table(&mut h);
+    h.state_mut().left_open = false;
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false));
+}
+
+/// With its panel closed after the tool was picked, the form is still prepared and a table can be
+/// drawn: its window opens Prepare a form again, which it belongs to. Drawing sends the tool back
+/// to Select, so the window used to close itself at once, nothing being prepared any more.
+#[test]
+fn a_table_drawn_with_the_panel_closed_opens_it_again() {
+    let mut h = harness();
+    let before = names(&h).len();
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    h.state_mut().left_open = false;
+    h.run_steps(2);
+    assert!(h.state().is_preparing(), "the picked tool keeps the form prepared");
+    let (a, b) = (at(&h, 40.0, 240.0), at(&h, 240.0, 360.0));
+    drag(&mut h, a, b);
+    h.run_steps(3);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (Some(Dialog::FieldTable), true), "the window stays open");
+    assert!(h.state().left_open && h.state().is_preparing(), "Prepare a form is open again");
+    h.get_by_label("Add fields").click();
+    h.run_steps(3);
+    assert!(names(&h).len() > before, "the table is added");
+}
+
+/// The window belongs to the page as it was when it opened: rotated (or moved, deleted, undone)
+/// under it, the page would put the area the table was set up for somewhere else.
+#[test]
+fn the_table_window_closes_when_the_document_changes_under_it() {
+    let mut h = harness();
+    let before = names(&h);
+    draw_table(&mut h);
+    assert!(h.state_mut().apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 }));
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "closed by the rotation");
+    assert_eq!(names(&h), before, "nothing added");
+}
+
+/// Escape in a name field leaves the field, as it does in any field; it closed the window too,
+/// and the column setup with it.
+#[test]
+fn escape_in_a_name_field_leaves_the_field_not_the_table() {
+    let mut h = harness();
+    draw_table(&mut h);
+    // The app's own text boxes (zoom, page number) are inputs too: take the one in the window.
+    let window = h.get_by_label("Text Field Table").rect();
+    let field =
+        h.query_all(by().role(Role::TextInput)).map(|n| n.rect()).find(|r| window.contains(r.center())).expect("the first column's name field");
+    h.hover_at(field.center());
+    h.drag_at(field.center());
+    h.run_steps(1);
+    h.drop_at(field.center());
+    h.run_steps(2);
+    h.event(egui::Event::Text("x".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(h.state().dialog, Some(Dialog::FieldTable), "still open");
+    assert_eq!(h.state().field_table_draft.as_ref().map(|d| d.table.columns[0].pattern.as_str()), Some("Table1_Nx"), "what was typed stays");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!((h.state().dialog, h.state().field_table_draft.is_some()), (None, false), "a second Escape closes it");
+}
+
+/// A click puts the default 180 × 110 table's corner at the pointer; near the page's edges it is
+/// moved in so that all of it is on the page (here 5 pt from the right, 100 pt from the bottom).
+#[test]
+fn a_table_clicked_near_the_page_edge_stays_on_the_page() {
+    let mut h = harness();
+    assert!(h.state_mut().execute("form.add.text_table"));
+    h.run_steps(2);
+    let p = at(&h, 295.0, 300.0);
+    h.hover_at(p);
+    h.run_steps(1);
+    h.drag_at(p);
+    h.run_steps(1);
+    h.drop_at(p);
+    h.run_steps(3);
+    let r = h.state().field_table_draft.as_ref().expect("the table's window").table.rect;
+    assert!([120.0, 290.0, 300.0, 400.0].iter().zip(r).all(|(w, g)| (w - g).abs() < 0.5), "on the 300 × 400 page: {r:?}");
+}
+
+/// Prepare a form ▸ Calculation order opens as a page of its own, with the form still being
+/// prepared, says when nothing calculates, and Back returns to Prepare a form.
+#[test]
+fn the_calculation_order_is_a_page_of_prepare_a_form() {
+    use pdfcraft_ui_egui::LeftPanel;
+    let mut h = harness();
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    assert!(h.query_by_label("Field list").is_some());
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::CalculationOrder);
+    assert!(h.state().is_preparing(), "the fields stay editable, so a row can select one");
+    // The page replaces the Prepare a form tools.
+    assert!(h.query_by_label("Field list").is_none());
+    assert!(h.query_by_label_contains("No field in this form calculates its value yet").is_some());
+    h.get_by_label("Back to Prepare a form").click();
+    h.run_steps(3);
+    assert_eq!(h.state().left, LeftPanel::Tool("form"));
+    assert!(h.query_by_label("Field list").is_some());
+    assert!(h.query_by_label("Back to Prepare a form").is_none());
+    // Opened from Preview, the page edits the fields again.
+    h.get_by_label("Preview").click();
+    h.run_steps(3);
+    assert!(h.state().form_preview);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.state().is_preparing() && !h.state().form_preview, "Preview ends, so a row can select its field");
+    // Opened (from ⌘K) while the page grid shows, the grid closes and the page shows.
+    h.state_mut().execute("page.organize");
+    h.run_steps(3);
+    assert!(h.state().views[0].organize);
+    h.state_mut().execute("form.calculation_order");
+    h.run_steps(3);
+    assert!(!h.state().views[0].organize);
+    assert!(h.query_by_label_contains("No field in this form calculates its value yet").is_some());
+}
+
+/// Prepare a form ▸ Calculation order: a card says which field shows an old value and why, each
+/// row shows its field's value as the field does, the selected field's arrows, Alt+↑ and a drag
+/// move it, Fix order puts each field after the fields it reads and the card's Undo takes that
+/// back, every change is one undo step, and a row selects its field.
+#[test]
+fn the_calculation_order_is_moved_dragged_and_fixed() {
+    use egui::{Key, Modifiers};
+    use pdfcraft_engine::form_scripts::{CalcOp, Calculate, Format};
+    use pdfcraft_engine::{Edit, FieldProps, FieldValue, NewField};
+    let mut h = harness();
+    for (i, name) in ["qty", "sub", "total", "other"].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+    }
+    let calculate = |name: &str, c: Calculate| Edit::SetFieldProps {
+        name: name.into(),
+        props: Box::new(FieldProps { calculate: Some(c), ..Default::default() }),
+    };
+    // Defined backwards: total, which reads sub, calculates first.
+    h.state_mut().apply_edit(calculate("total", Calculate::Simple { op: CalcOp::Sum, fields: vec!["sub".into()] }));
+    h.state_mut().apply_edit(calculate("sub", Calculate::Notation("qty * 2".into())));
+    h.state_mut().apply_edit(calculate("other", Calculate::Notation("qty + 1".into())));
+    // other shows its value as currency.
+    let currency = Format::Number { decimals: 2, sep: 0, neg: 0, currency: "$".into(), prepend: true };
+    h.state_mut()
+        .apply_edit(Edit::SetFieldProps { name: "other".into(), props: Box::new(FieldProps { format: Some(currency), ..Default::default() }) });
+    h.state_mut().apply_edit(Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("3".into()) });
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    let order = |h: &Harness<'static, PdfCraftApp>| -> Vec<String> {
+        let s = h.state();
+        s.session.get(s.views[0].id).unwrap().calculation_order().fields.into_iter().map(|f| f.name).collect()
+    };
+    let undo_label = |h: &Harness<'static, PdfCraftApp>| h.state().session.get(h.state().views[0].id).unwrap().can_undo().map(str::to_owned);
+    assert_eq!(order(&h), ["total", "sub", "other"]);
+    // The card says what is wrong, and each row shows its value as the field does: total
+    // calculated before sub, so it still has sub's old value.
+    assert!(h.query_by_label("1 field shows an old value").is_some());
+    assert!(h.query_by_label("total calculates before sub, which it reads.").is_some());
+    for row in ["1. total: 0", "2. sub: 6", "3. other: $4.00"] {
+        assert!(h.query_by_label(row).is_some(), "{row}");
+    }
+    // The selected field's arrows move it.
+    assert!(h.query_by_label("Later in calculation order: total").is_none(), "arrows only on the selected field or the one pointed at");
+    h.get_by_label("1. total: 0").click();
+    h.run_steps(3);
+    h.get_by_label("Later in calculation order: total").click();
+    h.run_steps(3);
+    assert_eq!(order(&h), ["sub", "total", "other"]);
+    assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
+    // Alt+↑ moves it back.
+    h.key_press_modifiers(Modifiers::ALT, Key::ArrowUp);
+    h.run_steps(3);
+    assert_eq!(order(&h), ["total", "sub", "other"]);
+    // Dragging other onto the first row puts it first.
+    let from = h.get_by_label("3. other: $4.00").rect().center();
+    let to = h.get_by_label("1. total: 6").rect().center();
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(from + (to - from) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(4);
+    assert_eq!(order(&h), ["other", "total", "sub"]);
+    // Fix order moves only total, after sub, and the card says the order is right.
+    h.get_by_label("Fix order").click();
+    h.run_steps(3);
+    assert_eq!(order(&h), ["other", "sub", "total"]);
+    assert_eq!(undo_label(&h).as_deref(), Some("Set calculation order"));
+    assert!(h.query_by_label("Every field calculates after the fields it reads.").is_some());
+    assert!(h.query_by_label("Fix order").is_none());
+    // Its Undo takes Fix order back.
+    h.get_by_label("Undo").click();
+    h.run_steps(3);
+    assert_eq!(order(&h), ["other", "total", "sub"]);
+    // A row selects its field.
+    h.get_by_label("3. sub: 6").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].prepare.selected.as_ref().map(|s| s.0.as_str()), Some("sub"));
+}
+
+/// Fields that read each other get a card of their own, which Fix order leaves alone, and its
+/// link opens the first one's formula.
+#[test]
+fn a_loop_has_its_own_card_that_opens_the_formula() {
+    use pdfcraft_engine::form_scripts::Calculate;
+    use pdfcraft_engine::{Edit, FieldProps, NewField};
+    use pdfcraft_ui_egui::prepare::FieldTab;
+    let mut h = harness();
+    for (i, (name, formula)) in [("a", "b + 1"), ("b", "a + 1")].into_iter().enumerate() {
+        let y = 200.0 + 30.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        h.state_mut().apply_edit(Edit::AddField { page: 0, rect: [20.0, y, 120.0, y + 20.0], kind, name: Some(name.into()) });
+        let props = Box::new(FieldProps { calculate: Some(Calculate::Notation(formula.into())), ..Default::default() });
+        h.state_mut().apply_edit(Edit::SetFieldProps { name: name.into(), props });
+    }
+    h.state_mut().execute("form.prepare");
+    h.run_steps(3);
+    h.get_by_label("Calculation order").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("a and b read each other").is_some());
+    assert!(h.query_by_label("Every field outside a loop calculates after the fields it reads.").is_some());
+    assert!(h.query_by_label("Fix order").is_none(), "no order fixes a loop");
+    h.get_by_label("Edit a's formula").click();
+    h.run_steps(3);
+    let draft = h.state().field_props.as_ref().map(|d| (d.field.clone(), d.tab));
+    assert_eq!(draft, Some(("a".to_owned(), FieldTab::Calculate)));
 }

@@ -11,6 +11,9 @@ use pdfcraft_fonts::{helvetica_width, literal, win_ansi};
 
 use crate::{Field, FieldKind, FormError, Widget, appearance, fields, flags, page_refs};
 
+/// The smallest width and height of a field's widget, in points: a smaller one is refused.
+pub const MIN_FIELD_SIDE: f64 = 4.0;
+
 /// The kind of field to add.
 #[derive(Clone, Debug, PartialEq)]
 pub enum NewField {
@@ -515,7 +518,7 @@ pub fn add_field(doc: &mut Document, page: usize, rect: [f64; 4], kind: &NewFiel
     let pages = page_refs(doc);
     let page_ref = *pages.get(page).ok_or_else(|| FormError::Invalid(format!("page {} does not exist", page + 1)))?;
     let rect = [rect[0].min(rect[2]), rect[1].min(rect[3]), rect[0].max(rect[2]), rect[1].max(rect[3])];
-    if !rect.iter().all(|v| v.is_finite()) || rect[2] - rect[0] < 4.0 || rect[3] - rect[1] < 4.0 {
+    if !rect.iter().all(|v| v.is_finite()) || rect[2] - rect[0] < MIN_FIELD_SIDE || rect[3] - rect[1] < MIN_FIELD_SIDE {
         return invalid("the field is too small");
     }
     let existing = fields(doc);
@@ -856,7 +859,7 @@ fn swapped_around_center(r: [f64; 4]) -> Option<[f64; 4]> {
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let (nw, nh) = (y1 - y0, x1 - x0);
     let out = [cx - nw / 2.0, cy - nh / 2.0, cx + nw / 2.0, cy + nh / 2.0];
-    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= 4.0 && out[3] - out[1] >= 4.0).then_some(out)
+    (out.iter().all(|v| v.is_finite()) && out[2] - out[0] >= MIN_FIELD_SIDE && out[3] - out[1] >= MIN_FIELD_SIDE).then_some(out)
 }
 
 /// Change a field's properties (General and Options tabs) and redraw it.
@@ -927,6 +930,10 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         let prefix = f.name.rsplit_once('.').map(|(p, _)| format!("{p}.")).unwrap_or_default();
         new_name = format!("{prefix}{n}");
         doc.update_dict(f.obj, |d| d.set(b"T".to_vec(), PdfString::text(n)))?;
+        // Calculations read the field by its new name, unless another field keeps the old one.
+        if all.iter().filter(|x| x.name == f.name).count() == 1 {
+            rename_in_calculations(doc, &all, &f.name, &new_name)?;
+        }
     }
     // The new default appearance when the size or the look changes.
     let size = props.font_size.unwrap_or_else(|| crate::appearance::parse_da(&f.da).size);
@@ -1093,7 +1100,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
     if let Some((wi, r)) = props.rect {
         let w = f.widgets.get(wi).ok_or_else(|| FormError::Invalid(format!("{name} has no widget {}", wi + 1)))?;
         let r = [r[0].min(r[2]), r[1].min(r[3]), r[0].max(r[2]), r[1].max(r[3])];
-        if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < 4.0 || r[3] - r[1] < 4.0 {
+        if !r.iter().all(|v| v.is_finite()) || r[2] - r[0] < MIN_FIELD_SIDE || r[3] - r[1] < MIN_FIELD_SIDE {
             return invalid("the field is too small");
         }
         doc.update_dict(w.obj, |d| d.set(b"Rect".to_vec(), Object::Array(r.iter().map(|v| Object::Real(*v)).collect())))?;
@@ -1136,26 +1143,7 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
             if let Some(js) = crate::af::calculate_js(c) {
                 aa.set(b"C".to_vec(), action(&js));
             }
-            // The calculation order lists calculated fields.
-            let af_ref = ensure_form(doc)?;
-            let mut co: Vec<Object> = doc
-                .get(af_ref)
-                .as_dict()
-                .and_then(|d| d.get(b"CO").cloned())
-                .map(|c| doc.resolve(&c))
-                .and_then(|c| c.as_array().cloned())
-                .unwrap_or_default();
-            co.retain(|o| o.as_ref() != Some(f.obj));
-            if *c != crate::af::Calculate::None {
-                co.push(Object::Ref(f.obj));
-            }
-            doc.update_dict(af_ref, |d| {
-                if co.is_empty() {
-                    d.remove(b"CO");
-                } else {
-                    d.set(b"CO".to_vec(), Object::Array(co));
-                }
-            })?;
+            crate::calc_order::keep_listed(doc, f.obj, *c != crate::af::Calculate::None)?;
         }
         doc.update_dict(f.obj, |d| {
             if aa.is_empty() {
@@ -1214,6 +1202,38 @@ pub fn set_props(doc: &mut Document, name: &str, props: &FieldProps) -> Result<S
         crate::recalculate(doc)?;
     }
     Ok(new_name)
+}
+
+/// Name field `old` `new` in each field's Calculate script that reads it
+/// ([`crate::af::rename_in_calculation`]).
+fn rename_in_calculations(doc: &mut Document, all: &[Field], old: &str, new: &str) -> Result<(), FormError> {
+    let aa_of =
+        |doc: &Document, r: ObjRef| doc.get(r).as_dict().and_then(|d| d.get(b"AA").map(|a| doc.resolve(a))).and_then(|a| a.as_dict().cloned());
+    for f in all {
+        // The script is the field's, or its only widget's when the field has none, as
+        // `actions_of` reads it.
+        let only_widget = || match f.widgets.as_slice() {
+            [w] => aa_of(doc, w.obj).map(|aa| (w.obj, aa)),
+            _ => None,
+        };
+        let Some((owner, mut aa)) = aa_of(doc, f.obj).map(|aa| (f.obj, aa)).or_else(only_widget) else { continue };
+        let Some(mut action) = aa.get(b"C").and_then(|a| doc.resolve(a).as_dict().cloned()) else { continue };
+        let js = match action.get(b"JS").map(|js| doc.resolve(js)).as_deref() {
+            Some(Object::String(s)) => s.to_text(),
+            // A stream that isn't UTF-8 reads with replacement characters, which must not be
+            // written back in place of what it holds.
+            Some(Object::Stream(s)) => match s.decoded().ok().and_then(|b| String::from_utf8(b).ok()) {
+                Some(js) => js,
+                None => continue,
+            },
+            _ => continue,
+        };
+        let Some(js) = crate::af::rename_in_calculation(&js, old, new) else { continue };
+        action.set(b"JS".to_vec(), PdfString::text(&js));
+        aa.set(b"C".to_vec(), Object::Dict(action));
+        doc.update_dict(owner, |d| d.set(b"AA".to_vec(), Object::Dict(aa)))?;
+    }
+    Ok(())
 }
 
 /// Delete a field: its widgets leave their pages and the field leaves the form.

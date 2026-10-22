@@ -492,6 +492,36 @@
 	Could not save: {e}	Speichern fehlgeschlagen: {e}
 	Earlier in tab order	Früher in der Tab-Reihenfolge
 	Later in tab order	Später in der Tab-Reihenfolge
+	Calculation order	Berechnungsreihenfolge
+	Fix order	Reihenfolge korrigieren
+	Move only what must move, so every field calculates after the fields it reads.	Nur verschieben, was verschoben werden muss, damit jedes Feld nach den Feldern berechnet wird, die es liest.
+	Earlier in calculation order	Früher in der Berechnungsreihenfolge
+	Later in calculation order	Später in der Berechnungsreihenfolge
+	Too early	Zu früh
+	Reads {name}, which calculates later, so it shows an old value.	Liest {name}, das später berechnet wird, und zeigt deshalb einen alten Wert.
+	Loop	Schleife
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Liest {names}, die es wieder lesen. Keine Reihenfolge kann eine Schleife beheben: Ändere eine der Formeln.
+	Not in order	Nicht in der Reihenfolge
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Fehlt in der im PDF gespeicherten Berechnungsreihenfolge: Andere PDF-Viewer berechnen es womöglich nicht.
+	Back to Prepare a form	Zurück zu „Formular vorbereiten“
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Noch berechnet kein Feld dieses Formulars seinen Wert. Gib einem Feld auf dem Tab „Berechnen“ seiner Eigenschaften eine Berechnung, dann erscheint es hier.
+	{names} and {last}	{names} und {last}
+	{field} reads no other field	{field} liest kein anderes Feld
+	{field} reads {fields}	{field} liest {fields}
+	No field reads it	Kein Feld liest es
+	The order saved in the PDF needs tidying	Die im PDF gespeicherte Reihenfolge muss bereinigt werden
+	Moves only what must move	Verschiebt nur, was verschoben werden muss
+	Every field calculates after the fields it reads.	Jedes Feld wird nach den Feldern berechnet, die es liest.
+	Every field outside a loop calculates after the fields it reads.	Jedes Feld außerhalb einer Schleife wird nach den Feldern berechnet, die es liest.
+	{field} reads its own value	{field} liest seinen eigenen Wert
+	{fields} read each other	{fields} lesen sich gegenseitig
+	No order can fix a loop. Change one of the formulas.	Keine Reihenfolge kann eine Schleife beheben. Ändere eine der Formeln.
+	Edit {field}'s formula	Formel von {field} bearbeiten
+	Order · top calculates first	Reihenfolge · oben wird zuerst berechnet
+	Script	Skript
+	Links on page	Verbindungen auf der Seite
+	Show on the page which fields each field reads	Auf der Seite zeigen, welche Felder jedes Feld liest
+	Drag a field to move it, or select it and press {up} or {down}.	Ziehe ein Feld, um es zu verschieben, oder wähle es aus und drücke {up} oder {down}.
 	From:	Von:
 	To:	Bis:
 	High Resolution	Hohe Auflösung
@@ -1863,6 +1893,7 @@
 	Delete field	Feld löschen
 	Duplicate field	Feld duplizieren
 	Set tab order	Tab-Reihenfolge festlegen
+	Set calculation order	Berechnungsreihenfolge festlegen
 	Change initial view	Anfangsansicht ändern
 	Set alternate text	Alternativtext festlegen
 	Mark figure as decorative	Abbildung als dekorativ markieren
@@ -2342,6 +2373,13 @@ animation effects	Off	Aus
 	no unused output name	kein freier Ausgabename
 	no output folder was chosen	kein Ausgabeordner gewählt
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	{n} PDF heruntergeladen|{n} PDFs heruntergeladen
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} Berechnung verwendet jetzt den neuen Namen.|{n} Berechnungen verwenden jetzt den neuen Namen.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Die Berechnungsreihenfolge hat {n} Eintrag, der nichts berechnet. „Reihenfolge korrigieren“ entfernt ihn.|Die Berechnungsreihenfolge hat {n} Einträge, die nichts berechnen. „Reihenfolge korrigieren“ entfernt sie.
+@plural	{fields} reads it|{fields} read it	{fields} liest es|{fields} lesen es
+@plural	{n} field shows an old value|{n} fields show old values	{n} Feld zeigt einen alten Wert|{n} Felder zeigen alte Werte
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} wird vor {fields} berechnet, das es liest.|{field} wird vor {fields} berechnet, die es liest.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} weiteres Feld wird zu früh berechnet.|{n} weitere Felder werden zu früh berechnet.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} fehlt in der im PDF gespeicherten Reihenfolge, daher berechnen andere PDF-Viewer es womöglich nicht.|{fields} fehlen in der im PDF gespeicherten Reihenfolge, daher berechnen andere PDF-Viewer sie womöglich nicht.
 	Scan	Scannen
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Unterschreiben Sie auf einem weißen Blatt Papier und fotografieren Sie es bei hellem, gleichmäßigem Licht (mit Blitz). Wählen Sie das Foto aus oder ziehen Sie es hierher: PdfCraft findet die Unterschrift und entfernt das Papier.
 	Choose photo…	Foto auswählen…
@@ -2455,3 +2493,32 @@ animation effects	Off	Aus
 	Edit this PDF	Dieses PDF bearbeiten
 	Export this PDF	Dieses PDF exportieren
 	Find text or tools	Text oder Werkzeuge suchen
+	Font	Schrift
+	Bulleted list	Aufzählung
+	Numbered list	Nummerierte Liste
+	Alignment	Ausrichtung
+	Superscript	Hochgestellt
+	Subscript	Tiefgestellt
+	Paragraph spacing	Absatzabstand
+	Less	Weniger
+	Other options	Weitere Optionen
+
+# Prepare a form ▸ Text field table
+	Add text field table	Textfeldtabelle hinzufügen
+	Text field table	Textfeldtabelle
+	Text Field Table	Textfeldtabelle
+	Columns	Spalten
+	Row spacing	Zeilenabstand
+	Column spacing	Spaltenabstand
+	First row number	Erste Zeilennummer
+	Column widths	Spaltenbreiten
+	Distribute evenly	Gleichmäßig verteilen
+	Field names	Feldnamen
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N oder {row} ist die Zeilennummer, {col} die Spaltennummer, {seq} die Zellennummer. Ohne eines davon steht die Zeilennummer am Ende.
+	Column {n}	Spalte {n}
+	Add fields	Felder hinzufügen
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	die Zeilen sind zu niedrig: Mach den Bereich höher oder verwende weniger Zeilen oder weniger Zeilenabstand
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	eine Spalte ist zu schmal: Mach den Bereich breiter, gib der Spalte mehr Breite oder verwende weniger Spalten oder weniger Spaltenabstand
+	field names can't contain a period: {name}	Feldnamen dürfen keinen Punkt enthalten: {name}
+	two cells would both be named {name}	zwei Zellen hätten beide den Namen {name}
+	a field named {name} already exists	ein Feld namens {name} ist bereits vorhanden

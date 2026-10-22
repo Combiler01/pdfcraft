@@ -197,6 +197,36 @@
 	Could not save: {e}	无法保存：{e}
 	Earlier in tab order	在 Tab 顺序中前移
 	Later in tab order	在 Tab 顺序中后移
+	Calculation order	计算顺序
+	Fix order	修正顺序
+	Move only what must move, so every field calculates after the fields it reads.	只移动必须移动的字段，使每个字段都在它读取的字段之后计算。
+	Earlier in calculation order	在计算顺序中前移
+	Later in calculation order	在计算顺序中后移
+	Too early	过早
+	Reads {name}, which calculates later, so it shows an old value.	读取 {name}，而它在之后才计算，因此显示的是旧值。
+	Loop	循环
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	读取 {names}，而它们又读取此字段。任何顺序都无法修正循环：请修改其中一个公式。
+	Not in order	不在顺序中
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	PDF 中保存的计算顺序缺少此字段：其他 PDF 查看器可能不会计算它。
+	Back to Prepare a form	返回准备表单
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	此表单中还没有计算自身值的字段。在字段属性的“计算”选项卡中为字段设置计算后，它会显示在这里。
+	{names} and {last}	{names}和{last}
+	{field} reads no other field	{field} 不读取其他字段
+	{field} reads {fields}	{field} 读取 {fields}
+	No field reads it	没有字段读取它
+	The order saved in the PDF needs tidying	PDF 中保存的顺序需要整理
+	Moves only what must move	只移动必须移动的
+	Every field calculates after the fields it reads.	每个字段都在它读取的字段之后计算。
+	Every field outside a loop calculates after the fields it reads.	循环之外的每个字段都在它读取的字段之后计算。
+	{field} reads its own value	{field} 读取自身的值
+	{fields} read each other	{fields} 相互读取
+	No order can fix a loop. Change one of the formulas.	任何顺序都无法修复循环。请修改其中一个公式。
+	Edit {field}'s formula	编辑 {field} 的公式
+	Order · top calculates first	顺序 · 上方的先计算
+	Script	脚本
+	Links on page	页面上的关联
+	Show on the page which fields each field reads	在页面上显示每个字段读取哪些字段
+	Drag a field to move it, or select it and press {up} or {down}.	拖动字段以移动它，或选中它后按 {up} 或 {down}。
 	From:	从：
 	To:	至：
 	High Resolution	高分辨率
@@ -2053,6 +2083,7 @@
 	Set status Rejected	将状态设为已拒绝
 	Set status Unmarked	将状态设为未标记
 	Set tab order	设置 Tab 键顺序
+	Set calculation order	设置计算顺序
 	Set the image of {name}	设置 {name} 的图像
 	Spreadsheet (.xlsx)	电子表格（.xlsx）
 	Square	正方形
@@ -2305,6 +2336,13 @@ animation effects	Off	关
 	no unused output name	没有可用的输出文件名
 	no output folder was chosen	未选择输出文件夹
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	已下载 {n} 个 PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} 个计算已改用新名称。
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	计算顺序中有 {n} 个不计算任何内容的条目。“修正顺序”会将其删除。
+@plural	{fields} reads it|{fields} read it	{fields} 读取它
+@plural	{n} field shows an old value|{n} fields show old values	{n} 个字段显示旧值
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} 在它读取的 {fields} 之前计算。
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	另有 {n} 个字段计算过早。
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} 不在 PDF 中保存的顺序里，其他 PDF 查看器可能不会计算。
 	Scan	扫描
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	在白纸上签名，并在明亮、均匀的光线下拍照（使用闪光灯）。选择照片或将其拖放到此处：PdfCraft 会找到签名并去除纸张背景。
 	Choose photo…	选择照片…
@@ -2418,3 +2456,32 @@ animation effects	Off	关
 	Edit this PDF	编辑此 PDF
 	Export this PDF	导出此 PDF
 	Find text or tools	查找文本或工具
+	Font	字体
+	Bulleted list	项目符号列表
+	Numbered list	编号列表
+	Alignment	对齐
+	Superscript	上标
+	Subscript	下标
+	Paragraph spacing	段落间距
+	Less	收起
+	Other options	其他选项
+
+# Prepare a form ▸ Text field table
+	Add text field table	添加文本字段表格
+	Text field table	文本字段表格
+	Text Field Table	文本字段表格
+	Columns	列
+	Row spacing	行间距
+	Column spacing	列间距
+	First row number	起始行号
+	Column widths	列宽
+	Distribute evenly	平均分布
+	Field names	字段名称
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N 或 {row} 表示行号，{col} 表示列号，{seq} 表示单元格序号。如果都没有，行号加在末尾。
+	Column {n}	第 {n} 列
+	Add fields	添加字段
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	行太矮：请增加区域高度，或减少行数或行间距
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	某列太窄：请加宽区域、给该列更多宽度，或减少列数或列间距
+	field names can't contain a period: {name}	字段名称不能包含句点：{name}
+	two cells would both be named {name}	两个单元格的名称都会是 {name}
+	a field named {name} already exists	已存在名为 {name} 的字段

@@ -1940,6 +1940,47 @@ fn preparing_a_form_adds_renames_and_deletes_fields() {
     assert_eq!(names(&s), ["Text1", "Check Box1", "email"]);
 }
 
+/// Setting the calculation order is one undoable edit that recalculates: values that ran too
+/// early come out right at once, a script calculation included, and undo brings back the old
+/// order and values together.
+#[test]
+fn setting_the_calculation_order_recalculates_and_undoes() {
+    use form_scripts::{CalcOp, Calculate};
+    let (mut s, id) = session_with(1);
+    for (i, name) in ["qty", "sub", "total", "tax"].into_iter().enumerate() {
+        let y = 250.0 - 40.0 * i as f64;
+        let kind = NewField::Text { multiline: false };
+        s.apply(id, Edit::AddField { page: 0, rect: [20.0, y, 180.0, y + 22.0], kind, name: Some(name.into()) }).unwrap();
+    }
+    let calculate = |name: &str, c: Calculate| Edit::SetFieldProps {
+        name: name.into(),
+        props: Box::new(FieldProps { calculate: Some(c), ..Default::default() }),
+    };
+    // Defined backwards: total, which reads sub, calculates first.
+    s.apply(id, calculate("total", Calculate::Simple { op: CalcOp::Sum, fields: vec!["sub".into()] })).unwrap();
+    s.apply(id, calculate("sub", Calculate::Notation("qty * 2".into()))).unwrap();
+    let script = Some("event.value = this.getField(\"total\").value / 10;".to_string());
+    s.apply(id, Edit::SetFieldScript { name: "tax".into(), event: "calculate".into(), script }).unwrap();
+    s.apply(id, Edit::SetFieldValue { name: "qty".into(), value: FieldValue::Text("5".into()) }).unwrap();
+    let values = |s: &Session| {
+        let form = &s.get(id).unwrap().form;
+        ["sub", "total", "tax"].map(|n| form.iter().find(|f| f.name == n).and_then(|f| f.value.first().cloned()).unwrap_or_default())
+    };
+    assert_eq!(values(&s), ["10", "0", "0"], "total and tax ran before sub");
+    let order = s.get(id).unwrap().calculation_order();
+    assert_eq!(order.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["total", "sub", "tax"]);
+    assert_eq!(order.fields[0].issues, [CalculationIssue::RunsTooEarly { field: "sub".into() }]);
+    assert_eq!(order.fixed(), ["sub", "total", "tax"]);
+    s.apply(id, Edit::SetCalculationOrder { names: order.fixed() }).unwrap();
+    assert_eq!(values(&s), ["10", "10", "1"]);
+    assert_eq!(s.get(id).unwrap().can_undo(), Some("Set calculation order"));
+    assert!(s.get(id).unwrap().calculation_order().fields.iter().all(|f| f.issues.is_empty()));
+    s.undo(id).unwrap();
+    assert_eq!(values(&s), ["10", "0", "0"]);
+    assert_eq!(s.get(id).unwrap().calculation_order().fixed(), ["sub", "total", "tax"], "the old order is back");
+    assert!(matches!(s.apply(id, Edit::SetCalculationOrder { names: vec!["qty".into()] }), Err(EditError::Form(_))));
+}
+
 /// One 612×300 page with the content stream `body`. Object 4 is Helvetica; `resources` is what
 /// the page's /Resources holds.
 fn one_line_page(resources: &str, body: &str) -> Vec<u8> {

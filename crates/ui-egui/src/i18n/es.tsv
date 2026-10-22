@@ -515,6 +515,36 @@
 	Could not save: {e}	No se pudo guardar: {e}
 	Earlier in tab order	Antes en el orden de tabulación
 	Later in tab order	Después en el orden de tabulación
+	Calculation order	Orden de cálculo
+	Fix order	Corregir orden
+	Move only what must move, so every field calculates after the fields it reads.	Mueve solo lo que debe moverse, para que cada campo se calcule después de los campos que lee.
+	Earlier in calculation order	Antes en el orden de cálculo
+	Later in calculation order	Después en el orden de cálculo
+	Too early	Demasiado pronto
+	Reads {name}, which calculates later, so it shows an old value.	Lee {name}, que se calcula después, así que muestra un valor antiguo.
+	Loop	Bucle
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Lee {names}, que a su vez lo leen. Ningún orden puede corregir un bucle: cambia una de las fórmulas.
+	Not in order	Fuera del orden
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Falta en el orden de cálculo guardado en el PDF: otros visores de PDF podrían no calcularlo.
+	Back to Prepare a form	Volver a Preparar un formulario
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ningún campo de este formulario calcula todavía su valor. Dale a un campo un cálculo en la pestaña Calcular de sus propiedades y aparecerá aquí.
+	{names} and {last}	{names} y {last}
+	{field} reads no other field	{field} no lee ningún otro campo
+	{field} reads {fields}	{field} lee {fields}
+	No field reads it	Ningún campo lo lee
+	The order saved in the PDF needs tidying	El orden guardado en el PDF necesita una limpieza
+	Moves only what must move	Mueve solo lo que debe moverse
+	Every field calculates after the fields it reads.	Cada campo se calcula después de los campos que lee.
+	Every field outside a loop calculates after the fields it reads.	Cada campo fuera de un bucle se calcula después de los campos que lee.
+	{field} reads its own value	{field} lee su propio valor
+	{fields} read each other	{fields} se leen entre sí
+	No order can fix a loop. Change one of the formulas.	Ningún orden puede corregir un bucle. Cambia una de las fórmulas.
+	Edit {field}'s formula	Editar la fórmula de {field}
+	Order · top calculates first	Orden · lo de arriba se calcula primero
+	Script	Script
+	Links on page	Vínculos en la página
+	Show on the page which fields each field reads	Mostrar en la página qué campos lee cada campo
+	Drag a field to move it, or select it and press {up} or {down}.	Arrastra un campo para moverlo, o selecciónalo y pulsa {up} o {down}.
 	From:	Desde:
 	To:	Hasta:
 	High Resolution	Alta resolución
@@ -1942,6 +1972,7 @@ action wizard	Start	Iniciar
 	Delete field	Eliminar campo
 	Duplicate field	Duplicar campo
 	Set tab order	Definir orden de tabulación
+	Set calculation order	Establecer el orden de cálculo
 	Change initial view	Cambiar vista inicial
 	Set alternate text	Definir texto alternativo
 	Mark figure as decorative	Marcar figura como decorativa
@@ -2477,6 +2508,13 @@ animation effects	Off	Desactivados
 	no unused output name	no hay un nombre de salida libre
 	no output folder was chosen	no se eligió ninguna carpeta de salida
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Se descargó {n} PDF|Se descargaron {n} PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} cálculo usa ahora el nuevo nombre.|{n} cálculos usan ahora el nuevo nombre.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	El orden de cálculo tiene {n} entrada que no calcula nada. «Corregir orden» la elimina.|El orden de cálculo tiene {n} entradas que no calculan nada. «Corregir orden» las elimina.
+@plural	{fields} reads it|{fields} read it	{fields} lo lee|{fields} lo leen
+@plural	{n} field shows an old value|{n} fields show old values	{n} campo muestra un valor antiguo|{n} campos muestran valores antiguos
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se calcula antes que {fields}, que lee.|{field} se calcula antes que {fields}, que lee.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	{n} campo más se calcula demasiado pronto.|{n} campos más se calculan demasiado pronto.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} falta en el orden guardado en el PDF, así que otros visores de PDF podrían no calcularlo.|{fields} faltan en el orden guardado en el PDF, así que otros visores de PDF podrían no calcularlos.
 	Scan	Escanear
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Firma en una hoja de papel blanco y hazle una foto con luz intensa y uniforme (usa el flash). Elige la foto o suéltala aquí: PdfCraft encuentra la firma y elimina el papel.
 	Choose photo…	Elegir foto…
@@ -2577,6 +2615,15 @@ animation effects	Off	Desactivados
 	Make properties default	Usar como propiedades predeterminadas
 	Pages selected	Páginas seleccionadas
 	Page properties	Propiedades de página
+	Font	Fuente
+	Bulleted list	Lista con viñetas
+	Numbered list	Lista numerada
+	Alignment	Alineación
+	Superscript	Superíndice
+	Subscript	Subíndice
+	Paragraph spacing	Espaciado entre párrafos
+	Less	Menos
+	Other options	Otras opciones
 
 # Historical snapshot notice bar (View signed version / View revision).
 	You are viewing the signed version of “{from}” (revision {rev}). It is a snapshot: changes here won't affect the original.	Estás viendo la versión firmada de «{from}» (revisión {rev}). Es una instantánea: los cambios aquí no afectarán al original.
@@ -2600,3 +2647,27 @@ animation effects	Off	Desactivados
 	Edit this PDF	Editar este PDF
 	Export this PDF	Exportar este PDF
 	Find text or tools	Buscar texto o herramientas
+
+# Prepare a form ▸ Text field table
+	Add text field table	Añadir tabla de campos de texto
+	Text field table	Tabla de campos de texto
+	Text Field Table	Tabla de campos de texto
+	Columns	Columnas
+	Row spacing	Espacio entre filas
+	Column spacing	Espacio entre columnas
+	First row number	Número de la primera fila
+	Column widths	Anchos de columna
+	Distribute evenly	Repartir por igual
+	Field names	Nombres de los campos
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N o {row} es el número de fila, {col} el de columna y {seq} el de celda. Si no hay ninguno, el número de fila va al final.
+	Column {n}	Columna {n}
+	Add fields	Añadir campos
+	a table has 1 to {max} rows	una tabla tiene de 1 a {max} filas
+	a table has 1 to {max} columns	una tabla tiene de 1 a {max} columnas
+	the first row number can be at most {max}	el número de la primera fila puede ser como mucho {max}
+	the area, the spacing and the column widths must be numbers, the spacing 0 or more and each width more than 0	el área, el espaciado y los anchos de columna deben ser números, el espaciado 0 o más y cada ancho mayor que 0
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	las filas son demasiado bajas: haz el área más alta o usa menos filas o menos espacio entre filas
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	una columna es demasiado estrecha: haz el área más ancha, dale más anchura a la columna o usa menos columnas o menos espacio entre columnas
+	field names can't contain a period: {name}	los nombres de campo no pueden contener un punto: {name}
+	two cells would both be named {name}	dos celdas se llamarían {name}
+	a field named {name} already exists	ya existe un campo llamado {name}

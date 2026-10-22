@@ -512,6 +512,36 @@
 	Could not save: {e}	Не удалось сохранить: {e}
 	Earlier in tab order	Раньше в порядке табуляции
 	Later in tab order	Позже в порядке табуляции
+	Calculation order	Порядок вычислений
+	Fix order	Исправить порядок
+	Move only what must move, so every field calculates after the fields it reads.	Перемещает только то, что необходимо, чтобы каждое поле вычислялось после полей, которые оно читает.
+	Earlier in calculation order	Раньше в порядке вычислений
+	Later in calculation order	Позже в порядке вычислений
+	Too early	Слишком рано
+	Reads {name}, which calculates later, so it shows an old value.	Читает {name}, которое вычисляется позже, поэтому показывает старое значение.
+	Loop	Цикл
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Читает {names}, которые в свою очередь читают его. Никакой порядок не исправит цикл: измените одну из формул.
+	Not in order	Вне порядка
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Отсутствует в порядке вычислений, сохранённом в PDF: другие программы просмотра PDF могут его не вычислять.
+	Back to Prepare a form	Назад к «Подготовить форму»
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Ни одно поле этой формы пока не вычисляет своё значение. Задайте полю вычисление на вкладке «Вычислить» его свойств, и оно появится здесь.
+	{names} and {last}	{names} и {last}
+	{field} reads no other field	{field} не читает других полей
+	{field} reads {fields}	{field} читает {fields}
+	No field reads it	Его не читает ни одно поле
+	The order saved in the PDF needs tidying	Сохранённый в PDF порядок нуждается в исправлении
+	Moves only what must move	Перемещает только то, что нужно
+	Every field calculates after the fields it reads.	Каждое поле вычисляется после полей, которые оно читает.
+	Every field outside a loop calculates after the fields it reads.	Каждое поле вне цикла вычисляется после полей, которые оно читает.
+	{field} reads its own value	{field} читает собственное значение
+	{fields} read each other	{fields} читают друг друга
+	No order can fix a loop. Change one of the formulas.	Никакой порядок не исправит цикл. Измените одну из формул.
+	Edit {field}'s formula	Изменить формулу {field}
+	Order · top calculates first	Порядок · верхнее вычисляется первым
+	Script	Скрипт
+	Links on page	Связи на странице
+	Show on the page which fields each field reads	Показывать на странице, какие поля читает каждое поле
+	Drag a field to move it, or select it and press {up} or {down}.	Перетащите поле, чтобы переместить его, или выберите его и нажмите {up} или {down}.
 	From:	От:
 	To:	До:
 	High Resolution	Высокое разрешение
@@ -1928,6 +1958,7 @@
 	Delete field	Удалить поле
 	Duplicate field	Дублировать поле
 	Set tab order	Задать порядок табуляции
+	Set calculation order	Задать порядок вычислений
 	Change initial view	Изменить начальный вид
 	Set alternate text	Задать альтернативный текст
 	Mark figure as decorative	Пометить фигуру как декоративную
@@ -2254,6 +2285,13 @@ animation effects	Off	Выкл
 	no unused output name	нет свободного имени для выходного файла
 	no output folder was chosen	не выбрана папка для вывода
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Скачан {n} PDF-файл|Скачано {n} PDF-файла|Скачано {n} PDF-файлов
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} вычисление теперь использует новое имя.|{n} вычисления теперь используют новое имя.|{n} вычислений теперь используют новое имя.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	В порядке вычислений {n} запись, которая ничего не вычисляет. «Исправить порядок» удалит её.|В порядке вычислений {n} записи, которые ничего не вычисляют. «Исправить порядок» удалит их.|В порядке вычислений {n} записей, которые ничего не вычисляют. «Исправить порядок» удалит их.
+@plural	{fields} reads it|{fields} read it	{fields} читает его|{fields} читают его|{fields} читают его
+@plural	{n} field shows an old value|{n} fields show old values	{n} поле показывает старое значение|{n} поля показывают старые значения|{n} полей показывают старые значения
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} вычисляется раньше {fields}, которое оно читает.|{field} вычисляется раньше {fields}, которые оно читает.|{field} вычисляется раньше {fields}, которые оно читает.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ещё {n} поле вычисляется слишком рано.|Ещё {n} поля вычисляются слишком рано.|Ещё {n} полей вычисляются слишком рано.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут его не вычислить.|{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут их не вычислить.|{fields} нет в порядке, сохранённом в PDF, поэтому другие программы просмотра PDF могут их не вычислить.
 	Scan	Сканировать
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Распишитесь на листе белой бумаги и сфотографируйте его при ярком равномерном освещении (со вспышкой). Выберите фото или перетащите его сюда: PdfCraft найдёт подпись и уберёт бумагу.
 	Choose photo…	Выбрать фото…
@@ -2367,3 +2405,32 @@ animation effects	Off	Выкл
 	Edit this PDF	Редактировать этот PDF
 	Export this PDF	Экспортировать этот PDF
 	Find text or tools	Найти текст или инструменты
+	Font	Шрифт
+	Bulleted list	Маркированный список
+	Numbered list	Нумерованный список
+	Alignment	Выравнивание
+	Superscript	Надстрочный
+	Subscript	Подстрочный
+	Paragraph spacing	Интервал между абзацами
+	Less	Меньше
+	Other options	Другие параметры
+
+# Prepare a form ▸ Text field table
+	Add text field table	Добавить таблицу текстовых полей
+	Text field table	Таблица текстовых полей
+	Text Field Table	Таблица текстовых полей
+	Columns	Столбцы
+	Row spacing	Интервал между строками
+	Column spacing	Интервал между столбцами
+	First row number	Номер первой строки
+	Column widths	Ширина столбцов
+	Distribute evenly	Распределить равномерно
+	Field names	Имена полей
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N или {row} — номер строки, {col} — номер столбца, {seq} — номер ячейки. Если их нет, номер строки добавляется в конец.
+	Column {n}	Столбец {n}
+	Add fields	Добавить поля
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	строки слишком низкие: увеличьте высоту области, уменьшите число строк или интервал между ними
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	столбец слишком узкий: расширьте область, отдайте столбцу больше ширины, уменьшите число столбцов или интервал между ними
+	field names can't contain a period: {name}	имена полей не могут содержать точку: {name}
+	two cells would both be named {name}	две ячейки получили бы одно имя {name}
+	a field named {name} already exists	поле с именем {name} уже существует

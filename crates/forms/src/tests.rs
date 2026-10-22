@@ -1048,6 +1048,237 @@ fn formats_validation_and_calculations_run_like_acrobat() {
     assert_eq!(field(&fields(&doc), "Price").actions.format, Format::None);
 }
 
+/// Renaming a field renames it in the calculations that read it: a sum dropped it, notation
+/// read it as 0 and a script read a field that no longer existed.
+#[test]
+fn renaming_a_field_renames_it_in_the_calculations_that_read_it() {
+    use crate::af::{CalcOp, Calculate};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["a", "b", "sum", "product", "script"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let calculate = |c: Calculate| FieldProps { calculate: Some(c), ..FieldProps::default() };
+    set_props(&mut doc, "sum", &calculate(Calculate::Simple { op: CalcOp::Sum, fields: vec!["a".into(), "b".into()] })).unwrap();
+    set_props(&mut doc, "product", &calculate(Calculate::Notation("a * b + ab".into()))).unwrap();
+    set_field_script(&mut doc, "script", "calculate", Some("event.value = getField(\"a\").value + getField(\"b\").value;")).unwrap();
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let check = |doc: &Document| {
+        let all = fields(doc);
+        assert_eq!(field(&all, "sum").actions.calculate, Calculate::Simple { op: CalcOp::Sum, fields: vec!["qty".into(), "b".into()] });
+        assert_eq!(field(&all, "product").actions.calculate, Calculate::Notation("qty * b + ab".into()));
+        let script = field(&all, "script").actions.scripts.calculate.clone();
+        assert_eq!(script.as_deref(), Some("event.value = getField(\"qty\").value + getField(\"b\").value;"));
+    };
+    check(&doc);
+    let mut doc = reopen(&doc);
+    check(&doc);
+    set_value(&mut doc, "qty", &FieldValue::Text("10".into())).unwrap();
+    set_value(&mut doc, "b", &FieldValue::Text("2".into())).unwrap();
+    let all = fields(&doc);
+    assert_eq!((field(&all, "sum").value.clone(), field(&all, "product").value.clone()), (vec!["12".to_string()], vec!["20".to_string()]));
+}
+
+/// The rename reaches a script stored as a stream, an indirect action and the only widget's
+/// actions; it leaves a script that isn't UTF-8 as it is, and a name another field still has.
+#[test]
+fn a_rename_reaches_every_stored_form_of_a_calculation() {
+    let widget = |name: &str, y: u32, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R {rest} >>", y + 20)
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 11 0 R 12 0 R 13 0 R 15 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 11 0 R 12 0 R 13 0 R 14 0 R] /DA (/Helv 0 Tf 0 g) >>".into(),
+        widget("a", 700, ""),
+        widget("stream", 660, "/AA << /C 8 0 R >>"),
+        widget("bytes", 620, "/AA << /C << /S /JavaScript /JS 10 0 R >> >>"),
+        "<< /S /JavaScript /JS 9 0 R >>".into(),
+        "<< /Length 34 >>\nstream\nevent.value = getField(\"a\").value;\nendstream".into(),
+        "<< /Length 85 /Filter /ASCIIHexDecode >>\nstream\n2F2A20FF202A2F206576656E742E76616C7565203D206765744669656C6428226122292E76616C75653B>\nendstream".into(),
+        widget("dup", 580, ""),
+        widget("dup", 540, ""),
+        widget("both", 500, "/AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", new Array\\(\"dup\", \"a\"\\)\\);) >> >>"),
+        "<< /FT /Tx /T (kid) /Kids [15 0 R] >>".into(),
+        "<< /Type /Annot /Subtype /Widget /Parent 14 0 R /Rect [50 460 250 480] /P 3 0 R /AA << /C << /S /JavaScript /JS (event.value = getField\\('a'\\).value;) >> >> >>".into(),
+    ];
+    let mut doc = document(&objs);
+    let calc = |doc: &Document, name: &str| {
+        let all = fields(doc);
+        let f = field(&all, name);
+        (f.actions.calculate.clone(), f.actions.scripts.calculate.clone().unwrap_or_default())
+    };
+    assert!(calc(&doc, "stream").1.contains("getField(\"a\")"), "{:?}", calc(&doc, "stream"));
+    set_props(&mut doc, "a", &FieldProps { name: Some("qty".into()), ..FieldProps::default() }).unwrap();
+    let doc = reopen(&doc);
+    assert_eq!(calc(&doc, "stream").1, "event.value = getField(\"qty\").value;");
+    assert_eq!(calc(&doc, "kid").1, "event.value = getField(\"qty\").value;");
+    assert!(calc(&doc, "bytes").1.contains("getField(\"a\")"), "a script that isn't UTF-8 is not written back");
+    assert_eq!(calc(&doc, "both").0, af::Calculate::Simple { op: af::CalcOp::Sum, fields: vec!["dup".into(), "qty".into()] });
+    let mut doc = doc;
+    set_props(&mut doc, "dup", &FieldProps { name: Some("dup2".into()), ..FieldProps::default() }).unwrap();
+    assert_eq!(
+        calc(&doc, "both").0,
+        af::Calculate::Simple { op: af::CalcOp::Sum, fields: vec!["dup".into(), "qty".into()] },
+        "the other dup keeps the name"
+    );
+}
+
+/// The calculation order is read with what each formula reads and what is wrong with the order;
+/// Fix order moves only what must move, and the order it writes is kept across a save.
+#[test]
+fn the_calculation_order_is_checked_fixed_and_kept() {
+    use crate::af::{CalcOp, Calculate};
+    use crate::calc_order::CalculationIssue::{Cycle, RunsTooEarly};
+    let mut doc = one_page();
+    let text = NewField::Text { multiline: false };
+    for (i, name) in ["qty", "price", "shipping", "sub", "total", "grand", "tax"].into_iter().enumerate() {
+        let y = 700.0 - 40.0 * i as f64;
+        add_field(&mut doc, 0, [50.0, y, 250.0, y + 20.0], &text, Some(name)).unwrap();
+    }
+    let calculate = |c: Calculate| FieldProps { calculate: Some(c), ..FieldProps::default() };
+    let sum = |names: &[&str]| calculate(Calculate::Simple { op: CalcOp::Sum, fields: names.iter().map(|n| n.to_string()).collect() });
+    // Each calculation joins the end of the order, so this chain is written backwards.
+    set_props(&mut doc, "grand", &sum(&["total"])).unwrap();
+    set_props(&mut doc, "total", &sum(&["sub", "shipping"])).unwrap();
+    set_props(&mut doc, "sub", &calculate(Calculate::Notation("qty * price".into()))).unwrap();
+    set_field_script(&mut doc, "tax", "calculate", Some("event.value = getField(\"total\").value * 0.2; // getField(\"grand\")")).unwrap();
+    for (name, v) in [("qty", "2"), ("price", "10"), ("shipping", "5")] {
+        set_value(&mut doc, name, &FieldValue::Text(v.into())).unwrap();
+    }
+    let value = |doc: &Document, name: &str| field(&fields(doc), name).value.clone();
+    assert_eq!((value(&doc, "total"), value(&doc, "grand")), (vec!["25".to_string()], vec!["0".to_string()]), "grand runs too early: stale");
+    let order = calculation_order(&doc, &fields(&doc));
+    let names: Vec<&str> = order.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, ["grand", "total", "sub", "tax"]);
+    let issues: Vec<_> = order.fields.iter().map(|f| f.issues.clone()).collect();
+    assert_eq!(issues, [vec![RunsTooEarly { field: "total".into() }], vec![RunsTooEarly { field: "sub".into() }], vec![], vec![]]);
+    assert_eq!(order.fields[1].reads, ["sub", "shipping"]);
+    assert_eq!(order.fields[3].reads, ["total"], "a name in a comment isn't read");
+    assert!(order.fields.iter().all(|f| f.listed) && order.extra.is_empty());
+    assert!(order.fixable());
+    assert_eq!(order.fixed(), ["sub", "total", "grand", "tax"]);
+    set_calculation_order(&mut doc, &order.fixed()).unwrap();
+    recalculate(&mut doc).unwrap();
+    assert_eq!((value(&doc, "total"), value(&doc, "grand")), (vec!["25".to_string()], vec!["25".to_string()]));
+    let mut doc = reopen(&doc);
+    let order = calculation_order(&doc, &fields(&doc));
+    assert_eq!(order.fields.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["sub", "total", "grand", "tax"], "kept across a save");
+    assert!(order.fields.iter().all(|f| f.issues.is_empty()) && !order.fixable());
+    // Names given first, the others after them in their order.
+    set_calculation_order(&mut doc, &["tax".into()]).unwrap();
+    let names = |doc: &Document| calculation_order(doc, &fields(doc)).fields.into_iter().map(|f| f.name).collect::<Vec<_>>();
+    assert_eq!(names(&doc), ["tax", "sub", "total", "grand"]);
+    for (bad, error) in [
+        (vec!["qty"], FormError::Invalid("qty has no calculation".into())),
+        (vec!["nope"], FormError::NoSuchField("nope".into())),
+        (vec!["sub", "sub"], FormError::Invalid("sub is in the order twice".into())),
+    ] {
+        let bad: Vec<String> = bad.into_iter().map(String::from).collect();
+        assert_eq!(set_calculation_order(&mut doc, &bad), Err(error));
+    }
+    assert_eq!(names(&doc), ["tax", "sub", "total", "grand"], "a refused order changes nothing");
+    // A loop: sub now reads grand, which reads total, which reads sub. Its new formula keeps its
+    // place in the order. Fix order can't fix a loop, and leaves it in its order.
+    set_props(&mut doc, "sub", &calculate(Calculate::Notation("qty * price + grand".into()))).unwrap();
+    let order = calculation_order(&doc, &fields(&doc));
+    let issues: Vec<(&str, &[_])> = order.fields.iter().map(|f| (f.name.as_str(), f.issues.as_slice())).collect();
+    assert_eq!(issues[0], ("tax", &[RunsTooEarly { field: "total".into() }][..]));
+    assert_eq!(
+        issues[1..],
+        [
+            ("sub", &[Cycle { fields: vec!["grand".into()] }][..]),
+            ("total", &[Cycle { fields: vec!["sub".into()] }][..]),
+            ("grand", &[Cycle { fields: vec!["total".into()] }][..]),
+        ]
+    );
+    assert_eq!(order.fixed(), ["sub", "total", "tax", "grand"], "only tax moves, to just after total");
+}
+
+/// `/CO` as other tools leave it: a calculated field missing, a field without a calculation, an
+/// entry repeated, a reference to nothing and a number. The order reads around them, and setting
+/// the order writes `/CO` afresh.
+#[test]
+fn a_calculation_order_with_gaps_and_extra_entries() {
+    let widget = |name: &str, y: u32, rest: &str| {
+        format!("<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R {rest} >>", y + 20)
+    };
+    let sum = |names: &str| format!("/AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", \"{names}\"\\);) >> >>");
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /CO [6 0 R 5 0 R 6 0 R 99 0 R 12] >>".into(),
+        widget("a", 700, "/V (3)"),
+        widget("listed", 660, &sum("a")),
+        widget("unlisted", 620, &sum("listed")),
+        widget("b", 580, "/V (4)"),
+    ];
+    let mut doc = document(&objs);
+    let order = calculation_order(&doc, &fields(&doc));
+    let rows: Vec<(&str, bool, &[_])> = order.fields.iter().map(|f| (f.name.as_str(), f.listed, f.issues.as_slice())).collect();
+    assert_eq!(rows, [("listed", true, &[][..]), ("unlisted", false, &[crate::calc_order::CalculationIssue::NotInOrder][..])]);
+    assert_eq!(order.extra, ["a", "listed", "99 0 R", "not a reference"]);
+    assert!(order.fixable());
+    assert_eq!(order.fixed(), ["listed", "unlisted"]);
+    assert_eq!(recalculate(&mut doc), Ok(2), "the unlisted field calculates too, after the listed one");
+    assert_eq!(field(&fields(&doc), "unlisted").value, ["3"]);
+    set_calculation_order(&mut doc, &[]).unwrap();
+    let doc = reopen(&doc);
+    let co = acroform(&doc).and_then(|af| af.get(b"CO").cloned()).unwrap();
+    let refs: Vec<_> = doc.resolve(&co).as_array().unwrap().iter().filter_map(Object::as_ref).collect();
+    assert_eq!(refs, [field(&fields(&doc), "listed").obj, field(&fields(&doc), "unlisted").obj], "every calculated field once, nothing else");
+    assert!(!calculation_order(&doc, &fields(&doc)).fixable());
+}
+
+/// Two calculated fields with one full name (a malformed form: a full name is one field). The
+/// order names them both, so a repeated name stands for the next of them in the current order:
+/// the current order sets back unchanged, and Fix order and moves work around them.
+#[test]
+fn two_fields_with_one_name_keep_their_places_in_the_order() {
+    let widget = |name: &str, y: u32, reads: &str| {
+        format!(
+            "<< /Type /Annot /Subtype /Widget /FT /Tx /T ({name}) /Rect [50 {y} 250 {}] /P 3 0 R /AA << /C << /S /JavaScript /JS (AFSimple_Calculate\\(\"SUM\", \"{reads}\"\\);) >> >> >>",
+            y + 20
+        )
+    };
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R /AcroForm 4 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 600 800] >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Annots [5 0 R 6 0 R 7 0 R 8 0 R] >>".into(),
+        "<< /Fields [5 0 R 6 0 R 7 0 R 8 0 R] /DA (/Helv 0 Tf 0 g) /CO [6 0 R 7 0 R 5 0 R] >>".into(),
+        widget("dup", 700, "x"),
+        widget("dup", 660, "src"),
+        widget("src", 620, "x"),
+        "<< /Type /Annot /Subtype /Widget /FT /Tx /T (x) /Rect [50 580 250 600] /P 3 0 R /V (3) >>".into(),
+    ];
+    let mut doc = document(&objs);
+    // Each dup told apart by what it reads.
+    let rows = |doc: &Document| -> Vec<(String, Vec<String>, bool)> {
+        calculation_order(doc, &fields(doc)).fields.into_iter().map(|f| (f.name, f.reads, f.issues.is_empty())).collect()
+    };
+    let row = |name: &str, reads: &str, ok: bool| (name.to_owned(), vec![reads.to_owned()], ok);
+    assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)]);
+    let current: Vec<String> = ["dup", "src", "dup"].map(String::from).into();
+    set_calculation_order(&mut doc, &current).unwrap();
+    assert_eq!(rows(&doc), [row("dup", "src", false), row("src", "x", true), row("dup", "x", true)], "the current order sets back unchanged");
+    let order = calculation_order(&doc, &fields(&doc));
+    assert_eq!(order.fixed(), ["src", "dup", "dup"]);
+    set_calculation_order(&mut doc, &order.fixed()).unwrap();
+    assert_eq!(rows(&doc), [row("src", "x", true), row("dup", "src", true), row("dup", "x", true)], "the dup that reads src moves after it");
+    // Each dup calculates, not the first of them twice.
+    assert_eq!(recalculate(&mut doc), Ok(3));
+    let values: Vec<Vec<String>> = fields(&doc).into_iter().filter(|f| f.name == "dup").map(|f| f.value).collect();
+    assert_eq!(values, [["3"], ["3"]]);
+    // A name given alone stands for the first of its fields in the current order.
+    set_calculation_order(&mut doc, &["dup".into()]).unwrap();
+    assert_eq!(rows(&doc)[0], row("dup", "src", false));
+    let thrice: Vec<String> = ["dup", "dup", "dup"].map(String::from).into();
+    assert_eq!(set_calculation_order(&mut doc, &thrice), Err(FormError::Invalid("dup is in the order twice".into())));
+}
+
 #[test]
 fn new_text_fields_fit_their_box() {
     // #1888: a fixed 12 pt was clipped in a short box. New text and date fields take Acrobat's

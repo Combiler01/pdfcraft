@@ -599,6 +599,36 @@ key	Space	Mezerník
 	Could not save: {e}	Nelze uložit: {e}
 	Earlier in tab order	Dříve v pořadí tabulátoru
 	Later in tab order	Později v pořadí tabulátoru
+	Calculation order	Pořadí výpočtů
+	Fix order	Opravit pořadí
+	Move only what must move, so every field calculates after the fields it reads.	Přesune jen to, co musí, aby se každé pole počítalo až po polích, která čte.
+	Earlier in calculation order	Dříve v pořadí výpočtů
+	Later in calculation order	Později v pořadí výpočtů
+	Too early	Příliš brzy
+	Reads {name}, which calculates later, so it shows an old value.	Čte {name}, které se počítá později, takže ukazuje starou hodnotu.
+	Loop	Smyčka
+	Reads {names}, which read it back. No order can fix a loop: change one of the formulas.	Čte {names}, která ho čtou zpět. Žádné pořadí smyčku neopraví: změňte jeden ze vzorců.
+	Not in order	Mimo pořadí
+	Missing from the calculation order saved in the PDF: other PDF viewers may not calculate it.	Chybí v pořadí výpočtů uloženém v PDF: jiné prohlížeče PDF ho možná nepočítají.
+	Back to Prepare a form	Zpět na Připravit formulář
+	No field in this form calculates its value yet. Give a field a calculation on the Calculate tab of its properties, and it shows here.	Žádné pole tohoto formuláře zatím nepočítá svou hodnotu. Zadejte poli výpočet na kartě Výpočet v jeho vlastnostech a zobrazí se zde.
+	{names} and {last}	{names} a {last}
+	{field} reads no other field	{field} nečte žádné jiné pole
+	{field} reads {fields}	{field} čte {fields}
+	No field reads it	Žádné pole ho nečte
+	The order saved in the PDF needs tidying	Pořadí uložené v PDF je potřeba uklidit
+	Moves only what must move	Přesune jen to, co musí
+	Every field calculates after the fields it reads.	Každé pole se počítá až po polích, která čte.
+	Every field outside a loop calculates after the fields it reads.	Každé pole mimo smyčku se počítá až po polích, která čte.
+	{field} reads its own value	{field} čte svou vlastní hodnotu
+	{fields} read each other	{fields} čtou jedno druhé
+	No order can fix a loop. Change one of the formulas.	Smyčku žádné pořadí neopraví. Změňte jeden ze vzorců.
+	Edit {field}'s formula	Upravit vzorec pole {field}
+	Order · top calculates first	Pořadí · horní se počítá první
+	Script	Skript
+	Links on page	Vazby na stránce
+	Show on the page which fields each field reads	Ukázat na stránce, která pole čte každé pole
+	Drag a field to move it, or select it and press {up} or {down}.	Pole přesunete přetažením, nebo ho vyberte a stiskněte {up} nebo {down}.
 	From:	Od:
 	To:	Do:
 	High Resolution	Vysoké rozlišení
@@ -1974,6 +2004,7 @@ key	Space	Mezerník
 	Delete field	Odstranit pole
 	Duplicate field	Duplikovat pole
 	Set tab order	Nastavit pořadí tabulátoru
+	Set calculation order	Nastavit pořadí výpočtů
 	Change initial view	Změnit úvodní zobrazení
 	Set alternate text	Nastavit alternativní text
 	Mark figure as decorative	Označit obrázek jako dekorativní
@@ -2415,6 +2446,13 @@ animation effects	Off	Vypnuto
 	no unused output name	žádný volný název výstupního souboru
 	no output folder was chosen	nebyla vybrána výstupní složka
 @plural	Downloaded {n} PDF|Downloaded {n} PDFs	Stažen {n} soubor PDF|Staženy {n} soubory PDF|Staženo {n} souborů PDF
+@plural	{n} calculation now uses the new name.|{n} calculations now use the new name.	{n} výpočet nyní používá nový název.|{n} výpočty nyní používají nový název.|{n} výpočtů nyní používá nový název.
+@plural	The calculation order has {n} entry that calculates nothing. Fix order removes it.|The calculation order has {n} entries that calculate nothing. Fix order removes them.	Pořadí výpočtů má {n} položku, která nic nepočítá. „Opravit pořadí“ ji odstraní.|Pořadí výpočtů má {n} položky, které nic nepočítají. „Opravit pořadí“ je odstraní.|Pořadí výpočtů má {n} položek, které nic nepočítají. „Opravit pořadí“ je odstraní.
+@plural	{fields} reads it|{fields} read it	{fields} ho čte|{fields} ho čtou|{fields} ho čtou
+@plural	{n} field shows an old value|{n} fields show old values	{n} pole ukazuje starou hodnotu|{n} pole ukazují staré hodnoty|{n} polí ukazuje staré hodnoty
+@plural	{field} calculates before {fields}, which it reads.|{field} calculates before {fields}, which it reads.	{field} se počítá před {fields}, které čte.|{field} se počítá před {fields}, která čte.|{field} se počítá před {fields}, která čte.
+@plural	{n} more field calculates too early.|{n} more fields calculate too early.	Ještě {n} pole se počítá příliš brzy.|Ještě {n} pole se počítají příliš brzy.|Ještě {n} polí se počítá příliš brzy.
+@plural	{fields} is missing from the order saved in the PDF, so other PDF viewers may not calculate it.|{fields} are missing from the order saved in the PDF, so other PDF viewers may not calculate them.	{fields} chybí v pořadí uloženém v PDF, takže ho jiné prohlížeče PDF nemusí vypočítat.|{fields} chybí v pořadí uloženém v PDF, takže je jiné prohlížeče PDF nemusí vypočítat.|{fields} chybí v pořadí uloženém v PDF, takže je jiné prohlížeče PDF nemusí vypočítat.
 	Scan	Skenovat
 	Sign a sheet of white paper and take a photo of it in bright, even light (use the flash). Choose the photo or drop it here: PdfCraft finds the signature and removes the paper.	Podepište se na bílý list papíru a vyfoťte ho při jasném, rovnoměrném světle (použijte blesk). Vyberte fotografii nebo ji sem přetáhněte: PdfCraft najde podpis a odstraní papír.
 	Choose photo…	Vybrat fotografii…
@@ -2528,3 +2566,32 @@ animation effects	Off	Vypnuto
 	Edit this PDF	Upravit toto PDF
 	Export this PDF	Exportovat toto PDF
 	Find text or tools	Hledat text nebo nástroje
+	Font	Písmo
+	Bulleted list	Odrážkový seznam
+	Numbered list	Číslovaný seznam
+	Alignment	Zarovnání
+	Superscript	Horní index
+	Subscript	Dolní index
+	Paragraph spacing	Mezera mezi odstavci
+	Less	Méně
+	Other options	Další možnosti
+
+# Prepare a form ▸ Text field table
+	Add text field table	Přidat tabulku textových polí
+	Text field table	Tabulka textových polí
+	Text Field Table	Tabulka textových polí
+	Columns	Sloupce
+	Row spacing	Mezera mezi řádky
+	Column spacing	Mezera mezi sloupci
+	First row number	Číslo prvního řádku
+	Column widths	Šířky sloupců
+	Distribute evenly	Rozložit rovnoměrně
+	Field names	Názvy polí
+	N or {row} is the row number, {col} the column number, {seq} the cell number. With none of them, the row number goes last.	N nebo {row} je číslo řádku, {col} číslo sloupce a {seq} číslo buňky. Bez nich se číslo řádku přidá na konec.
+	Column {n}	Sloupec {n}
+	Add fields	Přidat pole
+	the rows are too short: make the area taller, or use fewer rows or less row spacing	řádky jsou příliš nízké: zvětšete výšku oblasti nebo použijte méně řádků či menší mezeru mezi řádky
+	a column is too narrow: make the area wider, give the column more of it, or use fewer columns or less column spacing	sloupec je příliš úzký: rozšiřte oblast, dejte sloupci více místa nebo použijte méně sloupců či menší mezeru mezi sloupci
+	field names can't contain a period: {name}	názvy polí nesmějí obsahovat tečku: {name}
+	two cells would both be named {name}	dvě buňky by se jmenovaly {name}
+	a field named {name} already exists	pole s názvem {name} už existuje

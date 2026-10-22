@@ -289,6 +289,28 @@ impl XRef {
         Some(f(&mut cache))
     }
 
+    /// PdfCraft patch: (hayro-syntax (22)) run `f` on this PDF's parsed object stream indexes
+    /// ([`ObjectStreamIndexes`]). `None` when there is none to use (the dummy xref, or a no_std
+    /// cache already borrowed), and the caller then parses the index without it. A poisoned lock
+    /// is still used: entries are complete `Arc`s inserted in one step, so a panic elsewhere
+    /// cannot have left one half-written.
+    fn with_object_stream_indexes<T>(
+        &self,
+        f: impl FnOnce(&mut ObjectStreamIndexes) -> T,
+    ) -> Option<T> {
+        let Inner::Some(repr) = &self.0 else {
+            return None;
+        };
+        #[cfg(feature = "std")]
+        let mut indexes = repr
+            .object_stream_indexes
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        #[cfg(not(feature = "std"))]
+        let mut indexes = repr.object_stream_indexes.try_borrow_mut().ok()?;
+        Some(f(&mut indexes))
+    }
+
     fn new(
         data: PdfData,
         xref_map: XrefMap,
@@ -310,6 +332,7 @@ impl XRef {
             trailer_data,
             password: password.to_vec(),
             dict_cache: Arc::new(Mutex::new(DictCache::default())),
+            object_stream_indexes: Arc::new(Mutex::new(ObjectStreamIndexes::default())),
         })));
 
         // We read the trailer twice, once to determine the encryption used and then a second
@@ -622,10 +645,35 @@ impl XRef {
                     return None;
                 }
 
-                let stream = self.get_with::<Stream<'_>>(obj_stream_id, &ctx)?;
+                // PdfCraft patch: (hayro-syntax (22)) the stream's index of `objnum offset` pairs
+                // is parsed once and kept, as its decoded data is: parsed again for every object
+                // fetched from it, reading all of a stream of N objects took N² steps (one
+                // Firefox page kept 65,542 objects in one stream and took 37 s to draw).
                 let data = repr.data.get_with(obj_stream_id, &ctx)?;
-                let object_stream = ObjectStream::new(stream, data, &ctx)?;
-                object_stream.get(index)
+                let known = self
+                    .with_object_stream_indexes(|indexes| indexes.get(&obj_stream_id).cloned())
+                    .flatten();
+                let offsets = match known {
+                    // A stream whose pairs don't parse stays unreadable, as it was.
+                    Some(offsets) => offsets?,
+                    None => {
+                        let stream = self.get_with::<Stream<'_>>(obj_stream_id, &ctx)?;
+                        // `/N` and `/First` may be references that can't be followed while
+                        // another stream loads: reading them fails without being remembered.
+                        let num_objects = stream.dict().get::<usize>(N)?;
+                        let first_offset = stream.dict().get::<usize>(FIRST)?;
+                        let parsed =
+                            read_object_stream_index(num_objects, first_offset, data).map(Arc::new);
+                        self.with_object_stream_indexes(|indexes| {
+                            indexes
+                                .entry(obj_stream_id)
+                                .or_insert_with(|| parsed.clone())
+                                .clone()
+                        })
+                        .unwrap_or(parsed)?
+                    }
+                };
+                ObjectStream::with_offsets(data, &ctx, offsets).get(index)
             }
         }
     }
@@ -698,6 +746,7 @@ impl TrailerData {
 #[derive(Debug, Clone)]
 struct SomeRepr {
     dict_cache: Arc<Mutex<DictCache>>,
+    object_stream_indexes: Arc<Mutex<ObjectStreamIndexes>>,
     data: Arc<Data>,
     map: Arc<RwLock<MapRepr>>,
     metadata: Arc<Metadata>,
@@ -1067,34 +1116,62 @@ fn get_decryptor(trailer_dict: &Dict<'_>, password: &[u8]) -> Result<Decryptor, 
     }
 }
 
+/// PdfCraft patch: (hayro-syntax (22)) each object stream's parsed `(object number, offset)`
+/// pairs ([`read_object_stream_index`]) by the stream's identifier, `None` for pairs that don't
+/// parse. Never cleared, like the decoded stream data they index (`Data`), which a repair keeps
+/// too. Bounded by that data: every pair takes at least three of its bytes.
+type ObjectStreamIndexes = FxHashMap<ObjectIdentifier, Option<Arc<Vec<(u32, usize)>>>>;
+
+/// The `(object number, offset)` pairs at the start of an object stream's decoded `data`, the
+/// offsets measured from the start of `data`. `None` when the pairs don't parse. Reads no
+/// further than the data holds, whatever `/N` claims.
+fn read_object_stream_index(
+    num_objects: usize,
+    first_offset: usize,
+    data: &[u8],
+) -> Option<Vec<(u32, usize)>> {
+    let mut r = Reader::new(data);
+
+    let mut offsets = vec![];
+
+    for _ in 0..num_objects {
+        r.skip_white_spaces_and_comments();
+        // Skip object number
+        let obj_num = r.read_without_context::<u32>()?;
+        r.skip_white_spaces_and_comments();
+        let relative_offset = r.read_without_context::<usize>()?;
+        // PdfCraft patch: (hayro-syntax (22)) an offset past `usize` is malformed (it wrapped).
+        offsets.push((obj_num, first_offset.checked_add(relative_offset)?));
+    }
+
+    Some(offsets)
+}
+
 struct ObjectStream<'a> {
     data: &'a [u8],
     ctx: ReaderContext<'a>,
-    offsets: Vec<(u32, usize)>,
+    offsets: Arc<Vec<(u32, usize)>>,
 }
 
 impl<'a> ObjectStream<'a> {
     fn new(inner: Stream<'_>, data: &'a [u8], ctx: &ReaderContext<'a>) -> Option<Self> {
         let num_objects = inner.dict().get::<usize>(N)?;
         let first_offset = inner.dict().get::<usize>(FIRST)?;
+        let offsets = read_object_stream_index(num_objects, first_offset, data)?;
 
-        let mut r = Reader::new(data);
+        Some(Self::with_offsets(data, ctx, Arc::new(offsets)))
+    }
 
-        let mut offsets = vec![];
-
-        for _ in 0..num_objects {
-            r.skip_white_spaces_and_comments();
-            // Skip object number
-            let obj_num = r.read_without_context::<u32>()?;
-            r.skip_white_spaces_and_comments();
-            let relative_offset = r.read_without_context::<usize>()?;
-            offsets.push((obj_num, first_offset + relative_offset));
-        }
-
+    /// PdfCraft patch: (hayro-syntax (22)) an object stream whose index is already parsed.
+    fn with_offsets(
+        data: &'a [u8],
+        ctx: &ReaderContext<'a>,
+        offsets: Arc<Vec<(u32, usize)>>,
+    ) -> Self {
         let mut ctx = ctx.clone();
         ctx.set_in_object_stream(true);
 
-        Some(Self { data, ctx, offsets })
+        Self { data, ctx, offsets }
     }
 
     fn get<T>(&self, index: u32) -> Option<T>
@@ -1368,5 +1445,13 @@ mod tests {
         let data = b"xref\n0 999999999999999999999\ntrailer\n<<>>";
         let mut reader = Reader::new(data);
         assert!(read_xref_table_trailer(&mut reader, &ReaderContext::dummy()).is_none());
+    }
+
+    /// PdfCraft patch: (hayro-syntax (22)) an object's offset past `usize` is malformed: a plain
+    /// `+` there panics in a debug build and wraps in a release one.
+    #[test]
+    fn an_object_stream_offset_past_usize_is_malformed_not_a_panic() {
+        assert_eq!(read_object_stream_index(1, usize::MAX, b"5 1"), None);
+        assert_eq!(read_object_stream_index(1, 10, b"5 1"), Some(vec![(5, 11)]));
     }
 }

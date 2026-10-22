@@ -7,6 +7,7 @@
 //!   ([`appearance`]); check boxes and radio buttons switch `/V` and each widget's `/AS` between
 //!   the states their appearances already define.
 //! - [`reset`]: Acrobat's Clear form (back to `/DV`).
+//! - [`table`]: a table of text fields, laid out and named before any of it is added.
 //!
 //! Not yet: JavaScript actions (format, keystroke, validate, calculate — M6.4/M6.5) and rich text
 //! values (`/RV`, which is removed when a value is set so it can't contradict `/V`).
@@ -19,13 +20,16 @@ mod actions;
 pub mod af;
 pub mod appearance;
 mod author;
+mod calc_order;
 pub mod detect;
 mod scripting;
+pub mod table;
 pub use actions::{FieldAction, Trigger, field_actions, set_field_actions};
 pub use author::{
-    BorderStyle, CheckStyle, FieldFont, FieldProps, Look, LookPatch, NewField, add_field, check_style, delete_field, duplicate_field, look,
-    redraw_field, set_button_icon, set_props,
+    BorderStyle, CheckStyle, FieldFont, FieldProps, Look, LookPatch, MIN_FIELD_SIDE, NewField, add_field, check_style, delete_field, duplicate_field,
+    look, redraw_field, set_button_icon, set_props,
 };
+pub use calc_order::{CalculatedField, CalculationIssue, CalculationOrder, calculation_order, set_calculation_order};
 pub use scripting::{
     FieldChange, FieldEvent, NoScripts, ScriptResult, Scripts, apply_script_changes, document_scripts, document_scripts_named, set_document_script,
     set_field_script,
@@ -920,25 +924,14 @@ pub fn recalculate(doc: &mut Document) -> Result<usize, FormError> {
 /// [`recalculate`], running custom Calculate (and Format) scripts through `scripts`.
 pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result<usize, FormError> {
     let mut all = fields(doc);
-    let calculated = |f: &Field| f.actions.calculate != af::Calculate::None || f.actions.scripts.calculate.is_some();
-    if !all.iter().any(calculated) {
+    if !all.iter().any(calc_order::is_calculated) {
         return Ok(0);
     }
-    let co: Vec<ObjRef> = acroform(doc)
-        .and_then(|af| af.get(b"CO").map(|c| doc.resolve(c)).and_then(|c| c.as_array().cloned()))
-        .unwrap_or_default()
-        .iter()
-        .filter_map(Object::as_ref)
-        .collect();
-    let mut order: Vec<String> = co.iter().filter_map(|r| all.iter().find(|f| f.obj == *r)).map(|f| f.name.clone()).collect();
-    for f in &all {
-        if calculated(f) && !order.contains(&f.name) {
-            order.push(f.name.clone());
-        }
-    }
+    // By object: two fields can share a name in a malformed form, and each calculates.
+    let order: Vec<ObjRef> = calc_order::run_order(doc, &all).0.into_iter().filter_map(|(i, _)| all.get(i)).map(|f| f.obj).collect();
     let mut changed = 0;
-    for name in order {
-        let Some(f) = all.iter().find(|f| f.name == name).cloned() else { continue };
+    for obj in order {
+        let Some(f) = all.iter().find(|f| f.obj == obj).cloned() else { continue };
         let lookup = |n: &str| -> Vec<String> {
             let prefix = format!("{n}.");
             all.iter().filter(|x| x.name == n || x.name.starts_with(&prefix)).flat_map(|x| x.value.first().cloned()).collect()
@@ -961,13 +954,24 @@ pub fn recalculate_with(doc: &mut Document, scripts: &mut dyn Scripts) -> Result
         if current != v && matches!(f.kind, FieldKind::Text | FieldKind::Combo) {
             doc.update_dict(f.obj, |d| d.set(b"V".to_vec(), PdfString::text(&v)))?;
             redraw(doc, &f, std::slice::from_ref(&v), scripts)?;
-            if let Some(target) = all.iter_mut().find(|x| x.name == name) {
+            if let Some(target) = all.iter_mut().find(|x| x.obj == obj) {
                 target.value = vec![v];
             }
             changed += 1;
         }
     }
     Ok(changed)
+}
+
+/// The fields whose calculation differs between two readings of a form, matched by field object
+/// and named as in `after`: the formulas an edit rewrote, such as a rename's.
+pub fn calculations_changed(before: &[Field], after: &[Field]) -> Vec<String> {
+    let before: std::collections::HashMap<ObjRef, &af::Actions> = before.iter().map(|f| (f.obj, &f.actions)).collect();
+    after
+        .iter()
+        .filter(|f| before.get(&f.obj).is_some_and(|b| b.calculate != f.actions.calculate || b.scripts.calculate != f.actions.scripts.calculate))
+        .map(|f| f.name.clone())
+        .collect()
 }
 
 fn invalid<T>(m: impl Into<String>) -> Result<T, FormError> {
