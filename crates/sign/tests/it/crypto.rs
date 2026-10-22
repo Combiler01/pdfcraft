@@ -355,10 +355,19 @@ fn ocsp(issuer: &pkcs12::DigitalId, status: RevocationStatus, this: Time, next: 
     };
     let single = der::seq(&[&cert_id, &status, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
     let responder_id = der::tlv(tag::ctx(1), &issuer.certificate.subject.raw);
-    let tbs = der::seq(&[&responder_id, &this.encode(), &der::seq(&[&single])]);
-    let alg = issuer.key.signature_algorithm(DigestAlg::Sha256);
-    let sig = issuer.key.sign(DigestAlg::Sha256, &tbs).unwrap();
-    let basic = der::seq(&[&tbs, &alg, &der::bit_string(&sig)]);
+    signed_ocsp(&issuer.key, &responder_id, None, &single, this)
+}
+
+/// A successful OCSP response holding `single`, signed with `key` and naming its responder by
+/// `responder_id`, with `certs` (the encoded `[0]` field) if given.
+fn signed_ocsp(key: &pdfcraft_sign::PrivateKey, responder_id: &[u8], certs: Option<&[u8]>, single: &[u8], at: Time) -> Vec<u8> {
+    let tbs = der::seq(&[responder_id, &at.encode(), &der::seq(&[single])]);
+    let alg = key.signature_algorithm(DigestAlg::Sha256);
+    let sig = key.sign(DigestAlg::Sha256, &tbs).unwrap();
+    let basic = match certs {
+        Some(c) => der::seq(&[&tbs, &alg, &der::bit_string(&sig), c]),
+        None => der::seq(&[&tbs, &alg, &der::bit_string(&sig)]),
+    };
     let basic_type = der::oid("1.3.6.1.5.5.7.48.1.1");
     der::seq(&[&der::int(0), &der::explicit(0, &der::seq(&[&basic_type, &der::octets(&basic)]))])
 }
@@ -463,6 +472,33 @@ fn ocsp_responses_verify_and_match_the_certificate() {
     // An error response is rejected at parse time.
     let error = der::seq(&[&der::int(6)]);
     assert!(OcspResponse::parse(&error).is_err());
+}
+
+/// An embedded responder certificate answers for an issuer only when the issuer signed it for
+/// OCSP signing. One that merely copies the issuer's name, found by its key hash, does not.
+#[test]
+fn a_responder_that_copies_the_issuers_name_does_not_answer_for_it() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let issuer = &id.certificate;
+    let (this, next) = (mid_june(), Time { year: 2026, month: 7, day: 15, hour: 12, minute: 0, second: 0 });
+    let key = pdfcraft_sign::PrivateKey::generate_p256().unwrap();
+    let impostor =
+        Certificate::self_signed(&issuer.subject, &key, Time { year: 2026, month: 1, day: 1, hour: 0, minute: 0, second: 0 }, 5, &[9]).unwrap();
+    assert_eq!(impostor.subject.raw, issuer.subject.raw);
+    let cert_id = der::seq(&[
+        &DigestAlg::Sha1.algorithm(),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.issuer.raw])),
+        &der::octets(&DigestAlg::Sha1.digest(&[&issuer.public_key.key_bits()])),
+        &der::uint(&issuer.serial),
+    ]);
+    let revoked = der::tlv(tag::ctx(1), &Time { year: 2026, month: 6, day: 2, hour: 9, minute: 0, second: 0 }.encode());
+    let single = der::seq(&[&cert_id, &revoked, &this.encode(), &der::tlv(tag::ctx(0), &next.encode())]);
+    let by_key = der::tlv(tag::ctx(2), &der::octets(&DigestAlg::Sha1.digest(&[&impostor.public_key.key_bits()])));
+    // RFC 6960's `[0] EXPLICIT SEQUENCE OF Certificate`, and the certificate directly in `[0]`.
+    for certs in [der::explicit(0, &der::seq(&[&impostor.raw])), der::explicit(0, &impostor.raw)] {
+        let forged = OcspResponse::parse(&signed_ocsp(&key, &by_key, Some(&certs), &single, this)).unwrap();
+        assert_eq!(forged.check(issuer, issuer, mid_june()), RevocationStatus::Unknown);
+    }
 }
 
 // ── tolerance for the encodings found in old and unusual signers ───────────────────────────────

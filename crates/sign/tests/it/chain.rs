@@ -340,3 +340,25 @@ fn an_unreadable_extended_key_usage_allows_no_purpose() {
         verdict(signer_with("Good EKU", &r, &[key_usage(DIGITAL_SIGNATURE), extended_key_usage(&["2.5.29.37.0"])]), vec![], &r.cert);
     assert_eq!(status, Status::Valid, "{details:?}");
 }
+
+/// A CA certificate with a critical extension PdfCraft does not enforce (here name constraints)
+/// vouches for nothing: what that extension limits would go unchecked. A self-signed root's
+/// extensions are the trust store's business, so such a root still anchors.
+#[test]
+fn an_issuer_with_an_unprocessed_critical_extension_does_not_vouch() {
+    let name_constraints = ext("2.5.29.30", &der::seq(&[]));
+    let r = root();
+    let constrained =
+        issue("Name Constrained CA", Some(&r), FOREVER, &[basic_constraints(true, None), key_usage(KEY_CERT_SIGN), name_constraints.clone()]);
+    let l = end_entity("Outside Its Names", &constrained);
+    let pool = [constrained.cert.clone(), r.cert.clone()];
+    let (chain, why) = build_chain_noted(&l.cert, &pool, None);
+    assert_eq!(names(&chain), ["Outside Its Names"]);
+    assert!(why.is_some_and(|w| w.message.contains("critical extensions")), "the reason is reported");
+    let constrained_root =
+        issue("Name Constrained Root", None, FOREVER, &[basic_constraints(true, None), key_usage(KEY_CERT_SIGN), name_constraints]);
+    let i = ca("Under Constrained Root", &constrained_root, None);
+    let l = end_entity("Leaf", &i);
+    let pool = [i.cert.clone(), constrained_root.cert.clone()];
+    assert_eq!(names(&build_chain(&l.cert, &pool, None)), ["Leaf", "Under Constrained Root", "Name Constrained Root"]);
+}

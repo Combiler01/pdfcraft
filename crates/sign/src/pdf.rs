@@ -378,6 +378,7 @@ pub const WORDINGS: &[&str] = &[
     "The signer's certificate has critical extensions PdfCraft does not recognize ({}).",
     // Why a certificate that matched the issuer was not used to build the chain.
     "The certificate of {} is not a CA certificate that may issue certificates, so it is not used to vouch for {}.",
+    "The certificate of {} has critical extensions PdfCraft does not recognize, so it is not used to vouch for {}.",
     "The certificate of {} does not allow this many CA certificates below it (path length), so it is not used to vouch for {}.",
     "The certificate of {} was not valid at the time of signing, so it is not used to vouch for {}.",
     "The signer's identity is unknown because it has not been included in your list of trusted certificates and none of its parent certificates are trusted certificates.",
@@ -400,6 +401,7 @@ pub const WORDINGS: &[&str] = &[
     "The timestamp token could not be read ({}).",
     "The document has been altered or corrupted since the timestamp was applied.",
     "The timestamp authority's certificate was not valid at the time of timestamping.",
+    "The timestamp authority's certificate is not issued for time stamping.",
     "This document has not been modified since this timestamp was applied.",
     "The document has been modified since this timestamp was applied, but the changes are permitted ({}).",
     "The document has been altered since this timestamp was applied in ways it does not permit ({}).",
@@ -770,13 +772,16 @@ fn validate_into(doc: &Document, bytes: &[u8], trust: &TrustStore, v: &Dict, inf
                     // own claimed time, as without a timestamp.
                     let mut pool = crate::timestamp::token_certs(raw);
                     pool.extend(trust.certs.iter().cloned());
-                    let trusted_tsa = t
-                        .signer_certificate()
-                        .is_some_and(|c| c.valid_at(t.gen_time) && build_chain(&c, &pool, Some(t.gen_time)).iter().any(|x| trust.trusts(x)));
-                    if trusted_tsa {
+                    let tsa = t.signer_certificate();
+                    let trusted_tsa = tsa
+                        .as_ref()
+                        .is_some_and(|c| c.valid_at(t.gen_time) && build_chain(c, &pool, Some(t.gen_time)).iter().any(|x| trust.trusts(x)));
+                    if !trusted_tsa {
+                        unverified_time = Some(t.gen_time);
+                    } else if tsa.as_ref().is_some_and(Certificate::may_timestamp) {
                         info.timestamp_time = Some(t.gen_time);
                     } else {
-                        unverified_time = Some(t.gen_time);
+                        info.details.push(Detail::plain("The timestamp authority's certificate is not issued for time stamping."));
                     }
                 }
             }
@@ -1084,6 +1089,10 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
             info.status = Status::Unknown;
             info.details.push(Detail::plain("The timestamp authority's certificate was not valid at the time of timestamping."));
         }
+        if !cert.may_timestamp() {
+            info.status = Status::Unknown;
+            info.details.push(Detail::plain("The timestamp authority's certificate is not issued for time stamping."));
+        }
     }
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
@@ -1111,9 +1120,10 @@ fn validate_doc_timestamp(doc: &Document, bytes: &[u8], v: &Dict, info: &mut Sig
         pool.extend(trust.certs.iter().cloned());
         // A trusted authority whose certificate was not valid at the time it stamped proves
         // nothing either (its detail is already recorded above): never upgrade that to Valid.
-        let in_validity = token.signer_certificate().is_some_and(|c| c.valid_at(token.gen_time));
+        // Nor does one whose certificate is not issued for time stamping.
+        let may_stamp = token.signer_certificate().is_some_and(|c| c.valid_at(token.gen_time) && c.may_timestamp());
         let trusted_tsa = token.signer_certificate().is_some_and(|c| build_chain(&c, &pool, Some(token.gen_time)).iter().any(|x| trust.trusts(x)));
-        if trusted_tsa && in_validity {
+        if trusted_tsa && may_stamp {
             info.status = Status::Valid;
             info.details.push(Detail::plain("The timestamp token is valid and its authority is trusted."));
         } else if trusted_tsa {
@@ -1285,6 +1295,11 @@ fn classify_changes(doc: &Document, old: Option<Document>, p: Option<u8>) -> Mod
         if !disallowed.contains(&what) {
             disallowed.push(what);
         }
+    }
+    // The trailer chooses the catalog. A later revision that points it at another catalog (one
+    // already in the signed file, so no object changes) shows another document.
+    if doc.root() != old.root() {
+        disallowed.push(kind::STRUCTURE);
     }
     for num in doc.object_numbers() {
         if same_place(num) {
