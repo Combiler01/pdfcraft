@@ -1466,10 +1466,10 @@ pub(crate) fn image_input(
         let (out_of_date, raster_old, raster) = (view.page_out_of_date(page), view.page_raster_out_of_date(page), view.page_raster(page));
         let screen = |r: Rect| Rect::from_two_pos(xf.norm_to_screen(r.min.x, r.min.y), xf.norm_to_screen(r.max.x, r.max.y));
         let left_at = view.image_selection.as_ref().and_then(|s| s.settled).filter(|_| out_of_date).map(|(from, _)| from);
-        if let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none()) {
-            if !out_of_date {
-                s.settled = None;
-            }
+        if let Some(s) = view.image_selection.as_mut().filter(|s| s.drag.is_none())
+            && !out_of_date
+        {
+            s.settled = None;
         }
 
         if view.image_selection.as_ref().is_some_and(|s| s.crop.is_some() || s.crop_mode) {
