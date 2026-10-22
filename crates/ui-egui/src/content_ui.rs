@@ -9,7 +9,6 @@ use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
 use crate::theme::Tokens;
-#[cfg(test)]
 use crate::widgets;
 
 /// The colour of the warning under text the standard fonts can't draw.
@@ -268,10 +267,7 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
 }
 
 pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], point: Pos2) -> bool {
-    on_page(added, page)
-        .iter()
-        .filter(|(_, a)| matches!(a.content, AddedContent::Text(_)))
-        .any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
+    on_page(added, page).iter().any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
 }
 
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
@@ -305,7 +301,7 @@ fn dragged(r: Rect, grab: Grab, d: egui::Vec2, keep_aspect: bool) -> Rect {
     }
 }
 
-/// Added text keeps pointer ownership over a form field while editing content.
+/// Added text and images keep pointer ownership over a form field while editing content.
 pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &DocInfo, added: &[Added], view: &DocView) -> bool {
     let cv = &view.content;
     if cv.grab.is_some_and(|(grab_page, _, _)| grab_page == page) {
@@ -314,7 +310,7 @@ pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &Do
     let Some(p) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos())).filter(|p| xf.rect.contains(*p)) else {
         return false;
     };
-    on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).any(|(index, item)| {
+    on_page(added, page).into_iter().any(|(index, item)| {
         let rect = screen_rect(xf, info, page, item.content.rect());
         rect.expand(2.0).contains(p)
             || cv.selected == Some((page, index)) && handles(rect).into_iter().any(|(corner, _, _)| corner.distance(p) <= 6.0)
@@ -346,13 +342,13 @@ pub(crate) fn page_input(
         if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             cv.grab = None;
             let end = pointer.unwrap_or(start);
-            let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
             if let Some((sp, si)) = cv.selected
                 && sp == page
-                && let Some((_, a)) = items.iter().find(|(i, _)| *i == si)
+                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, _)| *i == si)
                 && (end - start).length() >= 1.0
             {
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
+                let keep = matches!(a.content, AddedContent::Image(_));
+                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, keep);
                 let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
                 if let AddedContent::Text(t) = &a.content
@@ -367,7 +363,7 @@ pub(crate) fn page_input(
         return consumed;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return consumed };
-    let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
+    let items = on_page(added, page);
     let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
     let selected_rect = cv
         .selected
@@ -459,9 +455,6 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     let cv = &view.content;
     let pointer = ui.input(|i| i.pointer.hover_pos());
     for (i, a) in on_page(added, page) {
-        if !matches!(a.content, AddedContent::Text(_)) {
-            continue;
-        }
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
         }
@@ -471,12 +464,11 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
             && let (Some((gp, g, start)), Some(p)) = (cv.grab, pointer)
             && gp == page
         {
-            r = dragged(r, g, p - start, false);
+            r = dragged(r, g, p - start, matches!(a.content, AddedContent::Image(_)));
         }
         if selected {
             painter.rect_stroke(r.expand(1.0), CornerRadius::ZERO, Stroke::new(1.5, SELECT_BLUE), egui::StrokeKind::Outside);
-            let er = r.expand(1.0);
-            for (c, ..) in handles(er) {
+            for (c, ..) in handles(r.expand(1.0)) {
                 painter.circle(c, 3.5, Color32::WHITE, Stroke::new(1.5, SELECT_BLUE));
             }
         } else if pointer.is_some_and(|p| r.expand(2.0).contains(p)) {
@@ -726,23 +718,12 @@ impl crate::PdfCraftApp {
         if !self.may_copy(id) {
             return false;
         }
-        let img_rect = self.session.get(id).and_then(|d| d.page_images(page).into_iter().nth(index).map(|im| im.rect));
-        self.last_copied_image_rect = img_rect;
-        if let Some(doc) = self.session.get(id)
-            && let Ok((ext, bytes)) = doc.page_image_copy_file(page, index)
-        {
-            let stem = crate::image_pick::safe_name(doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(s, _)| s));
-            let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
-            self.last_copied_file = Some((name, bytes));
-        }
-        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else {
-            return false;
-        };
+        let Some(pixels) = self.session.get(id).map(|d| d.page_image_rgba(page, index)) else { return false };
         let copied = pixels.and_then(|(w, h, rgba)| {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
                 let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-                crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
+                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
@@ -774,14 +755,6 @@ impl crate::PdfCraftApp {
     pub(crate) fn cut_page_image(&mut self, page: usize, index: usize) {
         if self.copy_page_image(page, index) {
             self.apply_edit(Edit::EditPageImage { page, index, change: pdfcraft_engine::ImageEdit::Delete });
-            for v in &mut self.views {
-                if let Some(sel) = &v.image_selection
-                    && sel.page == page
-                    && sel.index == index
-                {
-                    v.image_selection = None;
-                }
-            }
         }
     }
 
@@ -809,128 +782,6 @@ impl crate::PdfCraftApp {
         self.ocr_draft.from = page + 1;
         self.ocr_draft.to = page + 1;
         self.dialog = Some(crate::Dialog::RecognizeText);
-    }
-
-    /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
-    pub fn can_paste_image(&self) -> bool {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            if self.system_clipboard {
-                return crate::os_clipboard::with(|cb| cb.get_image().map(|_| ())).is_ok();
-            }
-        }
-        self.last_copied_image.is_some() || self.last_copied_file.is_some()
-    }
-
-    /// Paste an image from the clipboard onto `page`.
-    pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
-        let Some((i, id)) = self.active_ids() else {
-            return false;
-        };
-        if let Some(doc) = self.session.get(id)
-            && !doc.allows_modification()
-        {
-            self.notify_error("The document's security settings don't allow changes");
-            return false;
-        }
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let (has_system_cb, os_image) = if self.system_clipboard {
-            match crate::os_clipboard::with(|cb| Ok(cb.get_image().ok().map(|img| (img.width, img.height, img.bytes.into_owned())))) {
-                Ok(img_opt) => (true, img_opt),
-                Err(_) => (false, None),
-            }
-        } else {
-            (false, None)
-        };
-        #[cfg(target_arch = "wasm32")]
-        let (has_system_cb, os_image): (bool, Option<(usize, usize, Vec<u8>)>) = (false, None);
-
-        let image_data: Option<(String, Vec<u8>)> = if has_system_cb {
-            match os_image {
-                Some((width, height, bytes)) => {
-                    let matches_internal = self
-                        .last_copied_image
-                        .as_ref()
-                        .is_some_and(|(w, h, rgba)| *w as usize == width && *h as usize == height && rgba.as_slice() == bytes.as_slice());
-                    if matches_internal && let Some((name, file_bytes)) = self.last_copied_file.clone() {
-                        Some((name, file_bytes))
-                    } else if let Ok(png_bytes) = crate::create_ui::png_from_rgba(width, height, &bytes) {
-                        self.last_copied_image = Some((width as u32, height as u32, bytes));
-                        self.last_copied_file = Some(("clipboard_image.png".to_string(), png_bytes.clone()));
-                        self.last_copied_image_rect = None;
-                        Some(("clipboard_image.png".to_string(), png_bytes))
-                    } else {
-                        None
-                    }
-                }
-                // When system clipboard is active and accessible but contains text or non-image data:
-                // Do NOT fall back to stale in-memory cached image!
-                None => None,
-            }
-        } else if let Some((name, bytes)) = self.last_copied_file.clone() {
-            Some((name, bytes))
-        } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
-            crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
-        } else {
-            None
-        };
-
-        let Some((name, bytes)) = image_data else {
-            self.notify_tr("No image on clipboard to paste");
-            return false;
-        };
-
-        let target_rect = match rect {
-            Some(r) => Some(r),
-            None => {
-                if let Some(src_rect) = self.last_copied_image_rect {
-                    let w = src_rect[2] - src_rect[0];
-                    let h = src_rect[3] - src_rect[1];
-                    let offset_x = 20.0;
-                    let offset_y = -20.0;
-                    let new_r = [src_rect[0] + offset_x, src_rect[1] + offset_y, src_rect[0] + offset_x + w, src_rect[1] + offset_y + h];
-                    self.last_copied_image_rect = Some(new_r);
-                    Some(new_r)
-                } else {
-                    None
-                }
-            }
-        };
-
-        let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
-        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
-            if let Some(v) = self.views.get_mut(i) {
-                v.current = page;
-                v.image_selection = Some(crate::edit_text_ui::ImageSelection {
-                    page,
-                    index: before,
-                    crop_mode: false,
-                    crop_rect: None,
-                    drag: None,
-                    crop: None,
-                    turning: false,
-                    settled: None,
-                });
-            }
-            self.quick_tool = crate::QuickTool::EditText;
-            self.notify_tr("Image pasted");
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
-    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
-        let rect = if let Some(src_r) = self.last_copied_image_rect {
-            let w = src_r[2] - src_r[0];
-            let h = src_r[3] - src_r[1];
-            Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5])
-        } else {
-            None
-        };
-        self.paste_image(page, rect)
     }
 
     /// Click an image field: pick a picture for it.
@@ -1009,10 +860,113 @@ impl crate::PdfCraftApp {
             Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", tl!("Clipboard")), ("e", &e)]),
         }
     }
+
+    /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
+    pub fn can_paste_image(&self) -> bool {
+        if self.last_copied_image.is_some() || self.last_copied_file.is_some() {
+            return true;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.system_clipboard
+                && let Ok(mut cb) = arboard::Clipboard::new()
+            {
+                return cb.get_image().is_ok();
+            }
+        }
+        false
+    }
+
+    /// Paste an image from the clipboard onto `page`.
+    pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
+        let Some((i, id)) = self.active_ids() else {
+            return false;
+        };
+        if let Some(doc) = self.session.get(id)
+            && !doc.allows_modification()
+        {
+            self.notify_error(tl!("The document's security settings don't allow changes"));
+            return false;
+        }
+
+        let image_data: Option<(String, Vec<u8>)> = if let Some((name, bytes)) = self.last_copied_file.clone() {
+            Some((name, bytes))
+        } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
+            crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+        } else {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                if self.system_clipboard {
+                    arboard::Clipboard::new().ok().and_then(|mut cb| cb.get_image().ok()).and_then(|img| {
+                        crate::create_ui::png_from_rgba(img.width, img.height, &img.bytes).ok().map(|b| ("clipboard_image.png".to_string(), b))
+                    })
+                } else {
+                    None
+                }
+            }
+            #[cfg(target_arch = "wasm32")]
+            None
+        };
+
+        let Some((name, bytes)) = image_data else {
+            self.notify_tr("No image on clipboard to paste");
+            return false;
+        };
+
+        let target_rect = match rect {
+            Some(r) => Some(r),
+            None => {
+                if let Some(src_rect) = self.last_copied_image_rect {
+                    let w = src_rect[2] - src_rect[0];
+                    let h = src_rect[3] - src_rect[1];
+                    let offset_x = 20.0;
+                    let offset_y = -20.0;
+                    let new_r = [src_rect[0] + offset_x, src_rect[1] + offset_y, src_rect[0] + offset_x + w, src_rect[1] + offset_y + h];
+                    self.last_copied_image_rect = Some(new_r);
+                    Some(new_r)
+                } else {
+                    None
+                }
+            }
+        };
+
+        let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
+        if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
+            if let Some(v) = self.views.get_mut(i) {
+                v.current = page;
+                v.image_selection = Some(crate::edit_text_ui::ImageSelection {
+                    page,
+                    index: before,
+                    crop_mode: false,
+                    crop_rect: None,
+                    drag: None,
+                    crop: None,
+                    turning: false,
+                    settled: None,
+                });
+            }
+            self.quick_tool = crate::QuickTool::EditText;
+            self.notify_tr("Image pasted");
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
+    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
+        let rect = if let Some(src_r) = self.last_copied_image_rect {
+            let w = src_r[2] - src_r[0];
+            let h = src_r[3] - src_r[1];
+            Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5])
+        } else {
+            None
+        };
+        self.paste_image(page, rect)
+    }
 }
 
 /// What the image tools ask for.
-#[cfg(test)]
 pub(crate) enum ImageAction {
     Update(pdfcraft_engine::AddedContent),
     Replace,
@@ -1020,14 +974,11 @@ pub(crate) enum ImageAction {
 
 // Lucide names a flip icon after the axis it draws, Acrobat names the flip after the direction the
 // picture moves: Flip horizontal (left and right swap) shows Lucide's vertical axis.
-#[cfg(test)]
-pub(crate) const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
-#[cfg(test)]
-pub(crate) const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
+const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
+const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
-/// Edit image: rotate, flip, replace (shown while an added image is selected).
-#[cfg(test)]
-pub(crate) fn image_panel(ui: &mut egui::Ui, _t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
+/// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
+pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
     widgets::section_title(ui, tl!("Edit image"));
     ui.horizontal(|ui| {
@@ -1059,6 +1010,24 @@ pub(crate) fn image_panel(ui: &mut egui::Ui, _t: &Tokens, img: &pdfcraft_engine:
             out = Some(ImageAction::Replace);
         }
     });
+    ui.label(egui::RichText::new(tl!("Crop (% trimmed from each side)")).small().color(t.text_muted));
+    let mut crop = img.crop.map(|v| (v * 100.0).round());
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        for (k, label) in ["L", "B", "R", "T"].into_iter().enumerate() {
+            ui.label(label);
+            // Applied when the drag ends, so a drag is one undo step.
+            let r = ui.add(egui::DragValue::new(&mut crop[k]).range(0.0..=45.0).speed(0.5).suffix("%"));
+            changed |= r.drag_stopped() || (r.changed() && !r.dragged());
+        }
+    });
+    if changed {
+        let mut i = img.clone();
+        i.crop = crop.map(|v| v / 100.0);
+        if i.crop != img.crop {
+            out = Some(ImageAction::Update(AddedContent::Image(i)));
+        }
+    }
     out
 }
 

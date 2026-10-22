@@ -275,26 +275,13 @@ fn typing_moving_styling_and_deleting_added_content() {
     let a = added(&h);
     assert_eq!(a.len(), 1);
     assert_eq!(a[0].content.rect(), [135.0, 190.0, 165.0, 210.0]);
-    assert!(h.state().views[0].image_selection.is_some());
-    assert_eq!(h.state().views[0].content.selected, None);
-    // Right-click image to rotate clockwise via refactored context menu
-    let c = at(&h, 150.0, 200.0);
-    h.hover_at(c);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
-    h.get_by_label("Rotate Clockwise").click();
+    assert_eq!(h.state().views[0].content.selected, Some((0, 0)));
+    // Edit image: rotate clockwise turns the box around its centre.
+    h.get_by_label("Rotate clockwise").click();
     h.run_steps(3);
     let a = added(&h);
     let pdfcraft_engine::AddedContent::Image(img) = &a[0].content else { panic!() };
     assert_eq!((img.rotation, img.rect), (3, [140.0, 185.0, 160.0, 215.0]));
-
-    h.hover_at(c);
-    h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
-    h.run_steps(2);
     h.get_by_label("Flip horizontal").click();
     h.run_steps(3);
     let pdfcraft_engine::AddedContent::Image(img) = &added(&h)[0].content else { panic!() };
