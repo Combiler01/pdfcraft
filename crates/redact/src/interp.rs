@@ -1201,7 +1201,8 @@ fn xobject(
                 out.doomed.push(r);
                 return Some(None);
             }
-            let data = match s.decoded() {
+            // Strict, like page content: a Form read only in part counts as undecodable.
+            let data = match s.decoded_strict() {
                 Ok(d) => d,
                 Err(_) if scope.mode == Mode::Apply => {
                     scope.report.forms_removed += 1;

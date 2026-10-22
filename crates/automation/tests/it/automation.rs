@@ -2130,6 +2130,44 @@ fn protecting_through_tools() {
     ok(&mut c, "doc_open", json!({ "path": "open.pdf" }));
 }
 
+/// A document that allows changes but not copying: the tools that return a page's text refuse,
+/// or leave the text out where the tool also changes the page (a restyled paragraph, recognized
+/// words).
+#[test]
+fn copy_restricted_text_stays_in_the_document() {
+    let dir = workdir("copy-restricted-text");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    let locked = json!({ "open_password": "open", "permissions_password": "boss", "changes": "any-except-extract" });
+    let mut protect = locked.clone();
+    protect["doc"] = json!(doc);
+    ok(&mut a, "doc_protect", protect);
+    ok(&mut a, "doc_save", json!({ "doc": doc, "path": "locked.pdf" }));
+    let re = ok(&mut a, "doc_open", json!({ "path": "locked.pdf", "password": "open" }))["doc"].as_u64().unwrap();
+    match a.call("text_lines", &json!({ "doc": re, "page": 1 })) {
+        Err(ToolError::Failed(m)) => assert!(m.contains("don't allow copying"), "{m}"),
+        other => panic!("text_lines is refused: {other:?}"),
+    }
+    let restyled = ok(&mut a, "text_edit", json!({ "doc": re, "page": 1, "paragraph": 1, "size": 30 }));
+    assert!(!restyled.to_string().contains("Page"), "{restyled}");
+    if ok(&mut a, "ocr_status", json!({}))["available"] != true {
+        eprintln!("skipped the OCR part: OCR models not installed");
+        return;
+    }
+    let text = ok(&mut a, "doc_create", json!({ "from": "text", "text": "Recognised words stay private" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": text, "folder": "scan", "dpi": 150, "pages": [1] }));
+    let png = std::fs::read_dir(dir.join("scan")).unwrap().next().unwrap().unwrap().path();
+    let scan = ok(&mut a, "doc_create", json!({ "from": "images", "paths": [png.to_string_lossy()] }))["doc"].as_u64().unwrap();
+    let mut protect = locked;
+    protect["doc"] = json!(scan);
+    ok(&mut a, "doc_protect", protect);
+    ok(&mut a, "doc_save", json!({ "doc": scan, "path": "scan.pdf" }));
+    let scan = ok(&mut a, "doc_open", json!({ "path": "scan.pdf", "password": "open" }))["doc"].as_u64().unwrap();
+    let r = ok(&mut a, "ocr_recognize", json!({ "doc": scan }));
+    assert!(r["words"].as_u64().unwrap() >= 3, "{r}");
+    assert!(r["pages"][0].get("text").is_none() && !r.to_string().to_lowercase().contains("private"), "{r}");
+}
+
 /// A form secured with "fill-sign" changes and no open password (how secured forms are usually
 /// distributed): its existing signature field can be signed without the permissions password,
 /// the update keeps the encryption, and the signature validates after reopening. A new field

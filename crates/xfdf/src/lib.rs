@@ -246,6 +246,23 @@ fn nums_of(doc: &Document, o: Option<&Object>) -> Vec<f64> {
     o.map(|o| doc.resolve(o)).and_then(|a| a.as_array().map(|a| a.iter().filter_map(|x| doc.resolve(x).as_f64()).collect())).unwrap_or_default()
 }
 
+/// A `/Rect` of exactly four finite numbers; any other entry makes the whole rectangle unusable.
+fn rect_strict(doc: &Document, o: Option<&Object>) -> Option<[f64; 4]> {
+    let num = |x: &Object| doc.resolve(x).as_f64().filter(|v| v.is_finite());
+    match doc.resolve(o?).as_array()?.as_slice() {
+        [x0, y0, x1, y1] => Some([num(x0)?, num(y0)?, num(x1)?, num(y1)?]),
+        _ => None,
+    }
+}
+
+/// Whether a quad's four corners enclose any area: some three of them are not collinear.
+fn quad_has_area(q: &[f64; 8]) -> bool {
+    let [ax, ay, bx, by, cx, cy, dx, dy] = *q;
+    let cross = |(px, py): (f64, f64), (qx, qy): (f64, f64), (rx, ry): (f64, f64)| (qx - px) * (ry - py) - (qy - py) * (rx - px);
+    let (a, b, c, d) = ((ax, ay), (bx, by), (cx, cy), (dx, dy));
+    [cross(a, b, c), cross(a, b, d), cross(a, c, d), cross(b, c, d)].iter().any(|v| v.abs() > 0.0)
+}
+
 fn text_of(doc: &Document, d: &Dict, k: &[u8]) -> Option<String> {
     d.get(k).and_then(|o| match &*doc.resolve(o) {
         Object::String(s) => Some(s.to_text()),
@@ -1017,10 +1034,11 @@ const REDACT_UNSEEN: i64 = 1 | 2 | 32;
 /// `/F` Locked (ISO 32000-2 Table 167): the user protected this annotation from change.
 const LOCKED: i64 = 128;
 
-/// An existing annotation an import must never replace, move or unlock: one the user locked, or a
-/// redaction mark (replacing it would drop the region the user marked to remove).
+/// An existing annotation an import must never replace, move or unlock: one the user locked, a
+/// redaction mark (replacing it would drop the region the user marked to remove), or a form
+/// widget or field (replacing it would set the field's value and policy around the form setter).
 fn import_protected(x: &Dict) -> bool {
-    x.int(b"F").unwrap_or(0) & LOCKED != 0 || x.name(b"Subtype") == Some(b"Redact".as_slice())
+    x.int(b"F").unwrap_or(0) & LOCKED != 0 || matches!(x.name(b"Subtype"), Some(b"Redact" | b"Widget")) || x.contains(b"FT")
 }
 
 fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, DataError> {
@@ -1030,6 +1048,29 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
         let f = d.int(b"F").unwrap_or(0);
         if f & REDACT_UNSEEN != 0 {
             d.set(b"F".to_vec(), Object::Int(f & !REDACT_UNSEEN));
+        }
+        // Its review outline is drawn opaque, and from the area it removes: applying a mark
+        // without usable /QuadPoints removes its /Rect, which the outline is then drawn from.
+        d.remove(b"CA");
+        d.remove(b"ca");
+        let quads_drawable = d.get(b"QuadPoints").and_then(Object::as_array).is_some_and(|q| {
+            let v: Vec<f64> = q.iter().filter_map(Object::as_f64).filter(|v| v.is_finite()).collect();
+            let (quads, rest) = v.as_chunks::<8>();
+            v.len() == q.len() && rest.is_empty() && !quads.is_empty() && quads.iter().all(quad_has_area)
+        });
+        if !quads_drawable {
+            // Quads the outline can't draw, or any quad that encloses no area, are replaced by the
+            // /Rect's, or dropped when there is no usable /Rect either; such a mark then removes
+            // nothing.
+            match rect_strict(doc, d.get(b"Rect")) {
+                Some([x0, y0, x1, y1]) => {
+                    let (l, r, b, t) = (x0.min(x1), x0.max(x1), y0.min(y1), y0.max(y1));
+                    d.set(b"QuadPoints".to_vec(), arr(&[l, t, r, t, l, b, r, b]));
+                }
+                _ => {
+                    d.remove(b"QuadPoints");
+                }
+            }
         }
     }
     let nm = d.get(b"NM").and_then(|n| n.as_string().map(|s| s.to_text()));
@@ -1042,8 +1083,8 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
         .unwrap_or_default();
     let mut kept = Vec::new();
     let mut removed: Vec<ObjRef> = Vec::new();
-    // Never let a same-name import replace a locked comment or a redaction mark: keep it, and add
-    // the imported dict beside it under no name of its own.
+    // Never let a same-name import replace a protected annotation (`import_protected`): keep it,
+    // and add the imported dict beside it under no name of its own.
     let mut clash = false;
     for a in annots {
         let existing = a.as_ref().and_then(|r| doc.get(r).as_dict().cloned());
@@ -1265,6 +1306,10 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
 
 /// Merge Data Files into Spreadsheet: one CSV row per file, one column per field name (in the
 /// order they first appear).
+///
+/// The names and values come from other people's files, and spreadsheet programs evaluate a cell
+/// that starts with `=`, `+`, `-` or `@` (after any leading whitespace) as a formula. Such a cell
+/// is written with a leading `'`, which keeps it text; a plain number such as `-12.5` is not.
 pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
     let mut columns: Vec<&str> = Vec::new();
     for f in files {
@@ -1274,7 +1319,19 @@ pub fn merge_csv(files: &[Vec<(String, Vec<String>)>]) -> String {
             }
         }
     }
-    let q = |s: &str| if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s.to_string() };
+    let literal = |s: &str| {
+        let t = s.trim_start();
+        let formula = match t.chars().next() {
+            Some('=' | '@') => true,
+            Some('+' | '-') => !t.parse::<f64>().is_ok_and(f64::is_finite),
+            _ => false,
+        };
+        if formula { format!("'{s}") } else { s.to_string() }
+    };
+    let q = |s: &str| {
+        let s = literal(s);
+        if s.contains([',', '"', '\n', '\r', '\t']) { format!("\"{}\"", s.replace('"', "\"\"")) } else { s }
+    };
     let mut out = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(",");
     out.push('\n');
     for f in files {

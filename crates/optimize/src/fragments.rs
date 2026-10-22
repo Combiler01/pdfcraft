@@ -143,12 +143,16 @@ fn merge(doc: &Document, run: &[Fragment], n: usize) -> Option<(Vec<u8>, u32, u3
     // Pixel rows per unit of height: the finest fragment's.
     let density = run.iter().map(|f| f.height as f64 / (f.rect[3] - f.rect[1])).fold(0.0, f64::max);
     let height = ((top - bottom) * density).round();
-    if !(height.is_finite() && height >= 1.0) || (width as u64) * (height as u64) > MAX_PIXELS {
+    if !(height.is_finite() && height >= 1.0 && height <= f64::from(u32::MAX)) {
         return None;
     }
+    // In range and whole, so the cast is exact.
     let height = height as u32;
-    let row = width as usize * n;
-    let mut out = vec![255u8; row * height as usize];
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return None;
+    }
+    let row = (width as usize).checked_mul(n)?;
+    let mut out = vec![255u8; row.checked_mul(height as usize)?];
     for f in run {
         let r0 = (((top - f.rect[3]) * density).round().max(0.0) as u32).min(height);
         let r1 = (((top - f.rect[1]) * density).round().max(0.0) as u32).min(height);
@@ -296,4 +300,22 @@ pub(crate) fn run(doc: &mut Document, pages: &[ObjRef], report: &mut Report, pro
         report.fragments_merged += merge_page(doc, *p, report, progress)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_merged_height_beyond_u32_is_refused_before_allocating() {
+        // Two fragments, one pixel row each, the top one 2^-48 high: the merged image would be
+        // 2^16 × 2^48 pixels, whose product wraps to 0 in u64.
+        let image = ObjRef { num: 1, generation: 0 };
+        let edge = 1.0 - (-48f64).exp2();
+        let run = [
+            Fragment { image, rect: [0.0, edge, 1.0, 1.0], width: 1 << 16, height: 1 },
+            Fragment { image, rect: [0.0, 0.0, 1.0, edge], width: 1 << 16, height: 1 },
+        ];
+        assert!(merge(&Document::new_empty(), &run, 3).is_none());
+    }
 }

@@ -64,6 +64,10 @@ pub enum RedactError {
         "the document's tags can't be cleaned completely (an element written in place, or a structure tree too large or too deep to follow); the operation was refused"
     )]
     Tags,
+    /// Objects written in place nest deeper than hidden information is followed, so its removal
+    /// could not be shown complete.
+    #[error("the document's objects nest too deeply to remove hidden information completely; the operation was refused")]
+    TooDeep,
     #[error(transparent)]
     Edit(#[from] pdfcraft_edit::EditError),
     #[error(transparent)]
@@ -231,7 +235,9 @@ pub(crate) fn page_streams(doc: &Document, page: &Dict, index: usize) -> Result<
     let mut data = Vec::new();
     for o in &list {
         match &*doc.resolve(o) {
-            Object::Stream(s) => data.push(s.decoded().map_err(|_| RedactError::Unreadable(index + 1))?),
+            // Strict: a tolerant decode keeps what precedes corruption and drops the rest, which
+            // still draws in viewers that read further; anything not read can't be cleaned.
+            Object::Stream(s) => data.push(s.decoded_strict().map_err(|_| RedactError::Unreadable(index + 1))?),
             Object::Null => data.push(Vec::new()),
             _ => return Err(RedactError::Unreadable(index + 1)),
         }

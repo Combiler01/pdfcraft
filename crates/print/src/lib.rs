@@ -696,6 +696,25 @@ fn decoded_contents(doc: &Document, page: &Dict) -> Vec<u8> {
     out
 }
 
+/// Reduce `doc`'s pages to what [`impose`] draws of them under `content`: the annotations that
+/// don't print are dropped, and with [`Content::FormFieldsOnly`] the page content too. For
+/// printing pages as pictures, where a renderer draws each page as it stands.
+pub fn keep_printed(doc: &mut Document, content: Content) {
+    for page in pdfcraft_model::pages(doc) {
+        let annots = page.dict.get(b"Annots").and_then(|a| doc.resolve(a).as_array().cloned()).unwrap_or_default();
+        let kept: Vec<Object> = annots.into_iter().filter(|a| doc.resolve(a).as_dict().is_some_and(|d| prints(doc, d, content))).collect();
+        // Fails only when the page object isn't a dictionary, and such a page draws nothing.
+        let _ = doc.update_dict(page.obj, |d| {
+            if content == Content::FormFieldsOnly {
+                d.remove(b"Contents");
+            }
+            if d.contains(b"Annots") {
+                d.set(b"Annots".to_vec(), Object::Array(kept));
+            }
+        });
+    }
+}
+
 /// Does annotation `d` print under `content`?
 fn prints(doc: &Document, d: &Dict, content: Content) -> bool {
     const HIDDEN: i64 = 2;

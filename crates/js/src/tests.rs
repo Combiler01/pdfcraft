@@ -313,6 +313,23 @@ fn ordinary_nesting_still_runs() {
     assert_eq!(go(&s, &Event::field("Calculate", "a", "")).value, "1000");
 }
 
+/// Code built from strings at run time would reach the parser without the size and nesting
+/// checks the script itself passed, so `eval` and the `Function` constructors refuse it.
+#[test]
+fn scripts_cannot_compile_code_from_strings() {
+    for s in [
+        "event.value = eval('1 + 1');",
+        "event.value = (0, eval)('1 + 1');",
+        "event.value = new Function('return 2')();",
+        "event.value = Function('a', 'return a')(2);",
+        "event.value = (function* () {}).constructor('yield 2')().next().value;",
+        "event.value = new Array(1001).join('(') + '1' + new Array(1001).join(')'); event.value = eval(event.value);",
+    ] {
+        let o = go(s, &Event::field("Calculate", "a", ""));
+        assert!(o.error.as_deref().is_some_and(|e| e.contains("compile code from strings")), "{s}: {o:?}");
+    }
+}
+
 mod xfa_model {
     use crate::Limits;
     use crate::xfa::*;
@@ -396,6 +413,22 @@ mod xfa_model {
         assert_eq!(o.result.as_deref(), Some("10"));
         let o = go("this.rawValue = xfa.form.form1.page1.qty.rawValue + 1;", "form1[0].page1[0].total[0]", "calculate");
         assert_eq!(o.effects, vec![XfaEffect::SetValue { som: "form1[0].page1[0].total[0]".into(), value: "5".into() }]);
+    }
+
+    /// The script runs through `eval`, so code built from strings at run time is held to the
+    /// script's own size and nesting checks instead of being refused outright.
+    #[test]
+    fn code_built_from_strings_is_checked_like_the_script() {
+        let total = "form1[0].page1[0].total[0]";
+        assert_eq!(go("eval('qty.rawValue * 2')", total, "calculate").result.as_deref(), Some("8"));
+        assert_eq!(go("new Function('return 3')()", total, "calculate").result.as_deref(), Some("3"));
+        for s in [
+            "eval(new Array(1001).join('(') + '1' + new Array(1001).join(')'))",
+            "new Function(new Array(1001).join('[') + new Array(1001).join(']'))",
+        ] {
+            let o = go(s, total, "calculate");
+            assert!(o.error.as_deref().is_some_and(|e| e.contains("nested too deeply")), "{s}: {o:?}");
+        }
     }
 
     /// A form whose one field `d` holds the ISO date 2026-10-20, shown as 20261020.

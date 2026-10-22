@@ -1311,6 +1311,12 @@ fn copy_restricted_documents_refuse_extraction_unless_opened_by_the_owner() {
     let oid = s.open("r.pdf", None, bytes, Some("owner")).unwrap();
     assert!(s.get(oid).unwrap().allows_copying());
     assert!(extracting.iter().all(|c| enabled(&s, oid, c)));
+    // Comparing reads both documents' text out, into the result, the report and the comments.
+    let refused = || Err(EditError::NotPermitted("copying text and images"));
+    assert_eq!((s.compare(id, oid).map(|_| ()), s.compare(oid, id).map(|_| ())), (refused(), refused()));
+    assert_eq!(s.compare_report(oid, id).map(|_| ()), refused());
+    assert!(s.compare(oid, oid).is_ok());
+    assert_eq!(s.mark_differences(id, oid).map(|_| ()), refused());
     // Unencrypted documents allow everything.
     let (s, plain) = session_with(1);
     assert!(s.get(plain).unwrap().check_copying().is_ok() && extracting.iter().all(|c| enabled(&s, plain, c)));
@@ -1332,6 +1338,115 @@ fn print_restricted_documents_disable_print_unless_opened_by_the_owner() {
     assert!(enabled(&s, oid, "print.dialog"), "the owner may print");
     let low = s.open("low.pdf", None, protected("", "owner", -1 ^ (1 << 11)), None).unwrap();
     assert!(enabled(&s, low, "print.dialog"), "low-resolution printing is printing");
+}
+
+/// Table 22, bit 12 clear: printing is limited to a low-level representation. Whatever the
+/// settings ask for, the print-ready PDF carries each page as a picture of at most 150 dpi, with
+/// no text or vector artwork left; the owner password lifts the limit.
+#[test]
+fn low_resolution_printing_prints_pictures_of_at_most_150_dpi() {
+    let bytes = protected("", "owner", -1 ^ (1 << 11));
+    let mut s = Session::new();
+    let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
+    let width = f64::from(s.get(low).unwrap().info.pages[0].width);
+    let actual = print::Settings { pages: vec![0], layout: print::Layout::Size(print::SizeMode::Actual), ..Default::default() };
+    for raster in [None, Some(print::Raster { dpi: 600.0, grayscale: false })] {
+        let printed = s.print_pdf(low, &print::Settings { raster, ..actual.clone() }).unwrap();
+        let mut s2 = Session::new();
+        let id2 = s2.open("print.pdf", None, Arc::new(printed.clone()), None).unwrap();
+        assert!(page_texts(&s2, id2).iter().all(|t| t.trim().is_empty()), "{raster:?}: no text is left");
+        let doc = pdfcraft_cos::Document::open(Arc::new(printed)).unwrap();
+        let widths: Vec<i64> = doc
+            .scan_objects()
+            .filter_map(|(_, o)| match &*o {
+                pdfcraft_cos::Object::Stream(st) if st.dict.name(b"Subtype") == Some(b"Image") => st.dict.int(b"Width"),
+                _ => None,
+            })
+            .collect();
+        assert!(!widths.is_empty() && widths.iter().all(|&w| w as f64 <= width * 150.0 / 72.0 + 1.0), "{raster:?}: {widths:?} px for {width} pt");
+    }
+    let owner = s.open("low.pdf", None, bytes, Some("owner")).unwrap();
+    let printed = s.print_pdf(owner, &actual).unwrap();
+    let mut s2 = Session::new();
+    let id2 = s2.open("print.pdf", None, Arc::new(printed), None).unwrap();
+    assert!(page_texts(&s2, id2).iter().any(|t| !t.trim().is_empty()), "the owner prints the pages themselves");
+}
+
+/// A 100 × 400 pt page with one band per kind of thing that prints, top to bottom: page content
+/// (blue), a filled text field (green), a stamp (red) and a square comment (yellow).
+fn print_content_pdf() -> Vec<u8> {
+    let content = "0 0 1 rg 0 300 100 100 re f";
+    let ap = |colour: &str| {
+        let ops = format!("{colour} rg 0 0 100 100 re f");
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >> stream\n{ops}\nendstream", ops.len())
+    };
+    format!(
+        "%PDF-1.7\n\
+         1 0 obj << /Type /Catalog /Pages 2 0 R /AcroForm << /Fields [5 0 R] >> >> endobj\n\
+         2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n\
+         3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 100 400] /Contents 4 0 R /Annots [5 0 R 6 0 R 7 0 R] >> endobj\n\
+         4 0 obj << /Length {} >> stream\n{content}\nendstream endobj\n\
+         5 0 obj << /Type /Annot /Subtype /Widget /FT /Tx /T (Name) /V (Filled) /F 4 /P 3 0 R /Rect [0 200 100 300] /AP << /N 8 0 R >> >> endobj\n\
+         6 0 obj << /Type /Annot /Subtype /Stamp /F 4 /P 3 0 R /Rect [0 100 100 200] /AP << /N 9 0 R >> >> endobj\n\
+         7 0 obj << /Type /Annot /Subtype /Square /F 4 /P 3 0 R /Rect [0 0 100 100] /AP << /N 10 0 R >> >> endobj\n\
+         8 0 obj {} endobj\n\
+         9 0 obj {} endobj\n\
+         10 0 obj {} endobj\n\
+         trailer << /Root 1 0 R >>\n%%EOF",
+        content.len(),
+        ap("0 1 0"),
+        ap("1 0 0"),
+        ap("1 1 0"),
+    )
+    .into_bytes()
+}
+
+/// Low-resolution printing prints what the chosen content prints when the pages themselves are
+/// printed: form fields only leaves out the page content and every comment, the document alone
+/// leaves out the comments, and the document with stamps keeps only the stamps.
+#[test]
+fn low_resolution_printing_prints_only_the_chosen_content() {
+    let mut cos = pdfcraft_cos::Document::open(Arc::new(print_content_pdf())).unwrap();
+    cos.set_encryption(&pdfcraft_cos::NewEncryption {
+        algorithm: pdfcraft_cos::Algorithm::Aes256,
+        user_password: "",
+        owner_password: "owner",
+        permissions: -1 ^ (1 << 11),
+        encrypt_metadata: true,
+        seed: [7; 32],
+    })
+    .unwrap();
+    let bytes = Arc::new(pdfcraft_cos::write_full(&cos, &Default::default()).unwrap());
+    let mut s = Session::new();
+    let low = s.open("low.pdf", None, bytes.clone(), None).unwrap();
+    let owner = s.open("low.pdf", None, bytes, Some("owner")).unwrap();
+    // Each band's centre, in pixels from the top of the sheet at 72 dpi, and its colour.
+    let bands = [("content", 50, [0, 0, 255]), ("field", 150, [0, 255, 0]), ("stamp", 250, [255, 0, 0]), ("comment", 350, [255, 255, 0])];
+    let all: &[&str] = &["content", "field", "stamp", "comment"];
+    for (content, shown) in [
+        (print::Content::DocumentAndMarkups, all),
+        (print::Content::Document, &["content", "field"][..]),
+        (print::Content::DocumentAndStamps, &["content", "field", "stamp"][..]),
+        (print::Content::FormFieldsOnly, &["field"][..]),
+    ] {
+        let settings = print::Settings {
+            pages: vec![0],
+            paper: (100.0, 400.0),
+            layout: print::Layout::Size(print::SizeMode::Actual),
+            content,
+            ..Default::default()
+        };
+        for (id, how) in [(owner, "pages"), (low, "pictures")] {
+            let (w, h, rgba) = printed_pixels(s.print_pdf(id, &settings).unwrap());
+            assert_eq!((w, h), (100, 400), "{content:?} as {how}");
+            for (band, y, colour) in bands {
+                let px = rgba.get((y * w as usize + 50) * 4..).and_then(|p| p.get(..3)).unwrap();
+                let near = |c: [u8; 3]| px.iter().zip(c).all(|(&a, b)| a.abs_diff(b) < 40);
+                let expected = shown.contains(&band);
+                assert!(if expected { near(colour) } else { near([255; 3]) }, "{content:?} as {how}: {band} drawn {expected} expected, pixel {px:?}");
+            }
+        }
+    }
 }
 
 #[test]
@@ -4234,6 +4349,24 @@ fn actions_run_their_steps_on_files() {
     assert_eq!(d.info.title.as_deref(), Some("Q3"));
     assert!(page_texts(&s2, id)[0].contains("DRAFT"));
     assert!(actions::run_on(&custom, "bad.pdf", Arc::new(b"nope".to_vec()), |_, _| {}).is_err());
+}
+
+/// A removal step that fails (here: a signed file can't be rewritten without its hidden data)
+/// fails the action, so the file is not passed on as cleaned.
+#[test]
+fn actions_fail_when_hidden_information_could_not_be_removed() {
+    let p12 = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12")).unwrap();
+    let digital_id = sign::pkcs12::open(&p12, "test").unwrap();
+    let mut s = Session::new().with_clock(|| 1_800_000_000);
+    let id = s.open("fixture.pdf", None, Arc::new(fixture(2)), None).unwrap();
+    s.apply(id, Edit::SetInfo { key: "Author".into(), value: "Private Name".into() }).unwrap();
+    let saved = s.save_bytes(id).unwrap();
+    s.mark_saved(id, saved, None).unwrap();
+    let signed = s.sign(id, &digital_id, SignOptions { page: 1, ..SignOptions::default() }).unwrap();
+    let built = actions::builtin();
+    let sanitize = built.iter().find(|a| a.name == "Sanitize Documents").unwrap();
+    let e = actions::run_on(sanitize, "signed.pdf", signed, |_, _| {}).map(|r| r.log).unwrap_err();
+    assert!(e.starts_with("Sanitize document:"), "{e}");
 }
 
 #[test]

@@ -46,10 +46,13 @@ impl crate::Document {
 }
 
 impl Session {
-    /// Compare files: the text differences from document `old` to document `new`.
+    /// Compare files: the text differences from document `old` to document `new`. The result
+    /// carries both documents' text, so both must allow copying it.
     pub fn compare(&self, old: DocId, new: DocId) -> Result<Comparison, EditError> {
         let a = self.get(old).ok_or(EditError::NoDocument)?;
         let b = self.get(new).ok_or(EditError::NoDocument)?;
+        a.check_copying()?;
+        b.check_copying()?;
         Ok(pdfcraft_compare::compare(&a.words(), &b.words()))
     }
 
