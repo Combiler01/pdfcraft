@@ -723,13 +723,14 @@ impl crate::PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             if self.system_clipboard {
                 let img = arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(&rgba) };
-                arboard::Clipboard::new().and_then(|mut c| c.set_image(img)).map_err(|e| e.to_string())?;
+                crate::os_clipboard::with(|c| c.set_image(img)).map_err(|e| e.to_string())?;
             }
             #[cfg(target_arch = "wasm32")]
             if self.system_clipboard {
                 return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
             }
             self.last_copied_image = Some((w, h, rgba));
+            self.last_copied_image_rect = self.page_image_box(page, index);
             Ok((w, h))
         });
         match copied {
@@ -745,7 +746,7 @@ impl crate::PdfCraftApp {
     }
 
     /// The picture's visible box on its page, in user space.
-    fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
+    pub(crate) fn page_image_box(&self, page: usize, index: usize) -> Option<[f64; 4]> {
         let (_, id) = self.active_ids()?;
         let image = self.session.get(id)?.page_images(page).into_iter().nth(index)?;
         Some(image.visible_rect.unwrap_or(image.rect))
@@ -839,42 +840,24 @@ impl crate::PdfCraftApp {
         released
     }
 
-    /// ⌘V / Ctrl+V with a picture on the system clipboard (a screenshot, a picture copied in a
-    /// browser) places it on the current page, as Add Image does.
-    /// Organize Pages keeps ⌘V for pages, Prepare Form for fields, and text fields for text.
-    pub(crate) fn paste_image_key(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
-        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input();
-        let Some(view) = self.views.get(i) else { return };
-        if !pasted || !free || view.organize || view.forms.focus.is_some() || self.is_preparing() {
-            return;
-        }
-        let clip = match self.clipboard_override.clone() {
-            Some(c) => Some(c),
-            #[cfg(not(target_arch = "wasm32"))]
-            None if self.system_clipboard => crate::create_ui::read_clipboard(),
-            None => None,
-        };
-        let Some(crate::create_ui::Clip::Image { width, height, rgba }) = clip else { return };
-        match crate::create_ui::png_from_rgba(width, height, &rgba) {
-            Ok(png) => self.add_image("Pasted image.png".into(), png),
-            Err(e) => self.notify_fmt("Couldn't read {name}: {e}", &[("name", tl!("Clipboard")), ("e", &e)]),
-        }
-    }
-
     /// Whether there is an image in the in-memory clipboard or system clipboard ready to paste.
     pub fn can_paste_image(&self) -> bool {
-        if self.last_copied_image.is_some() || self.last_copied_file.is_some() {
+        if let Some(crate::create_ui::Clip::Image { .. }) = self.clipboard_override.as_ref() {
             return true;
+        }
+        if self.clipboard_override.is_some() {
+            return false;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            if self.system_clipboard
-                && let Ok(mut cb) = arboard::Clipboard::new()
-            {
-                return cb.get_image().is_ok();
+            if self.system_clipboard {
+                let has_img = crate::os_clipboard::with(|cb| cb.get_image()).is_ok();
+                if has_img {
+                    return true;
+                }
             }
         }
-        false
+        self.last_copied_image.is_some() || self.last_copied_file.is_some()
     }
 
     /// Paste an image from the clipboard onto `page`.
@@ -889,23 +872,50 @@ impl crate::PdfCraftApp {
             return false;
         }
 
-        let image_data: Option<(String, Vec<u8>)> = if let Some((name, bytes)) = self.last_copied_file.clone() {
-            Some((name, bytes))
-        } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
-            crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
-        } else {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                if self.system_clipboard {
-                    arboard::Clipboard::new().ok().and_then(|mut cb| cb.get_image().ok()).and_then(|img| {
+        let image_data: Option<(String, Vec<u8>)> = match self.clipboard_override.clone() {
+            Some(crate::create_ui::Clip::Image { width, height, rgba }) => {
+                let is_same = self
+                    .last_copied_image
+                    .as_ref()
+                    .is_some_and(|(w, h, bytes)| *w as usize == width && *h as usize == height && bytes.as_slice() == rgba.as_slice());
+                if !is_same {
+                    self.last_copied_file = None;
+                    self.last_copied_image = Some((width as u32, height as u32, rgba.clone()));
+                    self.last_copied_image_rect = None;
+                }
+                crate::create_ui::png_from_rgba(width, height, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+            }
+            Some(crate::create_ui::Clip::Text(_)) => None,
+            None => {
+                #[cfg(not(target_arch = "wasm32"))]
+                let sys_result = if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_image()).ok() } else { None };
+                #[cfg(target_arch = "wasm32")]
+                let sys_result: Option<arboard::ImageData<'static>> = None;
+
+                if let Some(img) = sys_result {
+                    let is_same_as_last = self
+                        .last_copied_image
+                        .as_ref()
+                        .is_some_and(|(w, h, rgba)| *w as usize == img.width && *h as usize == img.height && rgba.as_slice() == img.bytes.as_ref());
+                    if is_same_as_last && let Some((name, bytes)) = self.last_copied_file.clone() {
+                        Some((name, bytes))
+                    } else if is_same_as_last && let Some((w, h, rgba)) = self.last_copied_image.clone() {
+                        crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
+                    } else {
+                        // System clipboard has a newer / external image!
+                        self.last_copied_file = None;
+                        self.last_copied_image = Some((img.width as u32, img.height as u32, img.bytes.to_vec()));
+                        self.last_copied_image_rect = None;
                         crate::create_ui::png_from_rgba(img.width, img.height, &img.bytes).ok().map(|b| ("clipboard_image.png".to_string(), b))
-                    })
+                    }
+                } else if let Some((name, bytes)) = self.last_copied_file.clone() {
+                    Some((name, bytes))
+                } else if let Some((w, h, rgba)) = self.last_copied_image.clone() {
+                    crate::create_ui::png_from_rgba(w as usize, h as usize, &rgba).ok().map(|b| ("pasted_image.png".to_string(), b))
                 } else {
                     None
                 }
             }
-            #[cfg(target_arch = "wasm32")]
-            None
         };
 
         let Some((name, bytes)) = image_data else {
@@ -932,6 +942,11 @@ impl crate::PdfCraftApp {
 
         let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
+            let placed_rect =
+                target_rect.or_else(|| self.session.get(id).and_then(|d| d.page_images(page).into_iter().nth(before).map(|im| im.rect)));
+            if let Some(r) = placed_rect {
+                self.last_copied_image_rect = Some(r);
+            }
             if let Some(v) = self.views.get_mut(i) {
                 v.current = page;
                 v.image_selection = Some(crate::edit_text_ui::ImageSelection {
@@ -955,13 +970,41 @@ impl crate::PdfCraftApp {
 
     /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
     pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
-        let rect = if let Some(src_r) = self.last_copied_image_rect {
-            let w = src_r[2] - src_r[0];
-            let h = src_r[3] - src_r[1];
-            Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5])
+        let (w, h) = if let Some(crate::create_ui::Clip::Image { width, height, rgba }) = self.clipboard_override.as_ref() {
+            let is_same = self
+                .last_copied_image
+                .as_ref()
+                .is_some_and(|(w, h, bytes)| *w as usize == *width && *h as usize == *height && bytes.as_slice() == rgba.as_slice());
+            if is_same && let Some(src_r) = self.last_copied_image_rect {
+                (src_r[2] - src_r[0], src_r[3] - src_r[1])
+            } else {
+                (*width as f64, *height as f64)
+            }
         } else {
-            None
+            #[cfg(not(target_arch = "wasm32"))]
+            let sys_img = if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_image()).ok() } else { None };
+            #[cfg(target_arch = "wasm32")]
+            let sys_img: Option<arboard::ImageData<'static>> = None;
+
+            if let Some(img) = sys_img {
+                let is_same = self
+                    .last_copied_image
+                    .as_ref()
+                    .is_some_and(|(w, h, bytes)| *w as usize == img.width && *h as usize == img.height && bytes.as_slice() == img.bytes.as_ref());
+                if is_same && let Some(src_r) = self.last_copied_image_rect {
+                    (src_r[2] - src_r[0], src_r[3] - src_r[1])
+                } else {
+                    (img.width as f64, img.height as f64)
+                }
+            } else if let Some(src_r) = self.last_copied_image_rect {
+                (src_r[2] - src_r[0], src_r[3] - src_r[1])
+            } else if let Some((w, h, _)) = self.last_copied_image {
+                (w as f64, h as f64)
+            } else {
+                (100.0, 100.0)
+            }
         };
+        let rect = Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5]);
         self.paste_image(page, rect)
     }
 }

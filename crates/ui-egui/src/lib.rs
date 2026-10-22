@@ -3107,7 +3107,6 @@ impl PdfCraftApp {
                 prepare::nudge_keys(ctx, &mut self.views[i], doc);
             }
             canvas::shortcuts(&mut self.views[i], ctx, self.scroll_speed);
-            self.paste_image_key(i, ctx, pasted);
             self.clipboard_keys(i, ctx, pasted);
             self.image_pick_keys(i, ctx);
         }
@@ -3139,7 +3138,8 @@ impl PdfCraftApp {
     /// ⌘C / ⌘X / ⌘V copy, cut and paste text or images on canvas (unless a text field has focus).
     fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
         use egui::{Key, KeyboardShortcut, Modifiers};
-        if ctx.egui_wants_keyboard_input() || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
+        let free = self.dialog.is_none() && !self.palette_open && !ctx.egui_wants_keyboard_input() && !self.is_preparing();
+        if !free || self.views.get(i).is_some_and(|v| v.forms.focus.is_some() || v.organize) {
             return;
         }
         let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)))

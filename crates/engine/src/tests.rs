@@ -7240,3 +7240,67 @@ fn exporting_office_keeps_dotted_leader_entries_as_paragraphs() {
     let positions: Vec<_> = entries.iter().map(|entry| html.find(&format!("<p>{entry}</p>")).expect("one paragraph per entry")).collect();
     assert!(positions.windows(2).all(|pair| pair[0] < pair[1]), "reading order: {html}");
 }
+
+/// Moving an added image, then rotating it, must keep the moved position.
+#[test]
+fn added_image_move_then_rotate_keeps_position() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([120.0, 120.0, 160.0, 160.0]) }).unwrap();
+    let moved = rect(&s);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+    let rotated = rect(&s);
+    let c = |r: [f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (a, b) = (c(moved), c(rotated));
+    assert!((a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0, "rotate moved the centre from {a:?} to {b:?}");
+}
+
+/// Transforming an added image, then rotating it, must keep the moved position.
+#[test]
+fn added_image_transform_then_rotate_keeps_position() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
+    // Translate by (100, 100): matrix [1, 0, 0, 1, 100, 100]
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([1.0, 0.0, 0.0, 1.0, 100.0, 100.0]) }).unwrap();
+    let transformed = rect(&s);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+    let rotated = rect(&s);
+    let c = |r: [f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (a, b) = (c(transformed), c(rotated));
+    assert!((a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0, "rotate moved the centre from {a:?} to {b:?}");
+}
+
+/// Moving an added image, then rotating by degrees, must keep the moved position.
+#[test]
+fn added_image_move_then_rotate_by_keeps_position() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    let rect = |s: &Session| s.get(id).unwrap().page_images(0)[0].rect;
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([120.0, 120.0, 160.0, 160.0]) }).unwrap();
+    let moved = rect(&s);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::RotateBy(90.0) }).unwrap();
+    let rotated = rect(&s);
+    let c = |r: [f64; 4]| ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    let (a, b) = (c(moved), c(rotated));
+    assert!((a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0, "rotate_by moved the centre from {a:?} to {b:?}");
+}

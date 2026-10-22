@@ -6062,6 +6062,95 @@ fn stale_clipboard_plain_text_does_not_paste_image() {
     assert_eq!(doc.page_images(0).len(), 0, "no image pasted on the page");
 }
 
+/// Issue 1: V key release with COMMAND delivers exactly one paste (not two).
+#[test]
+fn paste_key_release_delivers_single_image() {
+    let pdf = include_bytes!("../data/form.pdf").to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("form.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let id = h.state().views[0].id;
+    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
+
+    h.state_mut().clipboard_override = Some(pdfcraft_ui_egui::Clip::Image { width: 40, height: 20, rgba: [100u8, 200, 100, 255].repeat(40 * 20) });
+
+    // Inject only a V release with COMMAND (no press event), exactly as egui-winit delivers
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(3);
+
+    let count = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(count, initial_count + 1, "exactly one image must be pasted on V release, got {count}");
+}
+
+/// Issue P1: Paste via context menu at a point away from the centre centers the image at that point.
+#[test]
+fn paste_at_context_menu_point_centers_on_cursor() {
+    let pdf = include_bytes!("../data/form.pdf").to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("form.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let id = h.state().views[0].id;
+    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
+
+    h.state_mut().clipboard_override = Some(pdfcraft_ui_egui::Clip::Image { width: 60, height: 40, rgba: [50u8, 150, 250, 255].repeat(60 * 40) });
+
+    let target_at = [120.0, 180.0];
+    assert!(h.state_mut().paste_image_at(0, target_at));
+
+    let images = h.state().session.get(id).unwrap().page_images(0);
+    assert_eq!(images.len(), initial_count + 1);
+    let r = images[initial_count].rect;
+    let center = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+    assert!((center.0 - target_at[0]).abs() < 1.0 && (center.1 - target_at[1]).abs() < 1.0, "expected center {target_at:?}, got {center:?}");
+}
+
+/// Issue P2: A newer clipboard override image beats stale in-app copy.
+#[test]
+fn newer_clipboard_override_beats_stale_in_app_copy() {
+    let pdf = include_bytes!("../data/form.pdf").to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("form.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+
+    let id = h.state().views[0].id;
+    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
+
+    // Stale in-app copy: 10x10 red image
+    h.state_mut().last_copied_image = Some((10, 10, [255u8, 0, 0, 255].repeat(100)));
+    h.state_mut().last_copied_image_rect = Some([10.0, 10.0, 20.0, 20.0]);
+
+    // Newer clipboard override: 50x50 green image
+    h.state_mut().clipboard_override = Some(pdfcraft_ui_egui::Clip::Image { width: 50, height: 50, rgba: [0u8, 255, 0, 255].repeat(2500) });
+
+    assert!(h.state_mut().paste_image(0, None));
+    let images = h.state().session.get(id).unwrap().page_images(0);
+    assert_eq!(images.len(), initial_count + 1);
+    let r = images[initial_count].rect;
+    let (w, h_dim) = (r[2] - r[0], r[3] - r[1]);
+    assert!((w - 50.0).abs() < 1.0 && (h_dim - 50.0).abs() < 1.0, "expected 50x50 override image, got {w}x{h_dim}");
+}
+
 #[test]
 fn rotated_image_selection_and_crop() {
     let mut png = Vec::new();

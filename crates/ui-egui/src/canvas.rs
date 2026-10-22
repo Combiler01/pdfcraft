@@ -4641,7 +4641,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }));
             if is_image_menu && let Some(sel) = view.image_selection.clone() {
                 let images = doc.page_images(sel.page);
-                crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action);
+                let at = view.comments.context_at.map(|(_, at)| at);
+                crate::edit_text_ui::image_context_menu(ui, view, &images, sel.page, sel.index, can_paste_image, &mut image_action, at);
                 return;
             }
             if view.comments.selected.is_some() {
@@ -5020,9 +5021,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.views[index].image_selection = None;
             app.cut_page_image(page, image);
         }
-        Some(crate::edit_text_ui::ImageAction::Paste(page, rect)) => {
-            let offset_rect = [rect[0] + 20.0, rect[1] - 20.0, rect[2] + 20.0, rect[3] - 20.0];
-            app.paste_image(page, Some(offset_rect));
+        Some(crate::edit_text_ui::ImageAction::Paste(page, at)) => {
+            if let Some(pt) = at {
+                app.paste_image_at(page, pt);
+            } else {
+                app.paste_image(page, None);
+            }
         }
         Some(crate::edit_text_ui::ImageAction::DrawFreehand) => {
             app.quick_tool = crate::QuickTool::Comment(crate::comments::CommentTool::Ink);

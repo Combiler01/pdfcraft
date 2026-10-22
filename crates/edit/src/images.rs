@@ -775,8 +775,6 @@ impl ExtendedGStateTracker {
                 if let Some(name) = op.name(0) {
                     if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
                         self.current_state.merge_dict(&dict, doc, Some(name));
-                    } else if self.current_state.ca.is_none() {
-                        self.current_state.ca = Some(0.5);
                     }
                     self.active_gs_ops.retain(|(o, _)| o.name(0) != Some(name));
                     self.active_gs_ops.push((op.clone(), ctm));
@@ -977,39 +975,47 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     let (scan_start, scan_end) = if is_wrapped { (1, ops.len().saturating_sub(1)) } else { (0, ops.len()) };
     let units = content_units(&ops, scan_start, scan_end);
     let Some(target_idx) = units.iter().position(|u| u.start <= target && target < u.end) else {
-        return Ok(());
+        return Err(EditError::Invalid("the image content unit could not be located".into()));
     };
     if units.len() <= 1 {
-        return Ok(());
+        return Err(EditError::Invalid("the page has only one content unit to arrange".into()));
     }
 
     let (dest_unit, insert_after) = match order {
         ArrangeOrder::BringToFront => {
             if target_idx == units.len().saturating_sub(1) {
-                return Ok(());
+                return Err(EditError::Invalid("the image is already in front".into()));
             }
-            let Some(u) = units.last() else { return Ok(()) };
+            let Some(u) = units.last() else {
+                return Err(EditError::Invalid("the image is already in front".into()));
+            };
             (u, true)
         }
         ArrangeOrder::SendToBack => {
             if target_idx == 0 {
-                return Ok(());
+                return Err(EditError::Invalid("the image is already at the back".into()));
             }
-            let Some(u) = units.first() else { return Ok(()) };
+            let Some(u) = units.first() else {
+                return Err(EditError::Invalid("the image is already at the back".into()));
+            };
             (u, false)
         }
         ArrangeOrder::BringForward => {
             if target_idx == units.len().saturating_sub(1) {
-                return Ok(());
+                return Err(EditError::Invalid("the image is already in front".into()));
             }
-            let Some(u) = units.get(target_idx.saturating_add(1)) else { return Ok(()) };
+            let Some(u) = units.get(target_idx.saturating_add(1)) else {
+                return Err(EditError::Invalid("the image is already in front".into()));
+            };
             (u, true)
         }
         ArrangeOrder::SendBackward => {
             if target_idx == 0 {
-                return Ok(());
+                return Err(EditError::Invalid("the image is already at the back".into()));
             }
-            let Some(u) = target_idx.checked_sub(1).and_then(|i| units.get(i)) else { return Ok(()) };
+            let Some(u) = target_idx.checked_sub(1).and_then(|i| units.get(i)) else {
+                return Err(EditError::Invalid("the image is already at the back".into()));
+            };
             (u, false)
         }
     };
@@ -1030,36 +1036,36 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     // other content and leaves the remaining tagged content intact.
     let marked_unit = ops.get(target_unit.start).is_some_and(|o| o.is("BDC") || o.is("BMC"));
 
-    let (mut target_span, scope_start) = if has_other_paint {
+    let target_op = ops.get(target).ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+    let (mut target_span, scope_start, rem_start, rem_end) = if has_other_paint {
         if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
             && sub_start >= target_unit.start
             && sub_end < target_unit.end
         {
-            let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
-            let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
-            (start_op.span.start..end_op.span.end, sub_start)
+            let start_op = ops.get(sub_start).unwrap_or(target_op);
+            let end_op = ops.get(sub_end).unwrap_or(target_op);
+            (start_op.span.start..end_op.span.end, sub_start, sub_start, sub_end.saturating_add(1))
         } else {
-            let target_op = &ops[target];
-            (target_op.span.start..target_op.span.end, target)
+            (target_op.span.start..target_op.span.end, target, target, target.saturating_add(1))
         }
     } else if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
         && sub_start >= target_unit.start
         && sub_end < target_unit.end
         && !marked_unit
     {
-        let start_op = ops.get(sub_start).unwrap_or(&ops[target]);
-        let end_op = ops.get(sub_end).unwrap_or(&ops[target]);
-        (start_op.span.start..end_op.span.end, sub_start)
+        let start_op = ops.get(sub_start).unwrap_or(target_op);
+        let end_op = ops.get(sub_end).unwrap_or(target_op);
+        (start_op.span.start..end_op.span.end, sub_start, sub_start, sub_end.saturating_add(1))
     } else if marked_unit {
         // A marked-content unit holding only this image moves whole, with its BDC…EMC.
         // The whole sequence is removed; the image's state is rebuilt from the ops inside it.
         let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
         let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        (first_op.span.start..last_op.span.end, target_unit.start.saturating_add(1).min(target))
+        (first_op.span.start..last_op.span.end, target_unit.start.saturating_add(1).min(target), target_unit.start, target_unit.end)
     } else {
         let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
         let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        (first_op.span.start..last_op.span.end, target_unit.start)
+        (first_op.span.start..last_op.span.end, target_unit.start, target_unit.start, target_unit.end)
     };
 
     let (dest_pos, scan_target) = if insert_after {
@@ -1082,9 +1088,14 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     let mut scope_start_ctm = Matrix::IDENTITY;
     let mut outer_clips = Vec::new();
     let mut dest_clips = Vec::new();
+    let mut ctm_before_removal = Matrix::IDENTITY;
+    let mut ctm_after_removal = Matrix::IDENTITY;
 
-    let max_scan = scan_target.max(target.saturating_add(1)).max(scope_start.saturating_add(1));
+    let max_scan = scan_target.max(target.saturating_add(1)).max(scope_start.saturating_add(1)).max(rem_end);
     for (i, op) in ops.iter().enumerate() {
+        if i == rem_start {
+            ctm_before_removal = state.placement.matrix;
+        }
         if i == scope_start {
             scope_start_ctm = state.placement.matrix;
             outer_clips = state.placement.clips.clone();
@@ -1103,6 +1114,9 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         }
         state.apply(op)?;
         tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
+        if i == rem_end.saturating_sub(1) {
+            ctm_after_removal = state.placement.matrix;
+        }
     }
     if scan_target >= ops.len() {
         dest_effective_state = tracker.current_state.clone();
@@ -1164,12 +1178,10 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
 
     let mut reconstructed_state = dest_effective_state.clone();
     for (op, _) in &source_gs_ops {
-        if let Some(name) = op.name(0) {
-            if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
-                reconstructed_state.merge_dict(&dict, doc, Some(name));
-            } else if reconstructed_state.ca.is_none() {
-                reconstructed_state.ca = Some(0.5);
-            }
+        if let Some(name) = op.name(0)
+            && let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned())
+        {
+            reconstructed_state.merge_dict(&dict, doc, Some(name));
         }
     }
 
@@ -1180,18 +1192,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     }
 
     let mut unit_ops = Vec::new();
-    let marked_open = if marked_unit {
-        if has_other_paint {
-            let open = ops.get(target_unit.start);
-            let has_mcid =
-                open.is_some_and(|o| o.is("BDC") && o.operands.get(1).and_then(|dict| dict.as_dict()).is_some_and(|d| d.get(b"MCID").is_some()));
-            if has_mcid { Some(Op::new("BMC", vec![Object::name("Artifact")])) } else { open.cloned() }
-        } else {
-            ops.get(target_unit.start).cloned()
-        }
-    } else {
-        None
-    };
+    let marked_open = if marked_unit { ops.get(target_unit.start).cloned() } else { None };
     if let Some(open) = &marked_open {
         unit_ops.push(open.clone());
     }
@@ -1254,15 +1255,27 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     serialized.extend_from_slice(&serialize_ops(&unit_ops));
     serialized.push(b'\n');
 
+    let leaking = if let Some(inv) = ctm_before_removal.invert() { ctm_after_removal.then(&inv) } else { Matrix::IDENTITY };
+    let removal_replacement = if leaking != Matrix::IDENTITY {
+        let leak_ops = vec![Op::new("cm", leaking.0.map(pdfcraft_content::num).to_vec())];
+        let mut s = Vec::new();
+        s.push(b'\n');
+        s.extend_from_slice(&serialize_ops(&leak_ops));
+        s.push(b'\n');
+        s
+    } else {
+        Vec::new()
+    };
+
     let mut edits = Vec::new();
     if dest_pos >= target_span.end {
-        edits.push((target_span, Vec::new()));
+        edits.push((target_span, removal_replacement));
         edits.push((dest_pos..dest_pos, serialized));
     } else if dest_pos <= target_span.start {
         edits.push((dest_pos..dest_pos, serialized));
-        edits.push((target_span, Vec::new()));
+        edits.push((target_span, removal_replacement));
     } else {
-        return Ok(());
+        return Err(EditError::Invalid("no change in image stacking order".into()));
     }
 
     let changed = pieces.splice(edits);
@@ -1636,6 +1649,9 @@ fn crop_image_impl(
     image: &PageImage,
     keep: [f64; 4],
 ) -> Result<(), EditError> {
+    if image.is_form {
+        return Err(EditError::Invalid("cropping grouped Form artwork is not supported".into()));
+    }
     if !keep.iter().all(|v| v.is_finite() && v.abs() <= 1e12) {
         return Err(EditError::Invalid("the crop box must be finite and no larger than 1e12".into()));
     }

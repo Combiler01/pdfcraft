@@ -2675,9 +2675,9 @@ fn image_arrange_stacking_order_and_remove_crop() {
     assert!(close(initial_images[0].rect, [100.0, 100.0, 200.0, 200.0]));
     assert!(close(initial_images[1].rect, [200.0, 200.0, 350.0, 350.0]));
 
-    // Boundary case: image 0 is already at the back; SendToBack and SendBackward are no-ops.
-    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).unwrap();
-    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).unwrap();
+    // Boundary case: image 0 is already at the back; SendToBack and SendBackward report an error.
+    assert!(images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).is_err());
+    assert!(images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).is_err());
     let imgs = images::page_images(&doc, 0).unwrap();
     assert_eq!(imgs.len(), 2);
     assert!(close(imgs[0].rect, initial_images[0].rect));
@@ -2849,8 +2849,8 @@ fn image_arrange_moves_a_bmc_sequence_as_a_whole() {
     assert!(body < art && art < img && img < emc, "text first, then the whole artifact sequence: {s}");
 }
 
-/// An image that shares its marked-content sequence with other content is extracted into its own
-/// tag (/Artifact) when arranged, keeping the remaining content in its original tag.
+/// An image that shares its marked-content sequence with other content keeps its tag and properties
+/// (e.g. /Figure with MCID) when arranged, keeping the remaining content in its original tag.
 #[test]
 fn image_arrange_splits_a_shared_marked_sequence_into_own_tag() {
     let content =
@@ -2864,16 +2864,17 @@ fn image_arrange_splits_a_shared_marked_sequence_into_own_tag() {
     let caption = s.find("(Caption)").expect("caption preserved");
     let emc1 = s.find("EMC").expect("first EMC");
     assert!(fig < caption && caption < emc1, "caption stays in Figure sequence: {s}");
-    // The moved image is placed after Body, wrapped in its own Artifact sequence.
+    // The moved image is placed after Body, wrapped in its own sequence retaining the Figure tag and MCID.
     let body = s.find("(Body)").expect("body text");
-    let art = s.find("/Artifact BMC").expect("image has its own Artifact tag");
+    let fig2 = s.rfind("/Figure <</MCID 0>> BDC").expect("image retains Figure tag and MCID");
     let img = s.find("/Im0 Do").expect("image moved");
     let emc2 = s.rfind("EMC").expect("second EMC");
-    assert!(emc1 < body && body < art && art < img && img < emc2, "image moved after body in own tag: {s}");
+    assert!(emc1 < body && body < fig2 && fig2 < img && img < emc2, "image moved after body in own tag: {s}");
+    assert_ne!(fig, fig2);
     assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
 }
 
-/// Send backward also splits out the image into its own tag when it shares its sequence with text,
+/// Send backward also splits out the image while keeping its tag when it shares its sequence with text,
 /// placing it before the preceding unit and keeping the remaining content tagged.
 #[test]
 fn image_arrange_send_backward_splits_shared_marked_sequence() {
@@ -2887,9 +2888,10 @@ fn image_arrange_send_backward_splits_shared_marked_sequence() {
     let img = s.find("/Im0 Do").expect("image");
     let cell = s.find("(Cell)").expect("cell text");
     assert!(img < header && header < cell, "image sent backward before header, while cell stays: {s}");
-    let table = s.find("/Table <</MCID 0>> BDC").expect("table tag preserved");
+    let table = s.rfind("/Table <</MCID 0>> BDC").expect("table tag preserved");
+    let table_first = s.find("/Table <</MCID 0>> BDC").expect("moved image table tag");
     let emc = s.rfind("EMC").expect("EMC");
-    assert!(s.find("/Artifact BMC").is_some(), "image has own artifact tag: {s}");
+    assert_ne!(table_first, table);
     assert!(table < cell && cell < emc, "cell text stays in table sequence: {s}");
 }
 
@@ -7229,4 +7231,76 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
             }
         }
     }
+}
+
+/// One 600×800 page: Im0 (4×2 gray image), Fm0 (200×100 Form), ExtGState GSone (ca 1).
+fn regression_page(content: &str) -> Document {
+    let form = "0 g 0 0 200 100 re f";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R /Fm0 7 0 R >> /ExtGState << /GSone << /Type /ExtGState /ca 1 >> >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 4 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 8 >>\nstream\n\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\u{0}\nendstream".into(),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 200 100] /Length {} >>\nstream\n{form}\nendstream", form.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+fn regression_rects(doc: &Document) -> Vec<[i64; 4]> {
+    let mut v: Vec<[i64; 4]> = images::page_images(doc, 0).unwrap().iter().map(|i| i.rect.map(|x| x.round() as i64)).collect();
+    v.sort();
+    v
+}
+
+/// A `cm` inside a BDC…EMC unit applies to later content; arranging the unit must not shift anything.
+#[test]
+fn arrange_keeps_cm_leaking_out_of_marked_content() {
+    let mut doc = regression_page("/Figure <</MCID 0>> BDC 1 0 0 1 50 50 cm q 100 0 0 100 0 0 cm /Im0 Do Q EMC q 10 0 0 10 200 200 cm /Im0 Do Q");
+    let before = regression_rects(&doc);
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    assert_eq!(before, regression_rects(&reopen(&doc)), "other content moved");
+}
+
+/// Cropping a Form XObject to 100×100 keeps a 100×100 visible area (or is refused) — never 1×1.
+#[test]
+fn crop_form_xobject_keeps_requested_area() {
+    let mut doc = regression_page("q 1 0 0 1 100 100 cm /Fm0 Do Q");
+    if images::crop_image(&mut doc, 0, 0, [100.0, 100.0, 200.0, 200.0]).is_err() {
+        return; // refusing to crop vector art is also acceptable
+    }
+    let after = images::page_images(&reopen(&doc), 0).unwrap()[0].clone();
+    let v = after.visible_rect.unwrap_or(after.rect);
+    assert!((v[2] - v[0] - 100.0).abs() < 1.0 && (v[3] - v[1] - 100.0).abs() < 1.0, "expected 100x100 visible, got {v:?}");
+}
+
+/// A gs naming a missing ExtGState must not be read as 50% opacity and block the reorder.
+#[test]
+fn arrange_tolerates_missing_extgstate() {
+    let mut doc = regression_page("q /GSmissing gs 100 0 0 100 50 50 cm /Im0 Do Q /GSone gs q 10 0 0 10 200 200 cm /Im0 Do Q");
+    let r = images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(r.is_ok(), "{r:?}");
+}
+
+/// Bring to front on the image already in front must not report a change it didn't make.
+#[test]
+fn noop_arrange_is_not_ok_without_change() {
+    let mut doc = regression_page("q 10 0 0 10 200 200 cm /Im0 Do Q q 100 0 0 100 50 50 cm /Im0 Do Q");
+    let before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let r = images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::BringToFront);
+    let after = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    assert!(r.is_err() || before != after, "Ok with no change");
 }

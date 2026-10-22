@@ -2698,6 +2698,36 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                     && let AddedContent::Image(mut ai) = added_item.content
                 {
                     match change {
+                        ImageEdit::Move(to) => {
+                            ai.rect = *to;
+                            pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
+                        }
+                        ImageEdit::Transform(t) => {
+                            let apply = |x: f64, y: f64| (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]);
+                            let pts = [
+                                apply(ai.rect[0], ai.rect[1]),
+                                apply(ai.rect[2], ai.rect[1]),
+                                apply(ai.rect[0], ai.rect[3]),
+                                apply(ai.rect[2], ai.rect[3]),
+                            ];
+                            let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+                            for (x, y) in pts {
+                                b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                            }
+                            ai.rect = b;
+                            if t[1].abs() < 1e-6 && t[2].abs() < 1e-6 {
+                                pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
+                            } else {
+                                let _ = doc.update_dict(added_item.obj, |d| {
+                                    if let Some(pdfcraft_cos::Object::Dict(params)) = d.get_mut(b"PCAdded") {
+                                        params.set(
+                                            b"Rect".to_vec(),
+                                            pdfcraft_cos::Object::Array(ai.rect.iter().map(|x| pdfcraft_cos::Object::Real(*x)).collect()),
+                                        );
+                                    }
+                                });
+                            }
+                        }
                         ImageEdit::Rotate(q) => {
                             let k = ((4 - q.rem_euclid(4)) % 4) as u8;
                             ai.rotation = (ai.rotation + k) % 4;
@@ -2708,6 +2738,42 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                                 ai.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
                             }
                             pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
+                        }
+                        ImageEdit::RotateBy(degrees) => {
+                            let deg = degrees.rem_euclid(360.0);
+                            if (deg % 90.0).abs() < 1e-4 || (deg % 90.0 - 90.0).abs() < 1e-4 {
+                                let quarters = ((deg + 45.0) / 90.0).floor() as i64;
+                                let k = ((4 - quarters.rem_euclid(4)) % 4) as u8;
+                                ai.rotation = (ai.rotation + k) % 4;
+                                let r = ai.rect;
+                                let (cx, cy) = ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0);
+                                if k % 2 == 1 {
+                                    let (w, h) = (r[2] - r[0], r[3] - r[1]);
+                                    ai.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
+                                }
+                                pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
+                            } else if let Some(t) = pdfcraft_edit::turn_by_degrees(img.visible_rect.unwrap_or(img.rect), *degrees) {
+                                let apply = |x: f64, y: f64| (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]);
+                                let pts = [
+                                    apply(ai.rect[0], ai.rect[1]),
+                                    apply(ai.rect[2], ai.rect[1]),
+                                    apply(ai.rect[0], ai.rect[3]),
+                                    apply(ai.rect[2], ai.rect[3]),
+                                ];
+                                let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+                                for (x, y) in pts {
+                                    b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                                }
+                                ai.rect = b;
+                                let _ = doc.update_dict(added_item.obj, |d| {
+                                    if let Some(pdfcraft_cos::Object::Dict(params)) = d.get_mut(b"PCAdded") {
+                                        params.set(
+                                            b"Rect".to_vec(),
+                                            pdfcraft_cos::Object::Array(ai.rect.iter().map(|x| pdfcraft_cos::Object::Real(*x)).collect()),
+                                        );
+                                    }
+                                });
+                            }
                         }
                         ImageEdit::Flip { horizontal: true } => {
                             ai.flip_h = !ai.flip_h;

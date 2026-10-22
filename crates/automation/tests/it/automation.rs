@@ -3040,14 +3040,11 @@ fn editing_page_images_through_tools() {
     assert_eq!(cropped["visible_rect"], json!([10.0, 10.0, 25.0, 30.0]));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "rotate" }));
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "flip_horizontal" }));
-    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" }));
-    assert_eq!(r["undo"], "Bring to front");
-    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "send_to_back" }));
-    assert_eq!(r["undo"], "Send to back");
-    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "bring_forward" }));
-    assert_eq!(r["undo"], "Bring forward");
-    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "send_backward" }));
-    assert_eq!(r["undo"], "Send backward");
+    // A single image is already in front and at the back; no-op arrange is refused without dirtying undo.
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "send_to_back" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "bring_forward" })).is_err());
+    assert!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "send_backward" })).is_err());
     let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "remove_crop" }));
     assert_eq!(r["undo"], "Remove crop");
     // Any angle: the box grows to the turned picture's bounds, and it undoes like a quarter turn.
@@ -3067,6 +3064,21 @@ fn editing_page_images_through_tools() {
     ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "delete" }));
     assert_eq!(ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["count"], 0);
     assert!(matches!(a.call("image_edit", &json!({ "doc": made, "page": 1, "image": 1, "action": "delete" })), Err(ToolError::InvalidArgs(_))));
+}
+
+#[test]
+fn arranging_page_images_through_tools() {
+    let dir = workdir("arrange-page-images");
+    let mut a = auto(&dir);
+    let doc = ok(&mut a, "doc_open", json!({ "path": "a.pdf" }))["doc"].as_u64().unwrap();
+    ok(&mut a, "doc_export_images", json!({ "doc": doc, "folder": "src", "dpi": 18, "pages": [1, 2] }));
+    let made = ok(&mut a, "doc_create", json!({ "from": "images", "paths": ["src/a_page_1.png"] }))["doc"].as_u64().unwrap();
+    ok(&mut a, "page_add_image", json!({ "doc": made, "page": 1, "path": "src/a_page_2.png", "rect": [50, 50, 100, 100] }));
+    assert_eq!(ok(&mut a, "page_images", json!({ "doc": made, "page": 1 }))["count"], 2);
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 1, "action": "bring_to_front" }));
+    assert_eq!(r["undo"], "Bring to front");
+    let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 2, "action": "send_to_back" }));
+    assert_eq!(r["undo"], "Send to back");
 }
 
 #[test]

@@ -1340,7 +1340,7 @@ pub(crate) enum ImageAction {
     Link(usize, usize),
     /// Open Recognize Text for the picture's page.
     Recognize(usize),
-    Paste(usize, [f64; 4]),
+    Paste(usize, Option<[f64; 2]>),
     DrawFreehand,
     AddComment(usize, usize),
     Crop,
@@ -1936,6 +1936,7 @@ pub(crate) fn image_input(
 }
 
 /// The right-click context menu for a selected image matching Adobe Acrobat.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn image_context_menu(
     ui: &mut egui::Ui,
     view: &mut DocView,
@@ -1944,9 +1945,11 @@ pub(crate) fn image_context_menu(
     hit: usize,
     can_paste: bool,
     action: &mut Option<ImageAction>,
+    at: Option<[f64; 2]>,
 ) {
     let Some(img) = images.get(hit) else { return };
     use pdfcraft_engine::ImageEdit as E;
+    let raster = !img.is_form;
 
     // Top horizontal icon bar: Comment, Crop, Rotate CCW, Rotate CW
     ui.horizontal(|ui| {
@@ -1955,7 +1958,7 @@ pub(crate) fn image_context_menu(
             *action = Some(ImageAction::AddComment(page, hit));
             ui.close();
         }
-        if crate::icons::button(ui, "crop", 24.0, false, "Crop").clicked() {
+        if raster && crate::icons::button(ui, "crop", 24.0, false, tl!("Crop")).clicked() {
             *action = Some(ImageAction::Crop);
             if let Some(s) = view.image_selection.as_mut() {
                 let rect = img.visible_rect.unwrap_or(img.rect);
@@ -1977,7 +1980,6 @@ pub(crate) fn image_context_menu(
 
     ui.separator();
 
-    let raster = !img.is_form;
     if ui.button(tl!("Cut Image")).clicked() {
         *action = Some(ImageAction::Cut(page, hit));
         ui.close();
@@ -1986,15 +1988,15 @@ pub(crate) fn image_context_menu(
         *action = Some(ImageAction::Copy(page, hit));
         ui.close();
     }
-    if ui.add_enabled(can_paste, egui::Button::new("Paste")).clicked() {
-        *action = Some(ImageAction::Paste(page, img.rect));
+    if ui.add_enabled(can_paste, egui::Button::new(tl!("Paste"))).clicked() {
+        *action = Some(ImageAction::Paste(page, at));
         ui.close();
     }
 
     ui.separator();
 
     let is_cropped = img.visible_rect.is_some() && img.visible_rect != Some(img.rect);
-    if ui.add_enabled(is_cropped, egui::Button::new("Remove crop")).clicked() {
+    if raster && ui.add_enabled(is_cropped, egui::Button::new(tl!("Remove crop"))).clicked() {
         view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::RemoveCrop });
         ui.close();
     }
@@ -2008,20 +2010,20 @@ pub(crate) fn image_context_menu(
         ui.close();
     }
 
-    ui.menu_button("Arrange image", |ui| {
-        if ui.button("Bring to front").clicked() {
+    ui.menu_button(tl!("Arrange image"), |ui| {
+        if ui.button(tl!("Bring to front")).clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront) });
             ui.close();
         }
-        if ui.button("Send to back").clicked() {
+        if ui.button(tl!("Send to back")).clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendToBack) });
             ui.close();
         }
-        if ui.button("Bring forward").clicked() {
+        if ui.button(tl!("Bring forward")).clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringForward) });
             ui.close();
         }
-        if ui.button("Send backward").clicked() {
+        if ui.button(tl!("Send backward")).clicked() {
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::SendBackward) });
             ui.close();
         }

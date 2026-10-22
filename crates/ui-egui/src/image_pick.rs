@@ -203,6 +203,7 @@ impl PdfCraftApp {
             let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
             self.put_file_on_clipboard(&name, &bytes)?;
             self.last_copied_file = Some((name, bytes));
+            self.last_copied_image_rect = self.page_image_box(page, index);
             Ok(ext)
         });
         match copied {
