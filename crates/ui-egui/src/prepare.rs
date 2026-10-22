@@ -7,7 +7,7 @@
 
 use egui::{Color32, CornerRadius, Pos2, Rect, Stroke, vec2};
 use pdfcraft_engine::form_scripts::{CalcOp, Calculate, DATE_PRESETS, Format, TIME_PRESETS, Validate, format_value};
-use pdfcraft_engine::{BorderStyle, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
+use pdfcraft_engine::{BorderStyle, Document, Edit, FieldFont, FieldLook, FieldProps, FormField, FormFieldKind, NewField};
 use pdfcraft_render::DocInfo;
 
 use crate::canvas::{DocView, PageXform};
@@ -601,6 +601,53 @@ pub(crate) fn delete_selected(view: &mut DocView) -> Option<Edit> {
     Some(Edit::Batch { label, edits: names.into_iter().map(|name| Edit::DeleteField { name }).collect() })
 }
 
+/// The arrow keys move the selected field a point, Shift and an arrow ten points, as in Acrobat,
+/// as the object nudge does (`object_ui::nudge_keys`) and as dragging it does (#2608). The keys
+/// are consumed before the view turns the page with them; one press is one undo step.
+pub(crate) fn nudge_keys(ctx: &egui::Context, view: &mut DocView, doc: &Document) {
+    // `consume_key` lets an extra Alt through, and Alt+↑/↓ belongs to Calculation order's move.
+    if ctx.egui_wants_keyboard_input() || view.prepare.grab.is_some() || ctx.input(|i| i.modifiers.alt) {
+        return;
+    }
+    let Some((name, wi)) = view.prepare.selected.clone() else { return };
+    let Some(w) = doc.form.iter().find(|f| f.name == name).and_then(|f| f.widgets.get(wi)) else { return };
+    let Some(page) = w.page else { return };
+    let Some(xf) = view.page_xform(page) else { return };
+    use egui::{Key, Modifiers};
+    let mut step = egui::Vec2::ZERO;
+    ctx.input_mut(|i| {
+        for (key, direction) in [
+            (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
+            (Key::ArrowRight, egui::vec2(1.0, 0.0)),
+            (Key::ArrowUp, egui::vec2(0.0, -1.0)),
+            (Key::ArrowDown, egui::vec2(0.0, 1.0)),
+        ] {
+            // Shift first: a plain key pattern also matches a Shift press.
+            if i.consume_key(Modifiers::SHIFT, key) {
+                step += direction * 10.0;
+            } else if i.consume_key(Modifiers::NONE, key) {
+                step += direction;
+            }
+        }
+    });
+    if step == egui::Vec2::ZERO {
+        return;
+    }
+    // A point in view space whatever the zoom and whatever way the view is turned; the page's own
+    // rotation turns it into the user-space move the widget's rect is stored in.
+    let c = xf.rect.center();
+    let unit = |d: egui::Vec2| {
+        let (a, b) = (xf.screen_to_view(c), xf.screen_to_view(c + d));
+        let v = egui::vec2(b.0 - a.0, b.1 - a.1);
+        if v.length() > 0.0 { v / v.length() } else { egui::Vec2::ZERO }
+    };
+    let delta = unit(egui::vec2(1.0, 0.0)) * step.x + unit(egui::vec2(0.0, 1.0)) * step.y;
+    let Ok(offset) = doc.object_move_offset(page, [f64::from(delta.x), f64::from(delta.y)]) else { return };
+    let r = w.rect;
+    let rect = [r[0] + offset[0], r[1] + offset[1], r[2] + offset[0], r[3] + offset[1]];
+    view.pending_edit = Some(Edit::SetFieldProps { name, props: Box::new(FieldProps { rect: Some((wi, rect)), ..Default::default() }) });
+}
+
 /// Delete removes the selected fields; Escape clears the selection.
 pub(crate) fn select_all(view: &mut DocView, form: &[FormField]) {
     let mut selected =
@@ -1025,7 +1072,10 @@ pub(crate) fn body(ui: &mut egui::Ui, d: &mut FieldDraft, t: &crate::theme::Toke
                         if ui.add(widgets::checkbox(&mut auto, tl!("Auto"))).changed() {
                             d.font_size = if auto { 0.0 } else { 12.0 };
                         }
-                        ui.add_enabled(!auto, egui::DragValue::new(&mut d.font_size).range(2.0..=100.0).speed(0.25).suffix(" pt"));
+                        ui.add_enabled(
+                            !auto,
+                            egui::DragValue::new(&mut d.font_size).range(2.0..=100.0).clamp_existing_to_range(false).speed(0.25).suffix(" pt"),
+                        );
                     });
                     ui.end_row();
                     if let Some(l) = d.look.as_mut() {

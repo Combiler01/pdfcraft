@@ -26,6 +26,8 @@ pub enum Needs {
     Annotate,
     /// The open document's security allows copying text and images out of it.
     Copying,
+    /// The open document's security allows printing (low resolution counts).
+    Printing,
     /// The document has form fields and its security allows filling them in.
     FillForms,
     /// The document has comments and allows changes.
@@ -188,7 +190,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("file.close", "Close file", FILE, Some(Shortcut::cmd("W")), Document, "x"),
     c("file.close_all", "Close all", FILE, Some(Shortcut::cmd_shift("W")), Document, "x"),
     c("file.revert", "Revert", FILE, None, Undo, "rotate-ccw"),
-    c("print.dialog", "Print…", FILE, Some(Shortcut::cmd("P")), Document, "printer"),
+    c("print.dialog", "Print…", FILE, Some(Shortcut::cmd("P")), Printing, "printer"),
     c("file.properties", "Document properties…", FILE, Some(Shortcut::cmd("D")), Document, "info"),
     c("file.word_count", "Word count…", FILE, None, Copying, "hash"),
     ct("edit.undo", "Undo", EDIT, Some(Shortcut::cmd("Z")), Undo, "undo-2"),
@@ -202,6 +204,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     c("view.layout.single", "Single page", None, None, Document, "file-text"),
     c("view.layout.two_up", "Two-page view", None, None, Document, "columns-2"),
     c("view.continuous", "Continuous scrolling", None, None, Document, "arrow-up-down"),
+    c("view.page_gaps", "Show gaps between pages", None, None, Document, "arrow-up-down"),
     c("view.layout.cover", "Show cover page in two-page view", None, None, TwoPageView, "bookmark"),
     // Acrobat's view modes, a page display and a zoom at once (the rail's Page display menu).
     c("view.fit_width_scrolling", "Fit to width scrolling", None, None, Document, "arrow-left-right"),
@@ -400,6 +403,7 @@ pub fn is_enabled(spec: &CommandSpec, session: &Session, active: Option<DocId>) 
         Modification => doc.is_some_and(|d| d.allows_modification()),
         Annotate => doc.is_some_and(|d| d.allows_annotation()),
         Copying => doc.is_some_and(|d| d.allows_copying()),
+        Printing => doc.is_some_and(|d| d.allows_printing()),
         FillForms => doc.is_some_and(|d| d.allows_form_filling() && !d.form.is_empty()),
         Marks(k) => doc.is_some_and(|d| d.allows_modification() && d.marks().contains(&k)),
         HasComments => doc.is_some_and(|d| d.allows_modification() && !d.info.annotations.is_empty()),

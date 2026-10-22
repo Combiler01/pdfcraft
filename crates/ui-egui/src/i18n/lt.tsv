@@ -74,6 +74,8 @@
 	Single page	Vienas puslapis
 	Two-page view	Dviejų puslapių rodinys
 	Continuous scrolling	Nepertraukiamas slinkimas
+	Show gaps between pages	Rodyti tarpus tarp puslapių
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Paslėpkite tarpus, kad puslapių kraštai susiliestų. Paraštės PDF viduje nesikeičia.
 	Page display	Puslapių rodymas
 	Default page display	Numatytasis puslapių rodymas
 	Default zoom	Numatytasis mastelis
@@ -592,6 +594,7 @@
 	Flip horizontal	Apversti horizontaliai
 	Flip on long edge	Apversti per ilgąją kraštinę
 	Flip on short edge	Apversti per trumpąją kraštinę
+	Printer default	Pagal spausdintuvą
 	Flip vertical	Apversti vertikaliai
 	Folders	Aplankai
 	Font Size:	Šrifto dydis:
@@ -629,6 +632,8 @@
 	Height:	Aukštis:
 	Hide field highlights	Slėpti laukų paryškinimą
 	Hide layer	Slėpti sluoksnį
+	Layer options	Sluoksnių parinktys
+	Reset to Initial Visibility	Atkurti pradinį matomumą
 	Hide menu bar	Slėpti meniu juostą
 	Hide password	Slėpti slaptažodį
 	Hide toolbars	Slėpti įrankių juostas
@@ -740,6 +745,7 @@
 	Looking for PDFs…	Ieškoma PDF failų…
 	Looking for printers…	Ieškoma spausdintuvų…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Spausdintuvų nerasta. Patikrinkite, ar spausdintuvas įdiegtas ir ar veikia spausdinimo eilė, tada vėl atverkite Spausdinti.
+	Reading the printer's settings…	Skaitomi spausdintuvo nustatymai…
 	Low Resolution (150 dpi)	Maža raiška (150 dpi)
 	Low resolution	Maža raiška
 	Magnification	Didinimas
@@ -969,6 +975,7 @@
 	Redaction code:	Šalinimo kodas:
 	Reload	Įkelti iš naujo
 	Reload documents when their files change on disk	Iš naujo įkelti dokumentus, kai pasikeičia jų failai diske
+	Always use my default zoom and page layout	Visada naudoti mano numatytąjį mastelį ir puslapio išdėstymą
 	Remove checkmark	Pašalinti varnelę
 	Remove invalid links and bookmarks	Pašalinti netinkamus saitus ir žymeles
 	Remove page	Pašalinti puslapį
@@ -1145,6 +1152,7 @@
 	Start	Pradėti
 	Start Checking	Pradėti tikrinimą
 	Start page number	Pradinio puslapio numeris
+	Shrink the page content to make room for the header and footer	Sumažinti puslapio turinį, kad tilptų antraštė ir poraštė
 	Status	Būsena
 	Steps	Veiksmai
 	Strength: {s}	Stiprumas: {s}
@@ -1175,6 +1183,7 @@
 	The document now conforms to {level}; save it to keep the changes	Dokumentas dabar atitinka {level}; įrašykite jį, kad išsaugotumėte pakeitimus
 	The document opens without a password; this password is needed to change the restrictions. It's applied when you save.	Dokumentą galima atverti be slaptažodžio; šis slaptažodis reikalingas apribojimams keisti. Jis pritaikomas įrašant dokumentą.
 	The document's security settings don't allow copying text and images	Dokumento saugos nuostatos neleidžia kopijuoti teksto ir paveikslėlių
+	The document's security settings don't allow printing	Dokumento saugos nuostatos neleidžia spausdinti
 	The document's security settings don't allow this change	Dokumento saugos nuostatos neleidžia atlikti šio pakeitimo
 	The existing action will be preserved.	Esamas veiksmas bus išsaugotas.
 	The fonts PdfCraft writes with can't draw “{c}” ({code}), so it shows as ? in every PDF viewer. The text is saved.	„PdfCraft“ naudojami šriftai negali atvaizduoti simbolio „{c}“ ({code}), todėl visose PDF žiūryklėse jis rodomas kaip ?. Tekstas įrašytas.
@@ -1759,6 +1768,9 @@
 	The signature value does not match the signer's certificate: the signature is corrupt.	Parašo reikšmė neatitinka pasirašiusiojo sertifikato: parašas pažeistas.
 	The signature's byte range does not exclude exactly its contents.	Parašo baitų intervalas neišskiria tiksliai jo turinio.
 	The signature's byte range does not match the file.	Parašo baitų intervalas neatitinka failo.
+	The signature's signed attributes have no content type, which CMS requires; it was read anyway.	Parašo pasirašytuosiuose atributuose nėra turinio tipo, kurio reikalauja CMS; parašas vis tiek perskaitytas.
+	The signature's signed attributes have no message digest, so the signature does not cover the document.	Parašo pasirašytuosiuose atributuose nėra pranešimo santraukos, todėl parašas neapima dokumento.
+	The signature's signed attributes name a content type other than data, so it is not a signature of the document.	Parašo pasirašytuosiuose atributuose nurodytas kitas turinio tipas nei duomenys, todėl tai nėra dokumento parašas.
 	The signature's timestamp token could not be verified ({}).	Nepavyko patvirtinti parašo laiko žymos žetono ({}).
 	The signature's timestamp token does not cover the signature value.	Parašo laiko žymos žetonas neapima parašo reikšmės.
 	The signed content is a constructed (segmented) OCTET STRING, as BER allows; it was read anyway.	Pasirašytas turinys yra sudėtinis (segmentuotas) OCTET STRING, kaip leidžia BER; jis vis tiek perskaitytas.
@@ -1784,6 +1796,7 @@
 	This document has not been modified since this timestamp was applied.	Pridėjus šią laiko žymą dokumentas nepakeistas.
 	This signature uses RIPEMD-160, a legacy 160-bit hash algorithm that is no longer recommended for signatures. It still validates, but it should not be relied on.	Šis parašas naudoja RIPEMD-160 — pasenusį 160 bitų maišos algoritmą, kuris parašams neberekomenduojamas. Parašas vis dar patvirtinamas, tačiau juo nereikėtų pasikliauti.
 	This signature uses SHA-1, a weak hash algorithm: collisions in it have been demonstrated. It still validates because many documents signed years ago use it, but it should not be relied on.	Šis parašas naudoja silpną SHA-1 maišos algoritmą, kuriam įrodytos kolizijos. Parašas vis dar patvirtinamas, nes SHA-1 naudoja daug prieš daugelį metų pasirašytų dokumentų, tačiau juo nereikėtų pasikliauti.
+	This signature uses an RSA key shorter than 2048 bits, which is no longer considered strong enough for signatures. It still validates, but it should not be relied on.	Šis parašas naudoja trumpesnį nei 2048 bitų RSA raktą, kuris parašams nebelaikomas pakankamai stipriu. Parašas vis dar patvirtinamas, tačiau juo nereikėtų pasikliauti.
 	Undo {action}	Atšaukti {action}
 	Unsigned signature field	Nepasirašytas parašo laukas
 	Unsigned signature field: {name}	Nepasirašytas parašo laukas: {name}
@@ -2725,6 +2738,7 @@ key	Space	Tarpas
 # AI-assisted additions for concurrently merged UI features (2026-10-15).
 # These additions have not had separate native-speaker review.
 	Mouse wheel scroll speed	Pelės ratuko slinkimo greitis
+	Remove {standard} identification	Pašalinti {standard} identifikaciją
 	The password must have at least 6 characters.	Slaptažodį turi sudaryti bent 6 simboliai.
 	This file changed on disk. Reload it to see the new version; your unsaved changes will be lost.	Šis failas diske pasikeitė. Įkelkite jį iš naujo, kad pamatytumėte naują versiją; neįrašyti pakeitimai bus prarasti.
 theme	Appearance	Išvaizda
@@ -2755,6 +2769,11 @@ theme	Appearance	Išvaizda
 	Paragraph spacing	Tarpas tarp pastraipų
 	Less	Mažiau
 	Other options	Kitos parinktys
+	Thumbnail size	Miniatiūrų dydis
+	Smaller thumbnails	Mažesnės miniatiūros
+	Larger thumbnails	Didesnės miniatiūros
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Keisti komentaro formą
 
 # Prepare a form ▸ Text field table
 	Add text field table	Pridėti teksto laukų lentelę

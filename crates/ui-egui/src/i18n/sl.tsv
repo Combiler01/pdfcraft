@@ -442,6 +442,8 @@
 	Content copying for accessibility	Kopiranje vsebine za dostopnost
 	Continue	Nadaljuj
 	Continuous scrolling	Neprekinjeno pomikanje
+	Show gaps between pages	Pokaži razmike med stranmi
+	Hide gaps to join page edges. Margins inside the PDF remain unchanged.	Skrijte razmike, da združite robove strani. Robovi znotraj PDF-ja ostanejo nespremenjeni.
 	Contributors	Sodelavci
 	Convert	Pretvori
 	Convert colors	Pretvori barve
@@ -839,6 +841,7 @@
 	Flip image	Prezrcali sliko
 	Flip on long edge	Obrni po dolgem robu
 	Flip on short edge	Obrni po kratkem robu
+	Printer default	Privzeto tiskalnika
 	Flip vertical	Prezrcali navpično
 	Folders	Mape
 	Font Size:	Velikost pisave:
@@ -902,6 +905,8 @@
 	Hide all comments	Skrij vse komentarje
 	Hide field highlights	Skrij osvetlitev polj
 	Hide layer	Skrij plast
+	Layer options	Možnosti plasti
+	Reset to Initial Visibility	Ponastavi na začetno vidnost
 	Hide menu bar	Skrij menijsko vrstico
 	Hide password	Skrij geslo
 	Hide toolbars	Skrij orodne vrstice
@@ -1764,6 +1769,7 @@
 	Start	Začetek
 	Start Checking	Začni preverjanje
 	Start page number	Številka začetne strani
+	Shrink the page content to make room for the header and footer	Pomanjšaj vsebino strani, da bo prostor za glavo in nogo
 	Status	Stanje
 	Steps	Koraki
 	Sticky note	Opomba
@@ -2265,6 +2271,7 @@ key	Space	Preslednica
 	Looking for printers…	Iskanje tiskalnikov…
 	Sending sheet {s} of {n} to {printer}…	Pošiljanje lista {s} od {n} na {printer}…
 	No printers were found. Check that the printer is installed and the print spooler is running, then open Print again.	Ni najdenih tiskalnikov. Preverite, ali je tiskalnik nameščen in ali tiskalna vrsta deluje, nato znova odprite Natisni.
+	Reading the printer's settings…	Branje nastavitev tiskalnika…
 	Sending to {printer}…	Pošiljanje na {printer}…
 	Float panel	Odtrgaj razdelek
 	Inspector	Inšpektor
@@ -2299,6 +2306,7 @@ key	Space	Preslednica
 	Couldn't unlock {name}: {e}	Dokumenta {name} ni bilo mogoče odkleniti: {e}
 	This document has no restrictions to lift	Ta dokument nima omejitev, ki bi jih bilo treba odpraviti
 	The document's security settings don't allow copying text and images	Varnostne nastavitve dokumenta ne dovolijo kopiranja besedila in slik
+	The document's security settings don't allow printing	Varnostne nastavitve dokumenta ne dovolijo tiskanja
 	Add the files to combine	Dodajte datoteke za združevanje
 	Leave out files that can't be read?	Izpustim datoteke, ki jih ni mogoče prebrati?
 	These files can't be read, so they won't be in the combined PDF:	Teh datotek ni mogoče prebrati, zato ne bodo v združenem PDF-ju:
@@ -2317,6 +2325,7 @@ key	Space	Preslednica
 	Printer paper and scaling may differ. Check driver settings.	Papir in merilo tiskalnika se lahko razlikujeta. Preverite nastavitve gonilnika.
 	Drawing scale changes. Use Actual size for full-scale plans.	Merilo risbe se spremeni. Za načrte v polnem merilu uporabite Dejansko velikost.
 	Reload documents when their files change on disk	Znova naloži dokumente, ko se njihove datoteke na disku spremenijo
+	Always use my default zoom and page layout	Vedno uporabi moje privzeto povečanje in postavitev strani
 	This file changed on disk. Reload shows the new version and drops your unsaved changes; Save replaces it with this version.	Ta datoteka se je na disku spremenila. Ponovno naloži pokaže novo različico in zavrže neshranjene spremembe; Shrani jo zamenja s to različico.
 	Reload	Znova naloži
 	Couldn't reload {name}: {e}	Datoteke {name} ni bilo mogoče znova naložiti: {e}
@@ -2506,6 +2515,11 @@ animation effects	Off	Izklopljeni
 	Paragraph spacing	Razmik med odstavki
 	Less	Manj
 	Other options	Druge možnosti
+	Thumbnail size	Velikost sličic
+	Smaller thumbnails	Manjše sličice
+	Larger thumbnails	Večje sličice
+# Lines, connected lines and polygons reshaped by their ends and corners (M5).
+	Reshape comment	Spremeni obliko komentarja
 
 # Prepare a form ▸ Text field table
 	Add text field table	Dodaj tabelo besedilnih polj
