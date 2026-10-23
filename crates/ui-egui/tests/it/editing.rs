@@ -6090,6 +6090,74 @@ fn paste_key_release_delivers_single_image() {
     assert_eq!(count, initial_count + 1, "exactly one image must be pasted on V release, got {count}");
 }
 
+/// Win+V release without COMMAND must NOT paste an image.
+#[test]
+fn win_v_does_not_paste_on_open() {
+    let pdf = include_bytes!("../data/form.pdf").to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("form.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let id = h.state().views[0].id;
+    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
+
+    h.state_mut().clipboard_override = Some(pdfcraft_ui_egui::Clip::Image { width: 40, height: 20, rgba: [100u8, 200, 100, 255].repeat(40 * 20) });
+
+    // Simulate pressing Win+V (opening clipboard history flyout):
+    // The OS intercepts V press, so PdfCraft only sees V release without COMMAND (Modifiers::NONE).
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+
+    let count = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(count, initial_count, "Win+V release without command must NOT paste an image");
+
+    // Then user selects the image in the Win+V flyout: Windows injects synthetic Ctrl+V (release with COMMAND)
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(3);
+
+    let final_count = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(final_count, initial_count + 1, "Win+V paste must deliver exactly one image, not two");
+}
+
+/// Normal Ctrl+V press followed by release delivers exactly one image, not two.
+#[test]
+fn paste_press_and_release_delivers_single_image() {
+    let pdf = include_bytes!("../data/form.pdf").to_vec();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.system_clipboard = false;
+        app.open_bytes("form.pdf", None, pdf.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let id = h.state().views[0].id;
+    let initial_count = h.state().session.get(id).unwrap().page_images(0).len();
+
+    h.state_mut().clipboard_override = Some(pdfcraft_ui_egui::Clip::Image { width: 40, height: 20, rgba: [100u8, 200, 100, 255].repeat(40 * 20) });
+
+    // Press V with COMMAND
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(1);
+
+    // Release V with COMMAND
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::COMMAND });
+    h.run_steps(2);
+
+    let count = h.state().session.get(id).unwrap().page_images(0).len();
+    assert_eq!(count, initial_count + 1, "Ctrl+V press and release must deliver exactly one image, got {count}");
+}
+
 /// Issue P1: Paste via context menu at a point away from the centre centers the image at that point.
 #[test]
 fn paste_at_context_menu_point_centers_on_cursor() {

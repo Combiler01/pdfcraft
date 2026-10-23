@@ -831,8 +831,8 @@ impl crate::PdfCraftApp {
         let mut released = false;
         ctx.input(|inp| {
             for e in &inp.events {
-                if let egui::Event::Key { key: egui::Key::V, pressed, .. } = e {
-                    released |= !*pressed && !self.v_pressed;
+                if let egui::Event::Key { key: egui::Key::V, pressed, modifiers, .. } = e {
+                    released |= !*pressed && !self.v_pressed && modifiers.command;
                     self.v_pressed = *pressed;
                 }
             }
