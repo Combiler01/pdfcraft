@@ -718,7 +718,7 @@ impl crate::PdfCraftApp {
     }
 
     /// Copy Image: image `index` on `page`, at its own resolution, to the clipboard.
-    pub(crate) fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
+    pub fn copy_page_image(&mut self, page: usize, index: usize) -> bool {
         let Some((_, id)) = self.active_ids() else { return false };
         if !self.may_copy(id) {
             return false;
@@ -735,7 +735,7 @@ impl crate::PdfCraftApp {
                 return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
             }
             self.last_copied_image = Some((w, h, rgba));
-            self.last_copied_image_rect = self.page_image_box(page, index);
+            self.last_copied_image_rect = None;
             Ok((w, h))
         });
         match copied {
@@ -952,30 +952,11 @@ impl crate::PdfCraftApp {
             return false;
         };
 
-        let target_rect = match rect {
-            Some(r) => Some(r),
-            None => {
-                if let Some(src_rect) = self.last_copied_image_rect {
-                    let w = src_rect[2] - src_rect[0];
-                    let h = src_rect[3] - src_rect[1];
-                    let offset_x = 20.0;
-                    let offset_y = -20.0;
-                    let new_r = [src_rect[0] + offset_x, src_rect[1] + offset_y, src_rect[0] + offset_x + w, src_rect[1] + offset_y + h];
-                    self.last_copied_image_rect = Some(new_r);
-                    Some(new_r)
-                } else {
-                    None
-                }
-            }
-        };
+        let target_rect = rect;
 
         let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
-            let placed_rect =
-                target_rect.or_else(|| self.session.get(id).and_then(|d| d.page_images(page).into_iter().nth(before).map(|im| im.rect)));
-            if let Some(r) = placed_rect {
-                self.last_copied_image_rect = Some(r);
-            }
+            self.last_copied_image_rect = None;
             let added_count = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
             let added_idx = added_count.saturating_sub(1);
             if let Some(v) = self.views.get_mut(i) {
@@ -1003,44 +984,31 @@ impl crate::PdfCraftApp {
 
     /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
     pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
-        let (w, h) = if let Some(crate::create_ui::Clip::Image { width, height, rgba }) = self.clipboard_override.as_ref() {
-            let is_same = self
-                .last_copied_image
-                .as_ref()
-                .is_some_and(|(w, h, bytes)| *w as usize == *width && *h as usize == *height && bytes.as_slice() == rgba.as_slice());
-            if is_same && let Some(src_r) = self.last_copied_image_rect {
-                (src_r[2] - src_r[0], src_r[3] - src_r[1])
-            } else {
-                (*width as f64, *height as f64)
-            }
+        let (raw_w, raw_h) = if let Some(crate::create_ui::Clip::Image { width, height, .. }) = self.clipboard_override.as_ref() {
+            (*width as f64, *height as f64)
         } else {
             #[cfg(not(target_arch = "wasm32"))]
-            let sys_img = if self.system_clipboard {
-                crate::os_clipboard::with(|cb| cb.get_image()).ok().map(|img| (img.width, img.height, img.bytes.into_owned()))
-            } else {
-                None
-            };
+            let sys_img =
+                if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_image()).ok().map(|img| (img.width, img.height)) } else { None };
             #[cfg(target_arch = "wasm32")]
-            let sys_img: Option<(usize, usize, Vec<u8>)> = None;
+            let sys_img: Option<(usize, usize)> = None;
 
-            if let Some((img_width, img_height, img_bytes)) = sys_img {
-                let is_same = self
-                    .last_copied_image
-                    .as_ref()
-                    .is_some_and(|(w, h, bytes)| *w as usize == img_width && *h as usize == img_height && bytes.as_slice() == img_bytes.as_slice());
-                if is_same && let Some(src_r) = self.last_copied_image_rect {
-                    (src_r[2] - src_r[0], src_r[3] - src_r[1])
-                } else {
-                    (img_width as f64, img_height as f64)
-                }
-            } else if let Some(src_r) = self.last_copied_image_rect {
-                (src_r[2] - src_r[0], src_r[3] - src_r[1])
+            if let Some((img_width, img_height)) = sys_img {
+                (img_width as f64, img_height as f64)
             } else if let Some((w, h, _)) = self.last_copied_image {
                 (w as f64, h as f64)
             } else {
                 (100.0, 100.0)
             }
         };
+
+        let (_, id) = match self.active_ids() {
+            Some(ids) => ids,
+            None => return false,
+        };
+        let (pw, ph) = self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+        let k = ((pw * 0.8) / raw_w.max(1.0)).min((ph * 0.8) / raw_h.max(1.0)).min(1.0);
+        let (w, h) = (raw_w * k, raw_h * k);
         let rect = Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5]);
         self.paste_image(page, rect)
     }

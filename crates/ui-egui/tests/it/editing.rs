@@ -7093,3 +7093,49 @@ fn mode_tabs_keep_the_hand_over_a_paragraph_scrolled_under_them() {
     click_at(&mut h, convert);
     assert_eq!(h.state().mode, pdfcraft_ui_egui::Mode::Convert, "the tab takes the click, not the paragraph's editor");
 }
+
+#[test]
+fn copy_pasted_image_discards_coordinates_and_moves_without_offset() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(60, 60, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+
+    let mut h = harness(1, |_| {});
+    h.run_steps(4);
+
+    // 1. Add image to page 0
+    h.state_mut().add_image("test_img.png".into(), png);
+    h.run_steps(3);
+
+    let id = h.state().views[0].id;
+    let images_before = h.state().session.get(id).unwrap().page_images(0);
+    assert_eq!(images_before.len(), 1);
+
+    // 2. Copy the image from page 0
+    assert!(h.state_mut().copy_page_image(0, 0));
+    // Verify coordinates data was discarded during copy!
+    assert!(h.state().last_copied_image_rect.is_none(), "coordinates data must be discarded during copy");
+    assert!(h.state().last_copied_image.is_some(), "image pixel data is kept");
+
+    // 3. Paste the image via Ctrl+V (paste_image with rect: None)
+    assert!(h.state_mut().paste_image(0, None));
+    h.run_steps(3);
+
+    // Verify after paste that coordinates data remains None
+    assert!(h.state().last_copied_image_rect.is_none());
+
+    let images_after_paste = h.state().session.get(id).unwrap().page_images(0);
+    assert_eq!(images_after_paste.len(), 2, "second image pasted");
+
+    // The pasted image should be centered on the page, not offset by (+20, -20) from the first image
+    let img1 = &images_after_paste[0];
+    let img2 = &images_after_paste[1];
+    assert_eq!(img1.rect, img2.rect, "pasted image placed using natural page centering");
+
+    // 4. Move the pasted image by an explicit Move change
+    let target = [50.0, 50.0, 110.0, 110.0];
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 1, change: pdfcraft_engine::ImageEdit::Move(target) });
+    h.run_steps(3);
+
+    let images_after_move = h.state().session.get(id).unwrap().page_images(0);
+    assert_eq!(images_after_move[1].rect, target, "moved image rect matches target exactly without offset");
+}
