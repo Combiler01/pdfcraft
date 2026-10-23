@@ -2535,3 +2535,10 @@ animation effects	Off	オフ
 	field names can't contain a period: {name}	フィールド名にピリオドは使えません: {name}
 	two cells would both be named {name}	2 つのセルが同じ名前 {name} になります
 	a field named {name} already exists	{name} という名前のフィールドは既にあります
+	Arrange image	画像を配置
+	Bring forward	前面へ移動
+	Bring to front	最前面へ移動
+	Crop	切り抜き
+	Remove crop	切り抜きを解除
+	Send backward	背面へ移動
+	Send to back	最背面へ移動

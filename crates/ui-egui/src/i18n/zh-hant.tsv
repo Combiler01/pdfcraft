@@ -2485,3 +2485,10 @@ animation effects	Off	關
 	field names can't contain a period: {name}	欄位名稱不能包含句點：{name}
 	two cells would both be named {name}	兩個儲存格的名稱都會是 {name}
 	a field named {name} already exists	已有名為 {name} 的欄位
+	Arrange image	排列影像
+	Bring forward	上移一層
+	Bring to front	移到最上層
+	Crop	裁切
+	Remove crop	移除裁切
+	Send backward	下移一層
+	Send to back	移到最下層

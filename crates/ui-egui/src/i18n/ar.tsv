@@ -2810,3 +2810,10 @@ certificate	Version	الإصدار
 	field names can't contain a period: {name}	لا يمكن أن تحتوي أسماء الحقول على نقطة: {name}
 	two cells would both be named {name}	ستحمل خليتان الاسم نفسه {name}
 	a field named {name} already exists	يوجد حقل باسم {name} بالفعل
+	Arrange image	ترتيب الصورة
+	Bring forward	إحضار للأمام
+	Bring to front	إحضار إلى المقدمة
+	Crop	قص
+	Remove crop	إزالة القص
+	Send backward	إرسال للخلف
+	Send to back	إرسال إلى المؤخرة

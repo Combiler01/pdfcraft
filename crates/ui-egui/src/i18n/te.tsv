@@ -2444,3 +2444,10 @@ animation effects	Off	ఆఫ్
 	field names can't contain a period: {name}	ఫీల్డ్ పేర్లలో చుక్క ఉండకూడదు: {name}
 	two cells would both be named {name}	రెండు గడులకూ {name} అనే పేరు వస్తుంది
 	a field named {name} already exists	{name} అనే ఫీల్డ్ ఇప్పటికే ఉంది
+	Arrange image	చిత్రాన్ని అమర్చు
+	Bring forward	ముందుకు తీసుకురా
+	Bring to front	అందరికంటే ముందుకు తీసుకురా
+	Crop	కత్తిరించు
+	Remove crop	కత్తిరింపును తీసివేయి
+	Send backward	వెనుకకు పంపు
+	Send to back	అందరికంటే వెనుకకు పంపు

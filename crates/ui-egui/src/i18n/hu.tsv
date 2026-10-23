@@ -2534,3 +2534,10 @@ animation effects	Off	Ki
 	field names can't contain a period: {name}	a mezőnevek nem tartalmazhatnak pontot: {name}
 	two cells would both be named {name}	két cella neve is {name} lenne
 	a field named {name} already exists	már van {name} nevű mező
+	Arrange image	Kép elrendezése
+	Bring forward	Előrébb hozás
+	Bring to front	Előrehozás
+	Crop	Körülvágás
+	Remove crop	Körülvágás eltávolítása
+	Send backward	Hátrébb küldés
+	Send to back	Hátraküldés

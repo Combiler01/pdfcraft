@@ -2533,3 +2533,10 @@ animation effects	Off	Өшірулі
 	field names can't contain a period: {name}	өріс атауларында нүкте болмауы керек: {name}
 	two cells would both be named {name}	екі ұяшықтың да атауы {name} болар еді
 	a field named {name} already exists	{name} атты өріс бар
+	Arrange image	Суретті реттеу
+	Bring forward	Алға жылжыту
+	Bring to front	Алдыңғы планға шығару
+	Crop	Қию
+	Remove crop	Қиюды алып тастау
+	Send backward	Артқа жылжыту
+	Send to back	Артқы планға жіберу
