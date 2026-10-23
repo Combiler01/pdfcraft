@@ -14,7 +14,7 @@
 use std::borrow::Cow;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
-use pdfcraft_cos::{Dict, Document, Object};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, Object};
 
 /// How the bytes of a string map to codes.
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +92,15 @@ fn legacy_indic_font(base_font: &str) -> bool {
 /// A source PDF's sfnt program for an in-memory editor. Never a bundled font or an export
 /// fallback. Type 1/Type 3 programs cannot be consumed by an sfnt text renderer.
 pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
+    embedded_sfnt_within(doc, font, &mut DecodeBudget::new(2 * MAX_SFNT, 0))
+}
+
+/// The largest embedded sfnt program read for the editor.
+const MAX_SFNT: usize = 16 << 20;
+
+/// [`embedded_sfnt`], decoding against `budget`, which an enumeration of a page's fonts shares:
+/// each program decoded is charged whether or not it turns out to be usable.
+pub fn embedded_sfnt_within(doc: &Document, font: &Dict, budget: &mut DecodeBudget) -> Option<Vec<u8>> {
     use skrifa::{MetadataProvider as _, raw::TableProvider as _};
     let descendant = dict(doc, font.get(b"DescendantFonts").and_then(|o| doc.resolve(o).as_array().and_then(|a| a.first()).cloned()).as_ref());
     let descriptor = dict(doc, descendant.as_ref().unwrap_or(font).get(b"FontDescriptor"))?;
@@ -99,7 +108,7 @@ pub fn embedded_sfnt(doc: &Document, font: &Dict) -> Option<Vec<u8>> {
         let Some(object) = descriptor.get(key) else { continue };
         let object = doc.resolve(object);
         let Object::Stream(stream) = object.as_ref() else { continue };
-        let Ok(mut bytes) = stream.decoded_within(16 << 20) else { continue };
+        let Ok(mut bytes) = budget.decode_within(stream, MAX_SFNT) else { continue };
         let Ok(face) = skrifa::FontRef::from_index(&bytes, 0) else { continue };
         if face.metrics(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default()).units_per_em == 0 {
             continue;
@@ -275,6 +284,9 @@ const MAX_CMAP_ENTRIES: usize = 1 << 20;
 /// Most codespace or CID ranges kept from a CMap; Adobe's largest published CMaps have a few
 /// thousand.
 const MAX_CMAP_RANGES: usize = 1 << 16;
+/// Largest decoded Encoding or ToUnicode CMap stream read; real CMaps stay well under it, and a larger
+/// one is not decoded at all.
+const MAX_CMAP_BYTES: usize = 16 << 20;
 
 /// Code → Unicode of a font. Explicit mappings and sequential ranges are kept as declared, so a range
 /// costs one record however many codes it covers; where two overlap, the one declared later wins.
@@ -679,7 +691,7 @@ impl Metrics {
             m.codes = Codes::Two;
             if let Some(e) = font.get(b"Encoding").map(|e| doc.resolve(e))
                 && let Object::Stream(s) = &*e
-                && let Ok(data) = s.decoded()
+                && let Ok(data) = s.decoded_within(MAX_CMAP_BYTES)
             {
                 let (spaces, cids) = parse_cmap(&data);
                 if !spaces.is_empty() {
@@ -1281,7 +1293,7 @@ fn unicode_map(doc: &Document, font: &Dict, composite: bool) -> Unicode {
     }
     match font.get(b"ToUnicode").map(|t| doc.resolve(t)).as_deref() {
         Some(Object::Stream(s)) => {
-            if let Ok(data) = s.decoded() {
+            if let Ok(data) = s.decoded_within(MAX_CMAP_BYTES) {
                 parse_to_unicode(&data, &mut out);
             }
         }
@@ -1637,6 +1649,38 @@ mod tests {
         assert!(m.subset);
         assert_eq!(m.encode("ab").as_deref(), Some(&b"ab"[..]));
         assert_eq!(m.encode("abc"), None);
+    }
+
+    #[test]
+    fn cmap_streams_decode_within_a_size_cap() {
+        // A valid CMap padded past the cap (a small Flate stream of whitespace) is not decoded whole.
+        let to_unicode = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 beginbfrange <0024> <0026> <0041> endbfrange";
+        let encoding = b"1 begincodespacerange <0000> <FFFF> endcodespacerange 1 begincidrange <0000> <FFFF> 0 endcidrange";
+        for padded in [false, true] {
+            let mut doc = Document::new_empty();
+            let mut stream = |cmap: &[u8]| {
+                let mut data = cmap.to_vec();
+                if padded {
+                    data.resize(MAX_CMAP_BYTES + 1, b' ');
+                }
+                Object::Ref(doc.add(Object::Stream(Stream::flate(Dict::new(), &data))))
+            };
+            let (tu, enc) = (stream(to_unicode), stream(encoding));
+            let mut desc = Dict::new();
+            desc.set(b"Subtype".to_vec(), Object::name("CIDFontType2"));
+            let f = font(
+                &mut doc,
+                vec![
+                    ("Subtype", Object::name("Type0")),
+                    ("Encoding", enc),
+                    ("DescendantFonts", Object::Array(vec![Object::Dict(desc)])),
+                    ("ToUnicode", tu),
+                ],
+            );
+            let m = Metrics::from_dict(&doc, &f);
+            assert_eq!(m.decode(&[0, 0x24]) == "A", !padded, "ToUnicode, padded: {padded}");
+            assert_eq!(matches!(m.codes, Codes::Ranges(_)), !padded, "Encoding, padded: {padded}");
+        }
     }
 
     #[test]
@@ -2256,5 +2300,21 @@ mod encoding_tests {
         let m = Metrics::from_dict(&doc, &d);
         assert_eq!(m.text_of(0x61).as_deref(), Some("a"));
         assert_eq!(m.decode(b"abc"), "abc");
+    }
+
+    #[test]
+    fn unusable_programs_still_spend_the_decode_budget() {
+        // 128 resources naming one 1 MiB program that isn't a font: each decode is charged,
+        // so an enumeration stops decoding once the shared budget is spent.
+        let mut doc = Document::new_empty();
+        let program = doc.add(pdfcraft_cos::Stream::flate(Dict::new(), &vec![0; 1 << 20]));
+        let descriptor: Dict = [(b"FontFile2".to_vec(), Object::Ref(program))].into_iter().collect();
+        let descriptor = doc.add(descriptor);
+        let font: Dict = [(b"FontDescriptor".to_vec(), Object::Ref(descriptor))].into_iter().collect();
+        let mut budget = DecodeBudget::new(64 << 20, 0);
+        for _ in 0..128 {
+            assert!(embedded_sfnt_within(&doc, &font, &mut budget).is_none());
+        }
+        assert_eq!(budget.remaining(), 0);
     }
 }

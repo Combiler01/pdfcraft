@@ -9,6 +9,7 @@ use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 use std::sync::Arc;
 
 use crate::EditError;
+use crate::text::content_streams;
 
 /// The identity of a soft mask (`/SMask`) in the PDF graphics state.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,23 +97,12 @@ struct ClipPath {
     even_odd: bool,
 }
 
-fn streams(doc: &Document, page: &Dict) -> Vec<(Object, Vec<u8>)> {
-    let list: Vec<Object> = match page.get(b"Contents") {
-        None => Vec::new(),
-        Some(c) => match &*doc.resolve(c) {
-            Object::Array(a) => a.clone(),
-            _ => vec![c.clone()],
-        },
-    };
-    list.into_iter()
-        .map(|o| {
-            let data = match &*doc.resolve(&o) {
-                Object::Stream(s) => s.decoded().unwrap_or_default(),
-                _ => Vec::new(),
-            };
-            (o, data)
-        })
-        .collect()
+/// Image draws one page's inventory lists at most: a form drawn many times from other forms
+/// would otherwise multiply a few hundred bytes into millions of records.
+pub(crate) const MAX_PAGE_IMAGES: usize = 100_000;
+
+fn too_many_images() -> EditError {
+    EditError::Invalid(format!("the page draws more than {MAX_PAGE_IMAGES} images"))
 }
 
 /// The page's streams joined into the one stream they are: an operator may span two of them.
@@ -292,7 +282,7 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
     // The streams are one stream in pieces, so the graphics state and operators carry over.
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let mut tracker = ExtendedGStateTracker::default();
-    let pieces = joined(&streams(doc, &p.dict));
+    let pieces = joined(&content_streams(doc, &p.dict)?);
     for (i, op) in pieces.parse().ops.iter().enumerate() {
         state.apply(op)?;
         tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
@@ -342,7 +332,9 @@ pub fn page_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, EditEr
             {
                 continue;
             }
-
+            if out.len() >= MAX_PAGE_IMAGES {
+                return Err(too_many_images());
+            }
             out.push(PageImage {
                 rect,
                 visible_rect: intersection(rect, state.placement.clip),
@@ -417,6 +409,9 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
                 if s.dict.name(b"Subtype") != Some(b"Image") {
                     continue;
                 }
+                if out.len() >= MAX_PAGE_IMAGES {
+                    return Err(too_many_images());
+                }
                 out.push(PageImage {
                     rect: ctm.bbox([0.0, 0.0, 1.0, 1.0]),
                     visible_rect: intersection(ctm.bbox([0.0, 0.0, 1.0, 1.0]), st.placement.clip),
@@ -441,8 +436,9 @@ pub fn reading_images(doc: &Document, page: usize) -> Result<Vec<PageImage>, Edi
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let mut out = Vec::new();
     let mut st = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
-    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::default() };
-    let pieces = joined(&streams(doc, &p.dict));
+    let mut decode = pdfcraft_cos::DecodeBudget::page();
+    let pieces = joined(&crate::text::content_streams_within(doc, &p.dict, &mut decode)?);
+    let mut forms = Forms { path: Vec::new(), budget: crate::text::FormBudget::new(decode) };
     walk(doc, &pieces.parse().ops, &res, &mut st, &|op| pieces.piece_of(op.span.start), &mut forms, &mut out)?;
     Ok(out)
 }
@@ -976,7 +972,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     let images = page_images(doc, page)?;
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let target = img.op;
@@ -1416,7 +1412,7 @@ pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Resul
     let images = page_images(doc, page)?;
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
     let ops = pieces.parse().ops;
     let target = img.op;
@@ -1450,7 +1446,7 @@ pub fn change_image(doc: &mut Document, page: usize, index: usize, change: &Imag
     let images = page_images(doc, page)?;
     let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     let pieces = joined(&all);
     let ops = pieces.parse().ops;
     if !ops.get(img.op).is_some_and(|op| op.is("Do")) {
@@ -1504,7 +1500,7 @@ pub(crate) fn selectable_images(
     excluded: &std::collections::BTreeSet<ObjRef>,
 ) -> Result<Vec<(usize, PageImage)>, EditError> {
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     Ok(page_images(doc, page)?
         .into_iter()
         .enumerate()
@@ -1756,7 +1752,7 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     }
     let images = page_images(doc, page)?;
     let p = page_of(doc, page)?;
-    let all = streams(doc, &p.dict);
+    let all = content_streams(doc, &p.dict)?;
     let mut plans = std::collections::BTreeMap::new();
     for index in indexes {
         let image = images.get(*index).ok_or_else(|| EditError::Invalid("a selected image no longer exists".into()))?;

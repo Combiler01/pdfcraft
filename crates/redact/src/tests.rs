@@ -48,10 +48,11 @@ fn content(doc: &Document, page: usize) -> String {
 /// Glyphs (and inline images) of page `page` under `rects` (the verifier's count).
 fn under(doc: &mut Document, page: usize, rects: &[[f64; 4]]) -> usize {
     let p = pdfcraft_model::pages(doc).swap_remove(page);
-    let (_, data) = page_streams(doc, &p.dict, page).unwrap();
+    let mut budget = pdfcraft_cos::DecodeBudget::page();
+    let (_, data) = page_streams_within(doc, &p.dict, page, &mut budget).unwrap();
     let res = p.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
     let mut rep = Report::default();
-    let mut scope = Scope::new(rects, Mode::Verify, &mut rep);
+    let mut scope = Scope::new(rects, Mode::Verify, &mut rep, budget);
     process(doc, &mut scope, &data, &res, pdfcraft_content::Matrix::IDENTITY).residue
 }
 
@@ -1689,8 +1690,8 @@ fn bluefin_survives(doc: &Document) -> bool {
 
 /// #3285 review (the maintainer's probes): an element written in place in the parent tree that
 /// owns the redacted text can't be changed, so applying is refused; the same element as an object
-/// of its own is cleaned, and nothing of the word is left in a full rewrite.
-/// Refusal does not promise rollback: direct callers discard the failed working copy.
+/// of its own is cleaned, and nothing of the word is left in a full rewrite. A refusal leaves the
+/// document as it was.
 #[test]
 fn an_element_written_in_place_owning_redacted_text_is_refused() {
     let objs = |element: &str| -> Vec<Vec<u8>> {
@@ -1710,17 +1711,13 @@ fn an_element_written_in_place_owning_redacted_text_is_refused() {
     let mut doc = pdf(objs("<< /Type /StructElem /S /P /P 6 0 R /Pg 3 0 R /K 0 /ActualText (Codename Bluefin) >>"));
     mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
     let before = write_full(&doc, &SaveOptions::default()).unwrap();
-    let mut working = doc.clone();
-    let error = apply(&mut working, None).unwrap_err();
+    let error = apply(&mut doc, None).unwrap_err();
     assert!(matches!(error, RedactError::Tags));
     assert_eq!(
         error.to_string(),
         "the document's tags can't be cleaned completely (an element written in place, or a structure tree too large or too deep to follow); the operation was refused"
     );
-    assert!(!content(&working, 0).contains("Bluefin"), "the failed working copy was partially changed");
-    assert!(bluefin_survives(&working), "the failed working copy still holds the word in its tags");
-    drop(working);
-    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "discarding the working copy preserves the original");
+    assert_eq!(write_full(&doc, &SaveOptions::default()).unwrap(), before, "the refused document is unchanged");
     let mut doc = pdf(objs("7 0 R"));
     mark(&mut doc, 0, &[[10.0, 140.0, 290.0, 170.0]], "");
     let r = apply(&mut doc, None).unwrap();
@@ -2461,7 +2458,12 @@ fn unused_descriptions_in_shared_or_inherited_resources_are_retired() {
     }
 }
 
+mod descriptions;
+mod inline_images;
+mod limits;
 mod property_retirement;
+mod surviving_references;
+mod text_state;
 
 /// `[(FIRSTARR)] [(LASTARR)] TJ` is malformed (a surplus array operand), but the operator still
 /// draws only the one immediately before it (LASTARR, 7 glyphs, 35 pt wide from x = 10) -- not
@@ -2471,6 +2473,23 @@ fn a_tj_surplus_arrays_undrawn_glyphs_are_not_seen_under_a_mark() {
     let mut doc = one_page(b"BT /F1 10 Tf 10 100 Td [(FIRSTARR)] [(LASTARR)] TJ ET", "", vec![]);
     assert_eq!(under(&mut doc, 0, &[[45.0, 95.0, 50.0, 110.0]]), 0, "nothing is drawn past LASTARR's 35pt width");
     assert_eq!(under(&mut doc, 0, &[[10.0, 95.0, 45.0, 110.0]]), 7, "LASTARR's 7 glyphs, the one the page draws");
+}
+
+#[test]
+fn form_entries_share_one_budget_per_page() {
+    // 20 draws of a form that draws the next 20 times, four levels down: 160,000 glyphs from a
+    // few hundred bytes.
+    let draws = "/X Do ".repeat(20);
+    let mut objs = vec![stream("/Type /XObject /Subtype /Form /Resources << /Font << /F1 5 0 R >> >>", b"BT /F1 10 Tf 10 100 Td (A) Tj ET")];
+    for inner in 7..10 {
+        objs.push(stream(&format!("/Type /XObject /Subtype /Form /Resources << /XObject << /X {inner} 0 R >> >>"), draws.as_bytes()));
+    }
+    let mut doc = one_page(draws.as_bytes(), "/XObject << /X 10 0 R >>", objs);
+    let residue = under(&mut doc, 0, &[[0.0, 90.0, 50.0, 120.0]]);
+    assert!(residue > 0 && residue <= pdfcraft_cos::MAX_PAGE_FORMS, "{residue} glyphs counted");
+    // Applying refuses the page rather than leave forms past the budget unread.
+    mark(&mut doc, 0, &[[0.0, 90.0, 50.0, 120.0]], "");
+    assert!(apply(&mut doc, None).is_err());
 }
 
 /// A name tree whose levels each list the next level twice: a walk that follows every path
@@ -2690,4 +2709,56 @@ fn repeated_name_tree_kids_count_towards_the_node_budget() {
     ]);
     let counts: std::collections::HashMap<Hidden, usize> = scan(&doc).into_iter().collect();
     assert_eq!(counts[&Hidden::Attachments], 1, "the walk went past its node budget to the last kid");
+}
+
+/// Content streams and the forms they draw spend one page allowance: 130 MiB of content and a
+/// 130 MiB form are each under it, together past it.
+#[test]
+fn content_and_forms_share_one_budget_per_page() {
+    use pdfcraft_cos::{Dict, Stream};
+    let mut doc = one_page(b"", "", vec![]);
+    let mut content = b"BT /F1 10 Tf 10 100 Td (SECRET) Tj ET /X Do\n%".to_vec();
+    content.resize(130 << 20, b'x');
+    let content = doc.add(Object::Stream(Stream::flate(Dict::new(), &content)));
+    let mut form = Dict::new();
+    form.set(b"Type".to_vec(), Object::name("XObject"));
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    let mut body = b"%".to_vec();
+    body.resize(130 << 20, b'x');
+    let form = doc.add(Object::Stream(Stream::flate(form, &body)));
+    doc.update_dict(ObjRef::new(3, 0), |d| {
+        let mut xobjects = Dict::new();
+        xobjects.set(b"X".to_vec(), Object::Ref(form));
+        let mut fonts = Dict::new();
+        fonts.set(b"F1".to_vec(), Object::Ref(ObjRef::new(5, 0)));
+        let mut res = Dict::new();
+        res.set(b"Font".to_vec(), Object::Dict(fonts));
+        res.set(b"XObject".to_vec(), Object::Dict(xobjects));
+        d.set(b"Resources".to_vec(), Object::Dict(res));
+        d.set(b"Contents".to_vec(), Object::Ref(content));
+    })
+    .unwrap();
+    mark(&mut doc, 0, &[[0.0, 90.0, 50.0, 120.0]], "");
+    assert!(apply(&mut doc, None).is_err(), "the form past the page's allowance was read");
+}
+
+/// A page that fails to read after another page was already redacted leaves the whole document as
+/// it was, the shared resources the first page's rewrite localised included.
+#[test]
+fn a_failure_on_a_later_page_leaves_the_document_unchanged() {
+    let mut doc = two_pages_one_resource_dictionary(true, false);
+    let all = pdfcraft_model::pages(&doc);
+    let (first, second, parent) = (all[0].obj, all[1].obj, doc.get(all[0].obj).as_dict().unwrap().reference(b"Parent").unwrap());
+    let mut dct = Dict::new();
+    dct.set(b"Filter".to_vec(), Object::name("DCTDecode"));
+    let bad = doc.add(Object::Stream(Stream::from_raw(dct, b"garbage".to_vec())));
+    doc.update_dict(second, |d| d.set(b"Contents".to_vec(), Object::Ref(bad))).unwrap();
+    mark(&mut doc, 0, &[[0.0, 0.0, 300.0, 300.0]], "");
+    mark(&mut doc, 1, &[[0.0, 0.0, 50.0, 50.0]], "");
+    let before: Vec<Object> = [first, second, parent].iter().map(|r| (*doc.get(*r)).clone()).collect();
+    let text = content(&doc, 0);
+    assert_eq!(apply(&mut doc, None), Err(RedactError::Unreadable(2)));
+    let after: Vec<Object> = [first, second, parent].iter().map(|r| (*doc.get(*r)).clone()).collect();
+    assert_eq!(after, before);
+    assert_eq!(content(&doc, 0), text);
 }

@@ -661,3 +661,28 @@ fn an_imported_digital_id_can_be_removed() {
     assert_eq!(h.state().sign_draft.as_ref().map(|d| d.step), Some(SignStep::Configure));
     h.get_by_label("Configure a Digital ID for Signing");
 }
+
+/// Sign-and-save must use the same destination metadata policy as Save As.
+#[cfg(target_os = "macos")]
+#[test]
+fn signing_preserves_destination_opening_attributes() {
+    let dir = dir();
+    let dest = dir.join("contract_signed.pdf");
+    std::fs::write(&dest, FIXTURE).unwrap();
+    xattr::set(&dest, "com.apple.LaunchServices.OpenWith", b"existing binding").unwrap();
+    xattr::set(&dest, "com.apple.quarantine", b"0082;1234;Preview;").unwrap();
+    let mut h = harness(dir.clone());
+    let p12 = concat!(env!("CARGO_MANIFEST_DIR"), "/../sign/tests/data/ec-p256.p12");
+    let cert = pdfcraft_engine::sign::pkcs12::open(&std::fs::read(p12).unwrap(), "test").unwrap().certificate;
+    h.state_mut().start_signing(0, None, None, None);
+    let entry = h.state_mut().add_digital_id(p12, &cert);
+    let d = h.state_mut().sign_draft.as_mut().unwrap();
+    (d.selected, d.step, d.password) = (Some(entry), SignStep::SignAs, "test".into());
+    h.run_steps(2);
+    h.get_by_label("Sign").click();
+    h.run_steps(6);
+    assert!(h.state().session.get(h.state().views[0].id).unwrap().signatures.iter().any(|s| s.signed));
+    assert_eq!(xattr::get(&dest, "com.apple.LaunchServices.OpenWith").unwrap(), Some(b"existing binding".to_vec()));
+    assert_eq!(xattr::get(&dest, "com.apple.quarantine").unwrap(), Some(b"0082;1234;Preview;".to_vec()));
+    let _ = std::fs::remove_dir_all(dir);
+}

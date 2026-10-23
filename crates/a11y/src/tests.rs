@@ -1252,3 +1252,75 @@ fn horizontally_scaled_wrapped_heading_keeps_a_space_between_lines() {
     let titles: Vec<String> = headings(&doc).into_iter().map(|h| h.title).collect();
     assert_eq!(titles, ["I Overview"]);
 }
+
+#[test]
+fn repeated_content_references_share_one_decode_budget() {
+    use pdfcraft_cos::{Dict, MAX_PAGE_DECODED, Object, Stream};
+    let mut doc = Document::new_empty();
+    let stream = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let page: Dict = [(b"Contents".to_vec(), Object::Array(vec![Object::Ref(stream); 300]))].into_iter().collect();
+    let data = crate::alt::page_content(&doc, &page);
+    assert!(data.len() <= MAX_PAGE_DECODED + 300, "{} bytes", data.len());
+}
+
+/// A figure whose marked content goes on in a stream past the page's decode budget is refused,
+/// not removed with that content still pointing at it.
+#[test]
+fn marking_decorative_refuses_content_past_the_decode_budget() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let last = doc.add(Stream::from_raw(Dict::new(), b"/Figure << /MCID 0 >> BDC 0 0 5 5 re f EMC".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(last));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    assert!(mark_decorative(&mut doc, ObjRef::new(7, 0)).is_err());
+    assert_eq!(figures(&doc).len(), 2, "the figure stays");
+}
+
+/// Text past the page's decode budget is unread, so a page that shows images and no text so far
+/// can't be called image-only, nor its content all tagged.
+#[test]
+fn content_past_the_decode_budget_needs_a_manual_check() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = pdf(
+        &[
+            "<< /Type /Catalog /Pages 2 0 R >>".into(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] /Contents 4 0 R /Resources << /XObject << /Im 5 0 R >> /Font << /F1 6 0 R >> >> >>"
+                .into(),
+            stream("/Artifact BMC q 200 0 0 200 0 0 cm /Im Do Q EMC"),
+            "<< /Type /XObject /Subtype /Image /Width 1 /Height 1 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 1 >>\nstream\n\u{0}\nendstream"
+                .into(),
+            FONT.into(),
+        ],
+        "",
+    );
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let text = doc.add(Stream::from_raw(Dict::new(), b"BT /F1 12 Tf 10 10 Td (Hello) Tj ET".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(text));
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), Object::Array(contents))).unwrap();
+    let report = check(&doc, &Options::default());
+    assert_eq!(status(&report, Rule::ImageOnly), Status::Manual);
+    assert_eq!(status(&report, Rule::TaggedContent), Status::Manual);
+}
+
+/// Marking a tag as an artifact replaces the page's content with what it decoded, so content past
+/// the page's decode budget is refused rather than dropped from the page.
+#[test]
+fn marking_a_tag_artifact_refuses_content_past_the_decode_budget() {
+    use pdfcraft_cos::{Dict, ObjRef, Object, Stream};
+    let mut doc = figures_doc();
+    let filler = doc.add(Stream::flate(Dict::new(), &vec![b' '; 1 << 20]));
+    let last = doc.add(Stream::from_raw(Dict::new(), b"0 0 5 5 re f".to_vec()));
+    let mut contents = vec![Object::Ref(ObjRef::new(4, 0))];
+    contents.extend(std::iter::repeat_n(Object::Ref(filler), 256));
+    contents.push(Object::Ref(last));
+    let contents = Object::Array(contents);
+    doc.update_dict(ObjRef::new(3, 0), |p| p.set(b"Contents".to_vec(), contents.clone())).unwrap();
+    assert_eq!(mark_tag_artifact(&mut doc, ObjRef::new(7, 0)), Err(ArtifactError::TooLarge));
+    assert_eq!(doc.get(ObjRef::new(3, 0)).as_dict().unwrap().get(b"Contents"), Some(&contents), "the page keeps its content");
+}

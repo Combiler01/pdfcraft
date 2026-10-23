@@ -991,16 +991,17 @@ fn recovered_render_password(cos: &pdfcraft_cos::Document) -> Option<String> {
 ///
 /// Redaction decides what lies under a mark from the positions its own interpreter computes, and
 /// its verify pass reuses them. Where they differ from the renderer's (a standard font without
-/// /Widths, whose advances the interpreter approximates; a CMap, or a font set outside `Tf`,
+/// /Widths, whose advances the interpreter approximates; a CMap
 /// that it reads differently), a mark drawn over the text as displayed lies over glyphs the
 /// interpreter believes are elsewhere: they stay in the file and nothing notices. The renderer is
 /// what the user saw when placing the marks, so it is asked. `after` is written as a save would
-/// write it, without the marks' own overlay (the box and its label are drawn on purpose), its
+/// write it, without the marks' own `overlays` (the box and its label are drawn on purpose), its
 /// text is extracted, and a glyph still mostly inside a mark fails the edit: the caller keeps
 /// the document as it was.
 fn shown_under_redactions(
     after: &pdfcraft_cos::Document,
     marks: &[pdfcraft_redact::Mark],
+    overlays: &[pdfcraft_cos::ObjRef],
     pages: &[pdfcraft_render::PageInfo],
     password: Option<&str>,
 ) -> Result<(), EditError> {
@@ -1017,8 +1018,7 @@ fn shown_under_redactions(
     for &pi in &marked {
         let Some(page) = model.get(pi) else { continue };
         let Some(Object::Array(list)) = page.dict.get(b"Contents").map(|c| (*shown.resolve(c)).clone()) else { continue };
-        let kept: Vec<Object> =
-            list.into_iter().filter(|o| shown.resolve(o).as_dict().and_then(|d| d.name(b"PCMark")) != Some(b"Redaction")).collect();
+        let kept: Vec<Object> = list.into_iter().filter(|o| !o.as_ref().is_some_and(|r| overlays.contains(&r))).collect();
         shown.update_dict(page.obj, |d| d.set(b"Contents".to_vec(), Object::Array(kept))).map_err(|e| EditError::Write(e.to_string()))?;
     }
     let bytes = write_incremental(&shown, &SaveOptions::default()).map_err(|e| EditError::Write(e.to_string()))?;
@@ -2375,6 +2375,9 @@ struct EditCtx {
     /// Fields the edit renamed to keep imported names separate (old → new), for the repair
     /// log and the undo label.
     renamed_fields: Vec<(String, String)>,
+    /// The overlay streams the edit's applied redactions added, which alone the renderer's check
+    /// leaves out.
+    redaction_overlays: Vec<pdfcraft_cos::ObjRef>,
 }
 
 impl EditCtx {
@@ -2401,6 +2404,7 @@ impl EditCtx {
             seed,
             count: 0,
             renamed_fields: Vec::new(),
+            redaction_overlays: Vec::new(),
         }
     }
 
@@ -2875,7 +2879,7 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_edit::update_content(doc, *page, *index, &AddedContent::Image(pdfcraft_edit::AddedImage { image, ..old }))?;
         }
         Edit::ApplyRedactions { pages } => {
-            pdfcraft_redact::apply(doc, pages.as_deref())?;
+            cx.redaction_overlays = pdfcraft_redact::apply(doc, pages.as_deref())?.overlays;
         }
         Edit::ClearRedactions => {
             pdfcraft_redact::clear_marks(doc, None)?;
@@ -3937,6 +3941,7 @@ impl Session {
             cx.js = Some(js::JsRunner::new(&next, &name));
         }
         cx.renamed_fields.clear();
+        cx.redaction_overlays.clear();
         // `next` is a copy: if the edit fails or crashes, the document is unchanged.
         guard(|| run_edit(&mut next, &edit, &mut cx))
             .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
@@ -3945,7 +3950,7 @@ impl Session {
         if let Edit::ApplyRedactions { pages } = &edit {
             let marks: Vec<pdfcraft_redact::Mark> =
                 pdfcraft_redact::marks(&editor.cos).into_iter().filter(|m| pages.as_ref().is_none_or(|p| p.contains(&m.page))).collect();
-            guard(|| shown_under_redactions(&next, &marks, &doc.info.pages, doc.password.as_deref()))
+            guard(|| shown_under_redactions(&next, &marks, &cx.redaction_overlays, &doc.info.pages, doc.password.as_deref()))
                 .unwrap_or_else(|m| Err(EditError::Invalid(format!("{} failed unexpectedly ({m}); the document was not changed", edit.label()))))?;
         }
         // Renamed fields are said, not slipped in: a repair-log note (with the caveat that

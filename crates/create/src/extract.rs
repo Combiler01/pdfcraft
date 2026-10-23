@@ -359,6 +359,9 @@ impl Space {
     }
 }
 
+/// A lookup table holds at most 256 entries of 4 bytes; decoding stops well past that.
+const MAX_LOOKUP: usize = 64 << 10;
+
 fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
     let Some(cs) = cs else { return Err("the image has no colour space".into()) };
     let cs = doc.resolve(cs);
@@ -400,7 +403,9 @@ fn space(doc: &Document, cs: Option<&Object>) -> Result<Space, String> {
                 };
                 let table = match a.get(3).map(|t| doc.resolve(t)).as_deref() {
                     Some(Object::String(s)) => s.bytes.clone(),
-                    Some(Object::Stream(t)) => t.decoded().map_err(|e| e.to_string())?,
+                    Some(Object::Stream(t)) => {
+                        t.decoded_within(MAX_LOOKUP).map_err(|_| "an indexed colour space with an oversized or damaged lookup table".to_string())?
+                    }
                     _ => return Err("an indexed colour space without a lookup table".into()),
                 };
                 Ok(Space::Indexed(Box::new(base), hival, table))

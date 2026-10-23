@@ -37,7 +37,8 @@ pub struct Block {
 pub struct Image {
     /// "png" or "jpg".
     pub ext: &'static str,
-    pub bytes: Vec<u8>,
+    /// Shared: a picture drawn in many places is held once.
+    pub bytes: std::sync::Arc<[u8]>,
     pub rect: [f64; 4],
     /// Width and height before rotation, in points.
     pub size: [f64; 2],
@@ -997,7 +998,7 @@ mod tests {
             ],
             images: vec![Image {
                 ext: "png",
-                bytes: b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x03".to_vec(),
+                bytes: b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\0\0\0\x02\0\0\0\x03".as_slice().into(),
                 rect: [72.0, 450.0, 272.0, 600.0],
                 size: [200.0, 150.0],
                 rotation: 0.0,
@@ -1439,7 +1440,7 @@ mod tests {
     /// file in the package, with a content type; JPEG pictures too, inline or placed.
     #[test]
     fn word_pictures_resolve_to_media_in_the_package() {
-        let jpeg = Image { ext: "jpg", bytes: vec![0xFF, 0xD8, 0xFF, 0xD9], ..page().images[0].clone() };
+        let jpeg = Image { ext: "jpg", bytes: [0xFF, 0xD8, 0xFF, 0xD9].as_slice().into(), ..page().images[0].clone() };
         for placed in [false, true] {
             let mut p = page();
             p.images = vec![jpeg.clone()];
@@ -1466,7 +1467,7 @@ mod tests {
     fn word_export_bounds_the_number_of_pictures_and_skips_empty_ones() {
         let mut p = page();
         let one = p.images[0].clone();
-        p.images = vec![Image { bytes: Vec::new(), ..one.clone() }];
+        p.images = vec![Image { bytes: [].as_slice().into(), ..one.clone() }];
         p.images.extend(std::iter::repeat_n(one, MAX_MEDIA + 10));
         let zip = docx(&[p], "T");
         let rels = part(&zip, "word/_rels/document.xml.rels");

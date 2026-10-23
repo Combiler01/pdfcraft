@@ -1547,6 +1547,37 @@ fn a_revoked_certificate_stays_invalid_when_it_was_also_expired_at_signing() {
 }
 
 #[test]
+fn a_revocation_behind_many_dss_entries_is_not_reported_valid() {
+    let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
+    let signed = pdfcraft_sign::sign(&open(&fixture()), &id, &opts()).unwrap();
+    let t = |year| Time { year, month: 1, day: 1, hour: 0, minute: 0, second: 0 };
+    let crl = self_crl(&id, t(2026), t(2027), Time { year: 2026, month: 6, day: 1, hour: 8, minute: 0, second: 0 });
+    let anchor = id.chain.first().cloned().unwrap_or_else(|| id.certificate.clone());
+    let trust = TrustStore { certs: vec![anchor] };
+    // `/CRLs`: the revoking CRL after `benign` other entries; `repeated` lists one stream for all of them.
+    let status = |benign: usize, repeated: bool| {
+        let ltv = edit_after(&signed, |doc| {
+            let one = doc.add(stream_of(b"benign"));
+            let mut crls: Vec<Object> = (0..benign)
+                .map(|k| if repeated { Object::Ref(one) } else { Object::Ref(doc.add(stream_of(format!("benign {k}").as_bytes()))) })
+                .collect();
+            crls.push(Object::Ref(doc.add(stream_of(&crl))));
+            set_dss(doc, Object::Dict(dict_of(vec![("Type", Object::name("DSS")), ("CRLs", Object::Array(crls))])));
+        });
+        let s = signatures(&open(&ltv), &ltv, &trust).into_iter().find(|s| s.signed && !s.doc_timestamp).unwrap();
+        (s.status, s.details)
+    };
+    let (found, details) = status(1, false);
+    assert_eq!(found, Status::Invalid, "{details:?}");
+    // Repeats of one stream don't use up the entry cap, so the revocation is still found.
+    let (found, details) = status(2000, true);
+    assert_eq!(found, Status::Invalid, "{details:?}");
+    // Past the cap of distinct entries the check is incomplete, so the signature is not valid.
+    let (found, details) = status(1100, false);
+    assert_eq!(found, Status::Unknown, "{details:?}");
+}
+
+#[test]
 fn an_untrusted_timestamp_does_not_set_the_validation_time() {
     let id = pkcs12::open(&data("ec-p256.p12"), "test").unwrap();
     // The TSA claims 2027 (inside the signer's validity) but is not trusted; the signer's own
@@ -1578,6 +1609,28 @@ fn a_timestamp_token_may_sign_with_a_different_digest_than_its_imprint() {
         pdfcraft_sign::timestamp::respond(&tsa.key, &tsa.certificate, &tsa.chain, pdfcraft_sign::DigestAlg::Sha256, &q, "1.2.3.4", time, 9).unwrap();
     let token = pdfcraft_sign::timestamp::parse_response(&resp, &q).unwrap();
     assert_eq!((token.digest, token.imprint, token.gen_time), (pdfcraft_sign::DigestAlg::Sha1, imprint, time));
+}
+
+/// A token answers the request that asked for it: a requested nonce or policy must come back.
+#[test]
+fn a_timestamp_response_must_carry_the_requested_nonce_and_policy() {
+    use pdfcraft_sign::timestamp::{TimestampQuery, parse_response, respond};
+    let tsa = pkcs12::open(&data("rsa-aes.p12"), "test").unwrap();
+    let alg = pdfcraft_sign::DigestAlg::Sha256;
+    let time = Time { year: 2026, month: 10, day: 6, hour: 12, minute: 0, second: 0 };
+    let query = |nonce: Option<u64>, policy: Option<&str>| {
+        let mut q = TimestampQuery::new(alg, alg.digest(&[b"document"])).unwrap();
+        (q.nonce, q.policy) = (nonce, policy.map(str::to_string));
+        q
+    };
+    let answer = |q: &TimestampQuery| respond(&tsa.key, &tsa.certificate, &tsa.chain, alg, q, "1.2.3.4", time, 9).unwrap();
+    let with_nonce = answer(&query(Some(42), None));
+    assert!(parse_response(&with_nonce, &query(Some(42), Some("1.2.3.4"))).is_ok());
+    assert!(parse_response(&with_nonce, &query(None, None)).is_ok());
+    assert!(parse_response(&with_nonce, &query(Some(43), None)).is_err(), "another request's nonce");
+    assert!(parse_response(&with_nonce, &query(Some(42), Some("1.2.3.5"))).is_err(), "another policy");
+    let without_nonce = answer(&query(None, None));
+    assert!(parse_response(&without_nonce, &query(Some(42), None)).is_err(), "no nonce in the token");
 }
 
 #[cfg(windows)]

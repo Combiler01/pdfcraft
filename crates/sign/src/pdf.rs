@@ -892,7 +892,8 @@ fn finish_validation(
     // Revocation evidence embedded in the document security store, if any. A verified
     // revocation is final: later blocks must not soften the verdict.
     let signer = info.chain.first().cloned();
-    let revoked = check_dss_revocation(doc, signer.as_ref(), &at, info);
+    let revocation = check_dss_revocation(doc, signer.as_ref(), &at, info);
+    let revoked = revocation == DssRevocation::Revoked;
     // Changes after signing.
     info.modification = if covered == bytes.len() || bytes[covered..].iter().all(|b| b.is_ascii_whitespace() || *b == 0) {
         Modification::None
@@ -928,6 +929,12 @@ fn finish_validation(
             info.details.push(said);
             problems = true;
         }
+    }
+    if revocation == DssRevocation::Incomplete {
+        if !problems {
+            info.status = Status::Unknown;
+        }
+        problems = true;
     }
     if let Some(t) = info.timestamp_time.or(info.signing_time)
         && !cert.valid_at(t)
@@ -975,27 +982,86 @@ fn finish_validation(
     }
 }
 
+/// Distinct evidence streams read from one `/DSS` array.
+const MAX_DSS_ENTRIES: usize = 1024;
+/// Decoded bytes read from one `/DSS` array; real CRLs and OCSP responses are kilobytes each.
+const MAX_DSS_BYTES: usize = 64 << 20;
+
+/// The decoded streams of the `/DSS` evidence array `key` (`/CRLs`, `/OCSPs`), one at a time so
+/// each is checked before the next decodes: each stream once and within the evidence size cap,
+/// at most [`MAX_DSS_ENTRIES`] distinct ones and [`MAX_DSS_BYTES`] together. A stream past a cap
+/// sets [`DssEvidence::cut`] and ends the iteration.
+struct DssEvidence<'a> {
+    doc: &'a Document,
+    items: std::vec::IntoIter<Object>,
+    seen: HashSet<ObjRef>,
+    taken: usize,
+    left: usize,
+    /// A cap stopped the array being read in full.
+    cut: bool,
+}
+
+impl<'a> DssEvidence<'a> {
+    fn new(doc: &'a Document, dss: &Dict, key: &[u8]) -> Self {
+        let items = dss.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default();
+        DssEvidence { doc, items: items.into_iter(), seen: HashSet::new(), taken: 0, left: MAX_DSS_BYTES, cut: false }
+    }
+}
+
+impl Iterator for DssEvidence<'_> {
+    type Item = Vec<u8>;
+
+    fn next(&mut self) -> Option<Vec<u8>> {
+        if self.cut {
+            return None;
+        }
+        // Repeats are skipped before the caps count anything, so repeating one stream cannot use
+        // them up; the scan of the array itself is bounded by the parser's cap on array length.
+        for item in self.items.by_ref() {
+            if item.as_ref().is_some_and(|r| !self.seen.insert(r)) {
+                continue;
+            }
+            let o = self.doc.resolve(&item);
+            let Object::Stream(s) = o.as_ref() else { continue };
+            if self.taken >= MAX_DSS_ENTRIES {
+                self.cut = true;
+                return None;
+            }
+            self.taken += 1;
+            // A stream past the evidence cap would not parse as evidence either.
+            let Ok(bytes) = s.decoded_within(crate::revocation::MAX_EVIDENCE) else { continue };
+            let Some(left) = self.left.checked_sub(bytes.len()) else {
+                self.cut = true;
+                return None;
+            };
+            self.left = left;
+            return Some(bytes);
+        }
+        None
+    }
+}
+
+/// What the catalog's `/DSS` says about the signer's certificate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum DssRevocation {
+    /// Verified evidence revokes it.
+    Revoked,
+    /// A cap stopped the evidence being read in full, and what was read does not revoke it.
+    Incomplete,
+    /// All of the evidence was read, and none of it revokes it.
+    NotRevoked,
+}
+
 /// Check the revocation evidence in the catalog's `/DSS` against the signer's chain at `at`.
 /// Only evidence whose signature verifies against the issuer counts; returns whether the
-/// certificate is revoked (which invalidates the signature).
-fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Option<Time>, info: &mut SignatureInfo) -> bool {
+/// certificate is revoked (which invalidates the signature), or whether a cap kept the check from
+/// reading all of the evidence.
+fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Option<Time>, info: &mut SignatureInfo) -> DssRevocation {
     use crate::revocation::{CertificateList, OcspResponse, RevocationStatus};
-    let (Some(signer), Some(at)) = (signer, *at) else { return false };
-    let Some(root) = doc.root() else { return false };
+    let (Some(signer), Some(at)) = (signer, *at) else { return DssRevocation::NotRevoked };
+    let Some(root) = doc.root() else { return DssRevocation::NotRevoked };
     let Some(dss) = doc.get(root).as_dict().and_then(|c| c.get(b"DSS").cloned()).map(|d| doc.resolve(&d)).and_then(|d| d.as_dict().cloned()) else {
-        return false;
-    };
-    let pull = |key: &[u8]| -> Vec<Vec<u8>> {
-        let mut out = Vec::new();
-        for item in dss.get(key).map(|o| doc.resolve(o)).and_then(|o| o.as_array().cloned()).unwrap_or_default() {
-            let o = doc.resolve(&item);
-            if let pdfcraft_cos::Object::Stream(s) = &*o
-                && let Ok(bytes) = s.decoded()
-            {
-                out.push(bytes);
-            }
-        }
-        out
+        return DssRevocation::NotRevoked;
     };
     let issuer = info.chain.get(1).unwrap_or(signer);
     // A verified revocation wins; "good" from any covering evidence is reported, but never
@@ -1003,7 +1069,8 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
     let mut revoked = None;
     let mut covered = false;
     let mut sources = Vec::new();
-    for r in pull(b"CRLs") {
+    let mut crls = DssEvidence::new(doc, &dss, b"CRLs");
+    for r in crls.by_ref() {
         let Ok(list) = CertificateList::parse(&r) else { continue };
         sources.push("CRL");
         match list.check(signer, issuer, at) {
@@ -1015,8 +1082,10 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
             RevocationStatus::Unknown => {}
         }
     }
+    let mut cut = crls.cut;
     if revoked.is_none() {
-        for r in pull(b"OCSPs") {
+        let mut ocsps = DssEvidence::new(doc, &dss, b"OCSPs");
+        for r in ocsps.by_ref() {
             let Ok(resp) = OcspResponse::parse(&r) else { continue };
             sources.push("OCSP");
             match resp.check(signer, issuer, at) {
@@ -1028,6 +1097,7 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
                 RevocationStatus::Unknown => {}
             }
         }
+        cut |= ocsps.cut;
     }
     match revoked {
         Some(at) => {
@@ -1035,14 +1105,22 @@ fn check_dss_revocation(doc: &Document, signer: Option<&Certificate>, at: &Optio
             // The evidence and the date go in together: one hole, so a reader can put the
             // sentence's parts in whatever order its language wants.
             info.details.push(Detail::of("The signer's certificate has been revoked ({}).", Fill::Value(format!("{}, {at}", sources.join(", ")))));
-            true
+            DssRevocation::Revoked
+        }
+        // Evidence past a cap may revoke the certificate, so a partial check proves nothing.
+        None if cut => {
+            info.details.push(Detail::of(
+                "The signature could not be checked ({}).",
+                Fill::Reason("the /DSS holds more revocation evidence than PdfCraft reads".into()),
+            ));
+            DssRevocation::Incomplete
         }
         None if covered => {
             info.details
                 .push(Detail::plain("The document's embedded revocation information shows that the signer's certificate has not been revoked."));
-            false
+            DssRevocation::NotRevoked
         }
-        None => false,
+        None => DssRevocation::NotRevoked,
     }
 }
 

@@ -354,7 +354,7 @@ fn xfdf_annots(doc: &Document, out: &mut String) {
                 && le.len() == 2
             {
                 let name = |o: &Object| o.as_name().map(|x| String::from_utf8_lossy(x).into_owned()).unwrap_or_else(|| "None".into());
-                let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", name(&le[0]), name(&le[1]));
+                let _ = write!(attrs, " head=\"{}\" tail=\"{}\"", esc(&name(&le[0])), esc(&name(&le[1])));
             }
             // A callout: its leader path, text-box inset, intent and (single-name) line ending.
             let cl = nums_of(doc, d.get(b"CL"));
@@ -1037,8 +1037,9 @@ const LOCKED: i64 = 128;
 /// An existing annotation an import must never replace, move or unlock: one the user locked, a
 /// redaction mark (replacing it would drop the region the user marked to remove), or a form
 /// widget or field (replacing it would set the field's value and policy around the form setter).
-fn import_protected(x: &Dict) -> bool {
-    x.int(b"F").unwrap_or(0) & LOCKED != 0 || matches!(x.name(b"Subtype"), Some(b"Redact" | b"Widget")) || x.contains(b"FT")
+fn import_protected(doc: &Document, x: &Dict) -> bool {
+    let flags = x.get(b"F").and_then(|f| doc.resolve(f).as_int()).unwrap_or(0);
+    flags & LOCKED != 0 || matches!(x.name(b"Subtype"), Some(b"Redact" | b"Widget")) || x.contains(b"FT")
 }
 
 fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, DataError> {
@@ -1089,7 +1090,7 @@ fn place(doc: &mut Document, page_ref: ObjRef, mut d: Dict) -> Result<ObjRef, Da
     for a in annots {
         let existing = a.as_ref().and_then(|r| doc.get(r).as_dict().cloned());
         let same = nm.is_some() && existing.as_ref().and_then(|x| x.get(b"NM").and_then(|n| doc.resolve(n).as_string().map(|s| s.to_text()))) == nm;
-        if same && existing.as_ref().is_some_and(import_protected) {
+        if same && existing.as_ref().is_some_and(|x| import_protected(doc, x)) {
             clash = true;
             kept.push(a);
         } else if same {
@@ -1198,18 +1199,66 @@ fn find_by_name(doc: &Document, nm: &str) -> Option<ObjRef> {
     None
 }
 
-/// Copy an object out of another document, resolving references (FDF objects are small).
-fn deep(src: &Document, o: &Object, depth: usize) -> Object {
+/// What one FDF import may copy out of the file. A field tree or comment that repeats a reference
+/// level after level would otherwise expand a small file into millions of values.
+const MAX_FDF_IMPORT_VALUES: usize = 1_000_000;
+
+struct ImportBudget {
+    values: usize,
+    bytes: usize,
+}
+
+impl ImportBudget {
+    fn new() -> Self {
+        Self { values: MAX_FDF_IMPORT_VALUES, bytes: MAX_FDF_BYTES }
+    }
+
+    fn spend(&mut self, values: usize, bytes: usize) -> Result<(), DataError> {
+        match (self.values.checked_sub(values), self.bytes.checked_sub(bytes)) {
+            (Some(v), Some(b)) => {
+                (self.values, self.bytes) = (v, b);
+                Ok(())
+            }
+            _ => Err(DataError::Malformed(format!(
+                "the file expands to more than {MAX_FDF_IMPORT_VALUES} values or {} MiB of text",
+                MAX_FDF_BYTES >> 20
+            ))),
+        }
+    }
+}
+
+/// Copy an object out of another document, resolving references. A reference back to an object
+/// being copied becomes null.
+fn deep(src: &Document, o: &Object, depth: usize, path: &mut Vec<ObjRef>, budget: &mut ImportBudget) -> Result<Object, DataError> {
+    budget.spend(1, 0)?;
     if depth > 16 {
-        return Object::Null;
+        return Ok(Object::Null);
     }
-    match o {
-        Object::Ref(r) => deep(src, &src.get(*r), depth + 1),
-        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, x, depth + 1)).collect()),
-        Object::Dict(d) => Object::Dict(d.iter().map(|(k, v)| (k.clone(), deep(src, v, depth + 1))).collect()),
+    Ok(match o {
+        Object::Ref(r) => {
+            if path.contains(r) {
+                return Ok(Object::Null);
+            }
+            path.push(*r);
+            let copy = deep(src, &src.get(*r), depth + 1, path, budget);
+            path.pop();
+            copy?
+        }
+        Object::Array(a) => Object::Array(a.iter().map(|x| deep(src, x, depth + 1, path, budget)).collect::<Result<_, _>>()?),
+        Object::Dict(d) => {
+            Object::Dict(d.iter().map(|(k, v)| Ok((k.clone(), deep(src, v, depth + 1, path, budget)?))).collect::<Result<_, DataError>>()?)
+        }
         Object::Stream(_) => Object::Null,
+        Object::String(s) => {
+            budget.spend(0, s.bytes.len())?;
+            o.clone()
+        }
+        Object::Name(n) => {
+            budget.spend(0, n.len())?;
+            o.clone()
+        }
         other => other.clone(),
-    }
+    })
 }
 
 fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) -> Result<(), DataError> {
@@ -1233,27 +1282,59 @@ fn walk_xfdf(node: roxmltree::Node, prefix: &str, out: &mut Vec<(String, Vec<Str
     Ok(())
 }
 
-fn walk_fdf(fdf: &Document, list: &[Object], prefix: &str, out: &mut Vec<(String, Vec<String>)>, depth: usize) {
+/// Read an FDF field tree. A field listed again beneath itself is skipped.
+fn walk_fdf(
+    fdf: &Document,
+    list: &[Object],
+    prefix: &str,
+    out: &mut Vec<(String, Vec<String>)>,
+    depth: usize,
+    path: &mut Vec<ObjRef>,
+    budget: &mut ImportBudget,
+) -> Result<(), DataError> {
     if depth > 32 {
-        return;
+        return Ok(());
     }
     for f in list {
-        let Some(d) = fdf.resolve(f).as_dict().cloned() else { continue };
+        budget.spend(1, 0)?;
+        let held;
+        let field = match f {
+            Object::Ref(r) if path.contains(r) => continue,
+            Object::Ref(r) => {
+                held = fdf.get(*r);
+                &*held
+            }
+            direct => direct,
+        };
+        let Some(d) = field.as_dict() else { continue };
         let Some(t) = d.get(b"T").and_then(|t| fdf.resolve(t).as_string().map(|s| s.to_text())) else { continue };
         let full = if prefix.is_empty() { t } else { format!("{prefix}.{t}") };
+        budget.spend(0, full.len())?;
         if let Some(v) = d.get(b"V").map(|v| fdf.resolve(v)) {
             let vals: Vec<String> = match &*v {
                 Object::String(s) => vec![s.to_text()],
                 Object::Name(n) => vec![pdfcraft_forms::name_text(n)],
-                Object::Array(a) => a.iter().filter_map(|x| fdf.resolve(x).as_string().map(|s| s.to_text())).collect(),
+                Object::Array(a) => {
+                    budget.spend(a.len(), 0)?;
+                    a.iter().filter_map(|x| fdf.resolve(x).as_string().map(|s| s.to_text())).collect()
+                }
                 _ => Vec::new(),
             };
+            budget.spend(vals.len(), vals.iter().map(String::len).fold(0, usize::saturating_add))?;
             out.push((full.clone(), vals));
         }
-        if let Some(kids) = d.get(b"Kids").map(|k| fdf.resolve(k)).and_then(|k| k.as_array().cloned()) {
-            walk_fdf(fdf, &kids, &full, out, depth + 1);
+        if let Some(kids) = d.get(b"Kids").map(|k| fdf.resolve(k))
+            && let Some(kids) = kids.as_array()
+        {
+            let entered = f.as_ref().map(|r| path.push(r)).is_some();
+            let walked = walk_fdf(fdf, kids, &full, out, depth + 1, path, budget);
+            if entered {
+                path.pop();
+            }
+            walked?;
         }
     }
+    Ok(())
 }
 
 fn fdf_body(fdf: &Document) -> Result<Dict, DataError> {
@@ -1272,8 +1353,9 @@ pub fn data_values(bytes: &[u8]) -> Result<Vec<(String, Vec<String>)>, DataError
         let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
         let body = fdf_body(&fdf)?;
         let mut values = Vec::new();
+        let mut budget = ImportBudget::new();
         if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
-            walk_fdf(&fdf, &list, "", &mut values, 0);
+            walk_fdf(&fdf, &list, "", &mut values, 0, &mut Vec::new(), &mut budget)?;
         }
         return Ok(values);
     }
@@ -1346,10 +1428,11 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
     let fdf = Document::open(std::sync::Arc::new(bytes.to_vec())).map_err(|e| DataError::Malformed(e.to_string()))?;
     let body = fdf_body(&fdf)?;
     let mut report = Report::default();
+    let mut budget = ImportBudget::new();
     // Fields (with /Kids for hierarchical names).
     let mut values = Vec::new();
     if let Some(list) = body.get(b"Fields").map(|f| fdf.resolve(f)).and_then(|f| f.as_array().cloned()) {
-        walk_fdf(&fdf, &list, "", &mut values, 0);
+        walk_fdf(&fdf, &list, "", &mut values, 0, &mut Vec::new(), &mut budget)?;
     }
     // Comments: parents first, then replies (whose /IRT needs the parent's new reference).
     let pages: Vec<ObjRef> = pdfcraft_model::pages(doc).iter().map(|p| p.obj).collect();
@@ -1360,7 +1443,8 @@ fn import_fdf(doc: &mut Document, bytes: &[u8]) -> Result<Report, DataError> {
         // The parent is another comment: link it below rather than copying it in.
         let irt = src.get(b"IRT").cloned();
         src.remove(b"IRT");
-        let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0) else { continue };
+        let mut path: Vec<ObjRef> = a.as_ref().into_iter().collect();
+        let Object::Dict(mut d) = deep(&fdf, &Object::Dict(src), 0, &mut path, &mut budget)? else { continue };
         let Some(page) = d.get(b"Page").and_then(Object::as_int).and_then(|p| usize::try_from(p).ok()).and_then(|p| pages.get(p).copied()) else {
             continue;
         };

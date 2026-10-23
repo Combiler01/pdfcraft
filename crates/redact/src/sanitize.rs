@@ -8,7 +8,7 @@ use pdfcraft_content::Matrix;
 use pdfcraft_cos::{Dict, Document, ObjRef, Object};
 
 use crate::interp::{Mode, Scope, process};
-use crate::{RedactError, Report, annots_of, listed_annotations, page_streams};
+use crate::{RedactError, Report, annots_of, listed_annotations, page_streams, page_streams_within};
 
 /// The categories of Acrobat's Remove Hidden Information panel that PdfCraft handles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -356,7 +356,8 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
     let n = pdfcraft_model::pages(doc).len();
     for pi in 0..n {
         let page = pdfcraft_model::pages(doc).swap_remove(pi);
-        let Ok((list, data)) = page_streams(doc, &page.dict, pi) else {
+        let mut budget = pdfcraft_cos::DecodeBudget::page();
+        let Ok((list, data)) = page_streams_within(doc, &page.dict, pi, &mut budget) else {
             if write {
                 return Err(RedactError::Unreadable(pi + 1));
             }
@@ -368,7 +369,7 @@ fn content_pass(doc: &mut Document, text: bool, layers: bool, write: bool) -> Re
         let resources = page.dict.get(b"Resources").and_then(|r| doc.resolve(r).as_dict().cloned()).unwrap_or_default();
         let mut report = Report::default();
         let mode = if write { Mode::Apply } else { Mode::Verify };
-        let mut scope = Scope::new(&[], mode, &mut report);
+        let mut scope = Scope::new(&[], mode, &mut report, budget);
         if text {
             let c = page.crop(doc);
             scope.hidden_text = Some([c[0].min(c[2]), c[1].min(c[3]), c[0].max(c[2]), c[1].max(c[3])]);
