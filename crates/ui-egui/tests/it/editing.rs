@@ -6038,6 +6038,65 @@ fn image_copy_cut_paste_keyboard_and_context_menu() {
 }
 
 #[test]
+fn added_and_pasted_image_uses_refactored_image_edits() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 80, image::Rgb([120, 180, 240])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+
+    let mut h = harness(1, |_| {});
+    h.run_steps(4);
+
+    // 1. Add image via add_image
+    h.state_mut().add_image("test_add.png".into(), png);
+    h.run_steps(3);
+
+    // Verify refactored mode is active
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::EditText);
+    let id = h.state().views[0].id;
+    let images = h.state().session.get(id).unwrap().page_images(0);
+    assert_eq!(images.len(), 1, "image is added");
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| (s.page, s.index)), Some((0, 0)), "added image has refactored image_selection");
+
+    // 2. Perform refactored crop on the added image
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+    h.get_by_label("Crop").click();
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop_mode), "crop mode entered");
+
+    let smaller = egui::Rect::from_center_size(c, egui::vec2(40.0, 40.0));
+    h.state_mut().views[0].image_selection.as_mut().unwrap().crop_rect = Some(smaller);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    assert!(!h.state().views[0].image_selection.as_ref().is_some_and(|s| s.crop_mode), "crop mode exited");
+
+    let images_after_crop = h.state().session.get(id).unwrap().page_images(0);
+    assert!(images_after_crop[0].visible_rect.is_some());
+    assert_ne!(images_after_crop[0].visible_rect, Some(images_after_crop[0].rect), "crop applied to added image");
+
+    // 3. Move the cropped added image
+    let orig_rect = images_after_crop[0].rect;
+    let orig_vis = images_after_crop[0].visible_rect.unwrap();
+    let dx = 20.0;
+    let dy = 20.0;
+    let new_rect = [orig_rect[0] + dx, orig_rect[1] + dy, orig_rect[2] + dx, orig_rect[3] + dy];
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::Move(new_rect) });
+    h.run_steps(3);
+
+    let images_after_move = h.state().session.get(id).unwrap().page_images(0);
+    assert_eq!(images_after_move[0].rect, new_rect, "moved rect matches");
+    assert_eq!(
+        images_after_move[0].visible_rect,
+        Some([orig_vis[0] + dx, orig_vis[1] + dy, orig_vis[2] + dx, orig_vis[3] + dy]),
+        "crop preserved after move"
+    );
+}
+
+#[test]
 fn stale_clipboard_plain_text_does_not_paste_image() {
     let mut h = harness(1, |_| {});
     h.run_steps(4);

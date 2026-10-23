@@ -763,6 +763,7 @@ pub struct PdfCraftApp {
     pub clipboard_override: Option<create_ui::Clip>,
     /// V is down as a plain key press (see [`Self::paste_key_released`]).
     v_pressed: bool,
+    last_command_time: Option<f64>,
     /// Attach file: the file to attach instead of asking (tests, automation).
     pub attach_override: Option<(String, Vec<u8>)>,
     /// Duplicate Field: which field and onto which pages.
@@ -1093,6 +1094,7 @@ impl PdfCraftApp {
             system_clipboard: true,
             clipboard_override: None,
             v_pressed: false,
+            last_command_time: None,
             attach_override: None,
             duplicate_draft: None,
             field_table_draft: None,

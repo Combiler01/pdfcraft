@@ -267,7 +267,10 @@ fn on_page(added: &[Added], page: usize) -> Vec<(usize, &Added)> {
 }
 
 pub(crate) fn hits_added(xf: &PageXform, info: &DocInfo, page: usize, added: &[Added], point: Pos2) -> bool {
-    on_page(added, page).iter().any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
+    on_page(added, page)
+        .iter()
+        .filter(|(_, a)| matches!(a.content, AddedContent::Text(_)))
+        .any(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(point))
 }
 
 fn handles(r: Rect) -> [(Pos2, bool, bool); 4] {
@@ -310,7 +313,7 @@ pub(crate) fn select_grabs(ui: &egui::Ui, xf: &PageXform, page: usize, info: &Do
     let Some(p) = ui.input(|i| i.pointer.hover_pos().or(i.pointer.interact_pos())).filter(|p| xf.rect.contains(*p)) else {
         return false;
     };
-    on_page(added, page).into_iter().any(|(index, item)| {
+    on_page(added, page).into_iter().filter(|(_, item)| matches!(item.content, AddedContent::Text(_))).any(|(index, item)| {
         let rect = screen_rect(xf, info, page, item.content.rect());
         rect.expand(2.0).contains(p)
             || cv.selected == Some((page, index)) && handles(rect).into_iter().any(|(corner, _, _)| corner.distance(p) <= 6.0)
@@ -344,11 +347,10 @@ pub(crate) fn page_input(
             let end = pointer.unwrap_or(start);
             if let Some((sp, si)) = cv.selected
                 && sp == page
-                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, _)| *i == si)
+                && let Some((_, a)) = on_page(added, page).into_iter().find(|(i, a)| *i == si && matches!(a.content, AddedContent::Text(_)))
                 && (end - start).length() >= 1.0
             {
-                let keep = matches!(a.content, AddedContent::Image(_));
-                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, keep);
+                let r = dragged(screen_rect(xf, info, page, a.content.rect()), grab, end - start, false);
                 let (p0, p1) = (to_display(xf, info, page, r.left_bottom()), to_display(xf, info, page, r.right_top()));
                 let mut rect = [p0[0], p0[1], p1[0], p1[1]];
                 if let AddedContent::Text(t) = &a.content
@@ -363,7 +365,7 @@ pub(crate) fn page_input(
         return consumed;
     }
     let Some(p) = pointer.filter(|p| xf.rect.contains(*p)) else { return consumed };
-    let items = on_page(added, page);
+    let items: Vec<(usize, &Added)> = on_page(added, page).into_iter().filter(|(_, a)| matches!(a.content, AddedContent::Text(_))).collect();
     let hit = items.iter().rev().find(|(_, a)| screen_rect(xf, info, page, a.content.rect()).expand(2.0).contains(p)).map(|(i, a)| (*i, *a));
     let selected_rect = cv
         .selected
@@ -455,6 +457,9 @@ pub(crate) fn paint_page(ui: &egui::Ui, painter: &egui::Painter, xf: &PageXform,
     let cv = &view.content;
     let pointer = ui.input(|i| i.pointer.hover_pos());
     for (i, a) in on_page(added, page) {
+        if matches!(a.content, AddedContent::Image(_)) {
+            continue;
+        }
         if cv.draft.as_ref().is_some_and(|d| d.page == page && d.index == Some(i)) {
             continue;
         }
@@ -815,9 +820,22 @@ impl crate::PdfCraftApp {
     pub fn add_image(&mut self, name: String, bytes: Vec<u8>) {
         let Some((i, id)) = self.active_ids() else { return };
         let page = self.views[i].current;
-        let before = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
+        let before_img = self.session.get(id).map_or(0, |d| d.page_images(page).len());
+        let before_added = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
         if self.apply_edit(Edit::AddImage { page, rect: None, name, bytes: std::sync::Arc::new(bytes) }) {
-            self.views[i].content.select_added = Some((page, before));
+            self.views[i].content.selected = Some((page, before_added));
+            self.views[i].content.select_added = Some((page, before_added));
+            self.views[i].image_selection = Some(crate::edit_text_ui::ImageSelection {
+                page,
+                index: before_img,
+                crop_mode: false,
+                crop_rect: None,
+                drag: None,
+                crop: None,
+                turning: false,
+                settled: None,
+            });
+            self.quick_tool = crate::QuickTool::EditText;
             self.left = crate::LeftPanel::Tool("edit");
             self.left_open = true;
         }
@@ -830,9 +848,16 @@ impl crate::PdfCraftApp {
     pub(crate) fn paste_key_released(&mut self, ctx: &egui::Context) -> bool {
         let mut released = false;
         ctx.input(|inp| {
+            if inp.modifiers.command {
+                self.last_command_time = Some(inp.time);
+            }
             for e in &inp.events {
                 if let egui::Event::Key { key: egui::Key::V, pressed, modifiers, .. } = e {
-                    released |= !*pressed && !self.v_pressed && modifiers.command;
+                    if modifiers.command {
+                        self.last_command_time = Some(inp.time);
+                    }
+                    let command_active = modifiers.command || self.last_command_time.is_some();
+                    released |= !*pressed && !self.v_pressed && command_active;
                     self.v_pressed = *pressed;
                 }
             }
@@ -1022,6 +1047,7 @@ impl crate::PdfCraftApp {
 }
 
 /// What the image tools ask for.
+#[allow(dead_code)]
 pub(crate) enum ImageAction {
     Update(pdfcraft_engine::AddedContent),
     Replace,
@@ -1029,10 +1055,13 @@ pub(crate) enum ImageAction {
 
 // Lucide names a flip icon after the axis it draws, Acrobat names the flip after the direction the
 // picture moves: Flip horizontal (left and right swap) shows Lucide's vertical axis.
+#[allow(dead_code)]
 const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
+#[allow(dead_code)]
 const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
 /// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
+#[allow(dead_code)]
 pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
     widgets::section_title(ui, tl!("Edit image"));
