@@ -450,6 +450,8 @@ impl PdfCraftApp {
         // Signing saves, as in Acrobat: choose where (a cancelled save cancels signing). The
         // document is signed once the user has chosen.
         let name = self.session.get(doc_id).map(|d| d.name.clone()).unwrap_or_default();
+        #[cfg(not(target_arch = "wasm32"))]
+        let folder = self.session.get(doc_id).and_then(|d| d.path.clone());
         let stem = name.trim_end_matches(".pdf").trim_end_matches(".PDF").to_string();
         let sign_and_save = move |app: &mut Self, path: PathBuf| -> Result<(), String> {
             // Sign what was typed while the save panel was open, too (#166); a refused value
@@ -478,6 +480,7 @@ impl PdfCraftApp {
             #[cfg(not(target_arch = "wasm32"))]
             None => {
                 let dialog = rfd::AsyncFileDialog::new().add_filter("PDF", &["pdf"]).set_file_name(format!("{stem}_signed.pdf"));
+                let dialog = crate::editing::in_document_folder(dialog, folder.as_deref());
                 // The signature's page, rectangle and field refer to the document as it is now:
                 // the pick is dropped (with a notice) if it is edited or switched away from
                 // meanwhile. Once the picker shows, the dialog closes; an error from here on
