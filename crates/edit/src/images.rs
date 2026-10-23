@@ -986,49 +986,6 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     let Some(target_idx) = units.iter().position(|u| u.start <= target && target < u.end) else {
         return Err(EditError::Invalid("the image content unit could not be located".into()));
     };
-    if units.len() <= 1 {
-        return Err(EditError::Invalid("the page has only one content unit to arrange".into()));
-    }
-
-    let (dest_unit, insert_after) = match order {
-        ArrangeOrder::BringToFront => {
-            if target_idx == units.len().saturating_sub(1) {
-                return Err(EditError::Invalid("the image is already in front".into()));
-            }
-            let Some(u) = units.last() else {
-                return Err(EditError::Invalid("the image is already in front".into()));
-            };
-            (u, true)
-        }
-        ArrangeOrder::SendToBack => {
-            if target_idx == 0 {
-                return Err(EditError::Invalid("the image is already at the back".into()));
-            }
-            let Some(u) = units.first() else {
-                return Err(EditError::Invalid("the image is already at the back".into()));
-            };
-            (u, false)
-        }
-        ArrangeOrder::BringForward => {
-            if target_idx == units.len().saturating_sub(1) {
-                return Err(EditError::Invalid("the image is already in front".into()));
-            }
-            let Some(u) = units.get(target_idx.saturating_add(1)) else {
-                return Err(EditError::Invalid("the image is already in front".into()));
-            };
-            (u, true)
-        }
-        ArrangeOrder::SendBackward => {
-            if target_idx == 0 {
-                return Err(EditError::Invalid("the image is already at the back".into()));
-            }
-            let Some(u) = target_idx.checked_sub(1).and_then(|i| units.get(i)) else {
-                return Err(EditError::Invalid("the image is already at the back".into()));
-            };
-            (u, false)
-        }
-    };
-
     let Some(target_unit) = units.get(target_idx) else { return Ok(()) };
     let has_other_paint = ops.iter().enumerate().any(|(i, op)| {
         i >= target_unit.start
@@ -1039,6 +996,68 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
                 b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
             )
     });
+    if units.len() <= 1 && !has_other_paint {
+        return Err(EditError::Invalid("the page has only one content unit to arrange".into()));
+    }
+
+    let (dest_unit, insert_after) = match order {
+        ArrangeOrder::BringToFront => {
+            if target_idx == units.len().saturating_sub(1) {
+                if has_other_paint {
+                    (target_unit, true)
+                } else {
+                    return Err(EditError::Invalid("the image is already in front".into()));
+                }
+            } else {
+                let Some(u) = units.last() else {
+                    return Err(EditError::Invalid("the image is already in front".into()));
+                };
+                (u, true)
+            }
+        }
+        ArrangeOrder::SendToBack => {
+            if target_idx == 0 {
+                if has_other_paint {
+                    (target_unit, false)
+                } else {
+                    return Err(EditError::Invalid("the image is already at the back".into()));
+                }
+            } else {
+                let Some(u) = units.first() else {
+                    return Err(EditError::Invalid("the image is already at the back".into()));
+                };
+                (u, false)
+            }
+        }
+        ArrangeOrder::BringForward => {
+            if target_idx == units.len().saturating_sub(1) {
+                if has_other_paint {
+                    (target_unit, true)
+                } else {
+                    return Err(EditError::Invalid("the image is already in front".into()));
+                }
+            } else {
+                let Some(u) = units.get(target_idx.saturating_add(1)) else {
+                    return Err(EditError::Invalid("the image is already in front".into()));
+                };
+                (u, true)
+            }
+        }
+        ArrangeOrder::SendBackward => {
+            if target_idx == 0 {
+                if has_other_paint {
+                    (target_unit, false)
+                } else {
+                    return Err(EditError::Invalid("the image is already at the back".into()));
+                }
+            } else {
+                let Some(u) = target_idx.checked_sub(1).and_then(|i| units.get(i)) else {
+                    return Err(EditError::Invalid("the image is already at the back".into()));
+                };
+                (u, false)
+            }
+        }
+    };
 
     // A marked-content sequence that holds other content too moves only the image out of the
     // sequence, wrapping it in its own tag at the destination so it is not grouped with the
@@ -1084,6 +1103,19 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         let Some(op) = ops.get(dest_unit.start) else { return Ok(()) };
         (op.span.start, dest_unit.start)
     };
+
+    let mut q_depth = 0usize;
+    let mut leaking_non_ctm_ops = Vec::new();
+    for op in ops.get(rem_start..rem_end).unwrap_or_default() {
+        match op.op.as_slice() {
+            b"q" => q_depth = q_depth.saturating_add(1),
+            b"Q" => q_depth = q_depth.saturating_sub(1),
+            b"rg" | b"RG" | b"g" | b"G" | b"k" | b"K" | b"w" | b"J" | b"j" | b"M" | b"d" | b"ri" | b"i" | b"gs" | b"cs" | b"CS" if q_depth == 0 => {
+                leaking_non_ctm_ops.push(op.clone());
+            }
+            _ => {}
+        }
+    }
 
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let ext_gstates = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
@@ -1201,7 +1233,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     }
 
     let mut unit_ops = Vec::new();
-    let marked_open = if marked_unit { ops.get(target_unit.start).cloned() } else { None };
+    let marked_open = if marked_unit && !has_other_paint { ops.get(target_unit.start).cloned() } else { None };
     if let Some(open) = &marked_open {
         unit_ops.push(open.clone());
     }
@@ -1265,8 +1297,12 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     serialized.push(b'\n');
 
     let leaking = if let Some(inv) = ctm_before_removal.invert() { ctm_after_removal.then(&inv) } else { Matrix::IDENTITY };
-    let removal_replacement = if leaking != Matrix::IDENTITY {
-        let leak_ops = vec![Op::new("cm", leaking.0.map(pdfcraft_content::num).to_vec())];
+    let mut leak_ops = Vec::new();
+    if leaking != Matrix::IDENTITY {
+        leak_ops.push(Op::new("cm", leaking.0.map(pdfcraft_content::num).to_vec()));
+    }
+    leak_ops.extend(leaking_non_ctm_ops);
+    let removal_replacement = if !leak_ops.is_empty() {
         let mut s = Vec::new();
         s.push(b'\n');
         s.extend_from_slice(&serialize_ops(&leak_ops));
@@ -1710,18 +1746,23 @@ fn crop_image_impl(
             .chain([Op::new("h", vec![]), Op::new("W", vec![]), Op::new("n", vec![])])
             .collect()
     };
-    // The image's own earlier crop (a clipping path right after the scope's `q`) gives way to
-    // the new one, so a crop can grow again as well as shrink.
+    // The image's own earlier crop (a clipping path right after the scope's `q`, skipping any
+    // initial `cm` view transform) gives way to the new one, so a crop can grow again as well as shrink.
+    let mut clip_start = start + 1;
+    while ops.get(clip_start).is_some_and(|o| o.is("cm")) {
+        clip_start += 1;
+    }
     let old_clip: Option<std::ops::Range<usize>> = (start != end)
         .then(|| {
-            let mut k = start + 1;
+            let mut k = clip_start;
             while ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")) {
                 k += 1;
             }
-            (k > start + 1 && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*")) && ops.get(k + 1).is_some_and(|o| o.is("n")))
-                .then_some(start + 1..k + 2)
+            (k > clip_start && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*")) && ops.get(k + 1).is_some_and(|o| o.is("n")))
+                .then_some(clip_start..k + 2)
         })
         .flatten();
+    let insert_at = old_clip.as_ref().map_or(clip_start, |r| r.start);
     let changed = crate::text::splice(&pieces, &ops, |index| {
         if start == end && index == target {
             // No scope of its own yet: one around the drawing, with the crop inside.
@@ -1730,7 +1771,7 @@ fn crop_image_impl(
             out.extend(ops.get(index).cloned());
             out.push(Op::new("Q", vec![]));
             (out, false)
-        } else if start != end && index == start + 1 {
+        } else if start != end && index == insert_at {
             // Inside the scope's `q`, before whatever it draws (in place of its old crop).
             (clip.clone(), old_clip.is_none())
         } else if old_clip.as_ref().is_some_and(|r| r.contains(&index)) {

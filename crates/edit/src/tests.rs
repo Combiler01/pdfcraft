@@ -2852,8 +2852,8 @@ fn image_arrange_moves_a_bmc_sequence_as_a_whole() {
     assert!(body < art && art < img && img < emc, "text first, then the whole artifact sequence: {s}");
 }
 
-/// An image that shares its marked-content sequence with other content keeps its tag and properties
-/// (e.g. /Figure with MCID) when arranged, keeping the remaining content in its original tag.
+/// An image that shares its marked-content sequence with other content keeps the remaining
+/// content in its original tag, while moving only the image without duplicating the MCID.
 #[test]
 fn image_arrange_splits_a_shared_marked_sequence_into_own_tag() {
     let content =
@@ -2867,17 +2867,15 @@ fn image_arrange_splits_a_shared_marked_sequence_into_own_tag() {
     let caption = s.find("(Caption)").expect("caption preserved");
     let emc1 = s.find("EMC").expect("first EMC");
     assert!(fig < caption && caption < emc1, "caption stays in Figure sequence: {s}");
-    // The moved image is placed after Body, wrapped in its own sequence retaining the Figure tag and MCID.
+    // The moved image is placed after Body, without duplicating the structural MCID tag (ISO 32000-1 § 14.7.4.2).
     let body = s.find("(Body)").expect("body text");
-    let fig2 = s.rfind("/Figure <</MCID 0>> BDC").expect("image retains Figure tag and MCID");
     let img = s.find("/Im0 Do").expect("image moved");
-    let emc2 = s.rfind("EMC").expect("second EMC");
-    assert!(emc1 < body && body < fig2 && fig2 < img && img < emc2, "image moved after body in own tag: {s}");
-    assert_ne!(fig, fig2);
+    assert!(emc1 < body && body < img, "image moved after body: {s}");
+    assert_eq!(s.matches("/Figure <</MCID 0>> BDC").count(), 1, "MCID must not be duplicated");
     assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
 }
 
-/// Send backward also splits out the image while keeping its tag when it shares its sequence with text,
+/// Send backward also splits out the image without duplicating the MCID when it shares its sequence with text,
 /// placing it before the preceding unit and keeping the remaining content tagged.
 #[test]
 fn image_arrange_send_backward_splits_shared_marked_sequence() {
@@ -2891,11 +2889,34 @@ fn image_arrange_send_backward_splits_shared_marked_sequence() {
     let img = s.find("/Im0 Do").expect("image");
     let cell = s.find("(Cell)").expect("cell text");
     assert!(img < header && header < cell, "image sent backward before header, while cell stays: {s}");
-    let table = s.rfind("/Table <</MCID 0>> BDC").expect("table tag preserved");
-    let table_first = s.find("/Table <</MCID 0>> BDC").expect("moved image table tag");
+    let table = s.find("/Table <</MCID 0>> BDC").expect("table tag preserved");
     let emc = s.rfind("EMC").expect("EMC");
-    assert_ne!(table_first, table);
     assert!(table < cell && cell < emc, "cell text stays in table sequence: {s}");
+    assert_eq!(s.matches("/Table <</MCID 0>> BDC").count(), 1, "MCID must not be duplicated");
+}
+
+#[test]
+fn arrange_preserves_color_leaking_out_of_marked_content() {
+    let content = "/Figure <</MCID 0>> BDC 1 0 0 rg q 100 0 0 100 0 0 cm /Im0 Do Q EMC BT /F1 12 Tf 72 700 Td (Text) Tj ET";
+    let mut doc = image_page_with(content);
+    let res = images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    if res.is_ok() {
+        let bytes = page_content_bytes(&doc, 0);
+        let s = String::from_utf8_lossy(&bytes);
+        let text_pos = s.find("(Text) Tj").unwrap();
+        assert!(s[..text_pos].contains("1 0 0 rg") || s[..text_pos].contains("1 0 0 RG"));
+    }
+}
+
+#[test]
+fn arrange_shared_tagged_does_not_duplicate_mcid() {
+    let content = "/Figure <</MCID 0>> BDC q 100 0 0 100 0 0 cm /Im0 Do Q 0 0 m 10 10 l S EMC";
+    let mut doc = image_page_with(content);
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).unwrap();
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    let mcid_count = s.matches("/MCID 0").count();
+    assert_eq!(mcid_count, 1, "MCID 0 must not be duplicated in the content stream");
 }
 
 #[test]

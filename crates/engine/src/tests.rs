@@ -7420,3 +7420,19 @@ fn added_image_arrange_converts_to_ordinary_image() {
     assert_eq!(s.get(id).unwrap().page_images(0).len(), 2);
     assert_eq!(s.get(id).unwrap().added().len(), 1, "arranged image is converted and no longer an added-item shell");
 }
+
+#[test]
+fn added_image_crop_then_move_keeps_crop() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 100.0, 100.0]), name: "p.png".into(), bytes: Arc::new(png) }).unwrap();
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Crop([30.0, 30.0, 70.0, 70.0]) }).unwrap();
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Move([50.0, 50.0, 130.0, 130.0]) }).unwrap();
+    let img = s.get(id).unwrap().page_images(0)[0].clone();
+    assert_eq!(img.visible_rect, Some([60.0, 60.0, 100.0, 100.0]));
+}
