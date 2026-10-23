@@ -3175,13 +3175,17 @@ impl PdfCraftApp {
             self.cut_page_image(sel.page, sel.index);
         }
         if paste {
+            let has_override_image = matches!(self.clipboard_override, Some(crate::create_ui::Clip::Image { .. }));
             #[cfg(not(target_arch = "wasm32"))]
-            let system_has_text =
-                if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false) } else { false };
+            let system_has_text = if !has_override_image && self.system_clipboard {
+                crate::os_clipboard::with(|cb| cb.get_text()).map(|t| !t.is_empty()).unwrap_or(false)
+            } else {
+                false
+            };
             #[cfg(target_arch = "wasm32")]
             let system_has_text = false;
 
-            if paste_event_text.is_some() || system_has_text {
+            if !has_override_image && (paste_event_text.is_some() || system_has_text) {
                 self.last_copied_image = None;
                 self.last_copied_file = None;
                 self.last_copied_image_rect = None;

@@ -2785,7 +2785,10 @@ fn crop_rotated_image_preserves_angle_and_in_place_geometry() {
 
     let bytes = page_content_bytes(&doc, 0);
     let str_content = String::from_utf8_lossy(&bytes);
-    assert!(str_content.contains("re") && str_content.contains("W\nn"), "{str_content}");
+    assert!(
+        (str_content.contains("re") || (str_content.contains("m\n") && str_content.contains("l\n"))) && str_content.contains("W\nn"),
+        "{str_content}"
+    );
     assert!(str_content.contains("/Im0 Do"), "{str_content}");
 
     let mut doc = doc;
@@ -7156,26 +7159,6 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
         use proptest::prelude::*;
 
         proptest! {
-            #[test]
-            fn prop_crop_ctm_finite_for_valid_inputs(
-                a in -1000.0f64..1000.0,
-                b in -1000.0f64..1000.0,
-                c in -1000.0f64..1000.0,
-                d in -1000.0f64..1000.0,
-                e in -1000.0f64..1000.0,
-                f in -1000.0f64..1000.0,
-                x1 in -1000.0f64..1000.0,
-                y1 in -1000.0f64..1000.0,
-                w in 1.0f64..1000.0,
-                h in 1.0f64..1000.0,
-            ) {
-                let ctm = [a, b, c, d, e, f];
-                let crop = [x1, y1, x1 + w, y1 + h];
-                let res = images::crop_ctm(ctm, crop);
-                for v in res {
-                    prop_assert!(v.is_finite());
-                }
-            }
 
             #[test]
             fn prop_is_entire_page_wrapped_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
@@ -7303,4 +7286,19 @@ fn noop_arrange_is_not_ok_without_change() {
     let r = images::arrange_image(&mut doc, 0, 1, images::ArrangeOrder::BringToFront);
     let after = write_incremental(&doc, &SaveOptions::default()).unwrap();
     assert!(r.is_err() || before != after, "Ok with no change");
+}
+
+/// Cropping a turned image keeps the requested upright box in user space, rather than expanding
+/// to the bounding box of the turned image coordinates.
+#[test]
+fn crop_turned_image_preserves_requested_area() {
+    let mut doc = regression_page("q 70.71 70.71 -70.71 70.71 300 100 cm /Im0 Do Q");
+    let req = [270.0, 150.0, 330.0, 200.0];
+    images::crop_image(&mut doc, 0, 0, req).expect("crop succeeds");
+    let after = &images::page_images(&reopen(&doc), 0).unwrap()[0];
+    let v = after.visible_rect.expect("visible rect exists");
+    assert!((v[0] - req[0]).abs() < 1.0, "x0: expected {}, got {}", req[0], v[0]);
+    assert!((v[1] - req[1]).abs() < 1.0, "y0: expected {}, got {}", req[1], v[1]);
+    assert!((v[2] - req[2]).abs() < 1.0, "x1: expected {}, got {}", req[2], v[2]);
+    assert!((v[3] - req[3]).abs() < 1.0, "y1: expected {}, got {}", req[3], v[3]);
 }

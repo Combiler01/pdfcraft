@@ -7304,3 +7304,23 @@ fn added_image_move_then_rotate_by_keeps_position() {
     let (a, b) = (c(moved), c(rotated));
     assert!((a.0 - b.0).abs() < 1.0 && (a.1 - b.1).abs() < 1.0, "rotate_by moved the centre from {a:?} to {b:?}");
 }
+
+/// Arranging an added image moves it into the document stream and converts it to an ordinary
+/// page image (dropping the PCAdded marker), so no empty shell remains in list_added.
+#[test]
+fn added_image_arrange_converts_to_ordinary_image() {
+    let mut png = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut png, 2, 2);
+        enc.set_color(png::ColorType::Rgb);
+        enc.write_header().unwrap().write_image_data(&[255u8; 12]).unwrap();
+    }
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([20.0, 20.0, 60.0, 60.0]), name: "p1.png".into(), bytes: Arc::new(png.clone()) }).unwrap();
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 200.0]), name: "p2.png".into(), bytes: Arc::new(png) }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0).len(), 2);
+    assert_eq!(s.get(id).unwrap().added().len(), 2);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 1, change: ImageEdit::Arrange(ArrangeOrder::SendToBack) }).unwrap();
+    assert_eq!(s.get(id).unwrap().page_images(0).len(), 2);
+    assert_eq!(s.get(id).unwrap().added().len(), 1, "arranged image is converted and no longer an added-item shell");
+}

@@ -888,15 +888,19 @@ impl crate::PdfCraftApp {
             Some(crate::create_ui::Clip::Text(_)) => None,
             None => {
                 #[cfg(not(target_arch = "wasm32"))]
-                let sys_result = if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_image()).ok() } else { None };
+                let sys_result = if self.system_clipboard {
+                    crate::os_clipboard::with(|cb| cb.get_image()).ok().map(|img| (img.width, img.height, img.bytes.into_owned()))
+                } else {
+                    None
+                };
                 #[cfg(target_arch = "wasm32")]
-                let sys_result: Option<arboard::ImageData<'static>> = None;
+                let sys_result: Option<(usize, usize, Vec<u8>)> = None;
 
-                if let Some(img) = sys_result {
+                if let Some((img_width, img_height, img_bytes)) = sys_result {
                     let is_same_as_last = self
                         .last_copied_image
                         .as_ref()
-                        .is_some_and(|(w, h, rgba)| *w as usize == img.width && *h as usize == img.height && rgba.as_slice() == img.bytes.as_ref());
+                        .is_some_and(|(w, h, rgba)| *w as usize == img_width && *h as usize == img_height && rgba.as_slice() == img_bytes.as_slice());
                     if is_same_as_last && let Some((name, bytes)) = self.last_copied_file.clone() {
                         Some((name, bytes))
                     } else if is_same_as_last && let Some((w, h, rgba)) = self.last_copied_image.clone() {
@@ -904,9 +908,9 @@ impl crate::PdfCraftApp {
                     } else {
                         // System clipboard has a newer / external image!
                         self.last_copied_file = None;
-                        self.last_copied_image = Some((img.width as u32, img.height as u32, img.bytes.to_vec()));
+                        self.last_copied_image = Some((img_width as u32, img_height as u32, img_bytes.clone()));
                         self.last_copied_image_rect = None;
-                        crate::create_ui::png_from_rgba(img.width, img.height, &img.bytes).ok().map(|b| ("clipboard_image.png".to_string(), b))
+                        crate::create_ui::png_from_rgba(img_width, img_height, &img_bytes).ok().map(|b| ("clipboard_image.png".to_string(), b))
                     }
                 } else if let Some((name, bytes)) = self.last_copied_file.clone() {
                     Some((name, bytes))
@@ -947,8 +951,12 @@ impl crate::PdfCraftApp {
             if let Some(r) = placed_rect {
                 self.last_copied_image_rect = Some(r);
             }
+            let added_count = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
+            let added_idx = added_count.saturating_sub(1);
             if let Some(v) = self.views.get_mut(i) {
                 v.current = page;
+                v.content.selected = Some((page, added_idx));
+                v.content.select_added = Some((page, added_idx));
                 v.image_selection = Some(crate::edit_text_ui::ImageSelection {
                     page,
                     index: before,
@@ -982,19 +990,23 @@ impl crate::PdfCraftApp {
             }
         } else {
             #[cfg(not(target_arch = "wasm32"))]
-            let sys_img = if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_image()).ok() } else { None };
+            let sys_img = if self.system_clipboard {
+                crate::os_clipboard::with(|cb| cb.get_image()).ok().map(|img| (img.width, img.height, img.bytes.into_owned()))
+            } else {
+                None
+            };
             #[cfg(target_arch = "wasm32")]
-            let sys_img: Option<arboard::ImageData<'static>> = None;
+            let sys_img: Option<(usize, usize, Vec<u8>)> = None;
 
-            if let Some(img) = sys_img {
+            if let Some((img_width, img_height, img_bytes)) = sys_img {
                 let is_same = self
                     .last_copied_image
                     .as_ref()
-                    .is_some_and(|(w, h, bytes)| *w as usize == img.width && *h as usize == img.height && bytes.as_slice() == img.bytes.as_ref());
+                    .is_some_and(|(w, h, bytes)| *w as usize == img_width && *h as usize == img_height && bytes.as_slice() == img_bytes.as_slice());
                 if is_same && let Some(src_r) = self.last_copied_image_rect {
                     (src_r[2] - src_r[0], src_r[3] - src_r[1])
                 } else {
-                    (img.width as f64, img.height as f64)
+                    (img_width as f64, img_height as f64)
                 }
             } else if let Some(src_r) = self.last_copied_image_rect {
                 (src_r[2] - src_r[0], src_r[3] - src_r[1])

@@ -55,7 +55,7 @@ pub struct PageImage {
     pub smask: Option<MaskIdentity>,
     /// The content stream its `Do` (its first token) is in, and the `Do`'s index among the
     /// operators of the page's streams joined ([`Pieces`]).
-    stream: usize,
+    pub stream: usize,
     op: usize,
     /// CTM before `Do`, excluding a Form's own Matrix.
     draw_matrix: [f64; 6],
@@ -148,24 +148,31 @@ struct ImageState {
     placement: Placement,
     stack: Vec<Placement>,
     path: BezPath,
+    subpath_start: Option<Point>,
     pending_clip: Option<bool>,
 }
 
 impl ImageState {
     fn new(matrix: Matrix, clip: [f64; 4], clips: Vec<ClipPath>) -> Self {
-        Self { placement: Placement { matrix, clip, clips }, stack: Vec::new(), path: BezPath::new(), pending_clip: None }
+        Self { placement: Placement { matrix, clip, clips }, stack: Vec::new(), path: BezPath::new(), subpath_start: None, pending_clip: None }
+    }
+
+    fn current_point(&self) -> Option<Point> {
+        match self.path.elements().last() {
+            Some(kurbo::PathEl::MoveTo(p) | kurbo::PathEl::LineTo(p)) => Some(*p),
+            Some(kurbo::PathEl::QuadTo(_, p2) | kurbo::PathEl::CurveTo(_, _, p2)) => Some(*p2),
+            Some(kurbo::PathEl::ClosePath) => self.subpath_start,
+            None => None,
+        }
     }
 
     fn has_current_point(&self) -> bool {
-        matches!(
-            self.path.elements().last(),
-            Some(kurbo::PathEl::MoveTo(_) | kurbo::PathEl::LineTo(_) | kurbo::PathEl::QuadTo(_, _) | kurbo::PathEl::CurveTo(_, _, _))
-        )
+        self.current_point().is_some()
     }
 
-    fn point(&self, x: f64, y: f64) -> Point {
+    fn point(&self, x: f64, y: f64) -> Option<Point> {
         let (x, y) = self.placement.matrix.apply(x, y);
-        if x.is_finite() && y.is_finite() { Point::new(x, y) } else { Point::ZERO }
+        if x.is_finite() && y.is_finite() { Some(Point::new(x, y)) } else { None }
     }
 
     fn apply(&mut self, op: &Op) -> Result<(), EditError> {
@@ -193,8 +200,11 @@ impl ImageState {
                 }
             }
             b"m" => {
-                if let Some([x, y]) = op.nums::<2>() {
-                    self.path.move_to(self.point(x, y));
+                if let Some([x, y]) = op.nums::<2>()
+                    && let Some(p) = self.point(x, y)
+                {
+                    self.subpath_start = Some(p);
+                    self.path.move_to(p);
                 }
             }
             b"l" => {
@@ -203,35 +213,33 @@ impl ImageState {
                 // renderer, MuPDF and pdftotext do (#3581).
                 if let Some([x, y]) = op.nums::<2>()
                     && self.has_current_point()
+                    && let Some(p) = self.point(x, y)
                 {
-                    self.path.line_to(self.point(x, y));
+                    self.path.line_to(p);
                 }
             }
             b"c" => {
                 if let Some([x1, y1, x2, y2, x3, y3]) = op.nums::<6>()
                     && self.has_current_point()
+                    && let (Some(p1), Some(p2), Some(p3)) = (self.point(x1, y1), self.point(x2, y2), self.point(x3, y3))
                 {
-                    self.path.curve_to(self.point(x1, y1), self.point(x2, y2), self.point(x3, y3));
+                    self.path.curve_to(p1, p2, p3);
                 }
             }
             b"v" => {
-                if let Some([x1, y1, x2, y2]) = op.nums::<4>() {
-                    let p1 = self.point(x1, y1);
-                    let p2 = self.point(x2, y2);
-                    if let Some(current) = self.path.elements().last().and_then(|e| e.end_point()) {
-                        self.path.curve_to(current, p1, p2);
-                    } else {
-                        self.path.move_to(p1);
-                        self.path.curve_to(p1, p1, p2);
-                    }
+                if let Some([x1, y1, x2, y2]) = op.nums::<4>()
+                    && self.has_current_point()
+                    && let (Some(p1), Some(p2)) = (self.point(x1, y1), self.point(x2, y2))
+                    && let Some(current) = self.current_point()
+                {
+                    self.path.curve_to(current, p1, p2);
                 }
             }
             b"y" => {
                 if let Some([x1, y1, x2, y2]) = op.nums::<4>()
                     && self.has_current_point()
+                    && let (Some(p1), Some(end)) = (self.point(x1, y1), self.point(x2, y2))
                 {
-                    let p1 = self.point(x1, y1);
-                    let end = self.point(x2, y2);
                     self.path.curve_to(p1, end, end);
                 }
             }
@@ -242,11 +250,15 @@ impl ImageState {
                 }
             }
             b"re" => {
-                if let Some([x, y, w, h]) = op.nums::<4>() {
-                    self.path.move_to(self.point(x, y));
-                    self.path.line_to(self.point(x + w, y));
-                    self.path.line_to(self.point(x + w, y + h));
-                    self.path.line_to(self.point(x, y + h));
+                if let Some([x, y, w, h]) = op.nums::<4>()
+                    && let (Some(p0), Some(p1), Some(p2), Some(p3)) =
+                        (self.point(x, y), self.point(x + w, y), self.point(x + w, y + h), self.point(x, y + h))
+                {
+                    self.subpath_start = Some(p0);
+                    self.path.move_to(p0);
+                    self.path.line_to(p1);
+                    self.path.line_to(p2);
+                    self.path.line_to(p3);
                     self.path.close_path();
                 }
             }
@@ -261,6 +273,7 @@ impl ImageState {
                     self.placement.clips.push(ClipPath { path: Arc::new(std::mem::take(&mut self.path)), even_odd });
                 }
                 self.path = BezPath::new();
+                self.subpath_start = None;
             }
             _ => {}
         }
@@ -1659,26 +1672,9 @@ fn crop_image_impl(
     if x1 - x0 < 1e-6 || y1 - y0 < 1e-6 {
         return Err(EditError::Invalid("the crop box has no area".into()));
     }
-    let inv = Matrix(image.matrix).invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
-    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inv.apply(x, y));
-    let min_u = corners.iter().map(|(u, _)| *u).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
-    let max_u = corners.iter().map(|(u, _)| *u).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
-    let min_v = corners.iter().map(|(_, v)| *v).fold(f64::INFINITY, f64::min).clamp(0.0, 1.0);
-    let max_v = corners.iter().map(|(_, v)| *v).fold(f64::NEG_INFINITY, f64::max).clamp(0.0, 1.0);
-    if max_u - min_u < 1e-6 || max_v - min_v < 1e-6 {
-        return Err(EditError::Invalid("the crop box has no area".into()));
+    if intersection(image.rect, [x0, y0, x1, y1]).is_none() {
+        return Err(EditError::Invalid("the crop box does not intersect the image".into()));
     }
-    let (u0, v0, u1, v1) = (min_u, min_v, max_u, max_v);
-
-    if u1 - u0 < 1e-6 || v1 - v0 < 1e-6 {
-        return Err(EditError::Invalid("the crop box has no area".into()));
-    }
-
-    let m = Matrix(image.matrix);
-    let p00 = m.apply(u0, v0);
-    let p10 = m.apply(u1, v0);
-    let p11 = m.apply(u1, v1);
-    let p01 = m.apply(u0, v1);
 
     let pieces = joined(streams);
     let ops = pieces.parse().ops;
@@ -1688,7 +1684,7 @@ fn crop_image_impl(
     }
     let (start, end, placement) = image_transform_scope(&ops, target)?.unwrap_or((target, target, Matrix(image.draw_matrix)));
     let inverse = placement.invert().ok_or_else(|| EditError::Invalid("the image has no area".into()))?;
-    let corners = [p00, p10, p11, p01].map(|(x, y)| inverse.apply(x, y));
+    let corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| inverse.apply(x, y));
     if !corners.iter().all(|(x, y)| x.is_finite() && y.is_finite() && x.abs() <= 1e12 && y.abs() <= 1e12) {
         return Err(EditError::Invalid("the crop box is too large for the image's placement".into()));
     }
@@ -1840,33 +1836,4 @@ pub(crate) fn translate_images(doc: &mut Document, page: usize, indexes: &[usize
     let contents = crate::text::rewritten_contents(doc, &all, data);
     doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
-}
-
-/// Post-multiplies the image's existing CTM `[a, b, c, d, e, f]` by the crop transform
-/// `[u_min, v_min, u_max, v_max]` to shrink the footprint without stretching.
-pub fn crop_ctm(ctm: [f64; 6], crop: [f64; 4]) -> [f64; 6] {
-    let [a, b, c, d, e, f] = ctm;
-    let [u_min, v_min, u_max, v_max] = crop;
-    let new_a = a * (u_max - u_min);
-    let new_b = b * (u_max - u_min);
-    let new_c = c * (v_max - v_min);
-    let new_d = d * (v_max - v_min);
-    let new_e = e + a * u_min + c * v_min;
-    let new_f = f + b * u_min + d * v_min;
-    [new_a, new_b, new_c, new_d, new_e, new_f]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_crop_ctm_standard_non_stretched() {
-        // Standard upright CTM: width=200, height=100 at origin (50, 100)
-        let ctm = [200.0, 0.0, 0.0, 100.0, 50.0, 100.0];
-        let crop = [0.25, 0.25, 0.75, 0.75];
-        let cropped = crop_ctm(ctm, crop);
-        let expected = [100.0, 0.0, 0.0, 50.0, 100.0, 125.0];
-        assert_eq!(cropped, expected);
-    }
 }
