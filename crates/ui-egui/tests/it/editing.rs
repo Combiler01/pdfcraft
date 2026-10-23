@@ -7100,6 +7100,7 @@ fn copy_pasted_image_discards_coordinates_and_moves_without_offset() {
     image::RgbImage::from_pixel(60, 60, image::Rgb([100, 150, 200])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
 
     let mut h = harness(1, |_| {});
+    h.state_mut().system_clipboard = false;
     h.run_steps(4);
 
     // 1. Add image to page 0
