@@ -93,7 +93,7 @@ fn font_content_key(bytes: &[u8]) -> (usize, u64, u64) {
     (bytes.len(), h1.finish(), h2.finish())
 }
 fn font_extension(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
+    path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"))
 }
 
 #[cfg(test)]
