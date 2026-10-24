@@ -2705,6 +2705,18 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             pdfcraft_edit::stamp(doc, *page, "OCR", pdfcraft_ocr::text_layer(words))?;
         }
         Edit::EditPageImage { page, index, change } => {
+            match change {
+                ImageEdit::Move(to) if !to.iter().all(|v| v.is_finite()) => {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
+                }
+                ImageEdit::Transform(t) if !t.iter().all(|v| v.is_finite()) => {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("the image transform must be finite".into())));
+                }
+                ImageEdit::Crop(keep) if !keep.iter().all(|v| v.is_finite()) => {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid crop".into())));
+                }
+                _ => {}
+            }
             let img = pdfcraft_edit::page_images(doc, *page)?
                 .into_iter()
                 .nth(*index)
@@ -2739,15 +2751,18 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                 ImageEdit::Arrange(order) => pdfcraft_edit::ImageChange::Arrange(*order),
                 ImageEdit::RemoveCrop => pdfcraft_edit::ImageChange::RemoveCrop,
             };
-            let page_obj = pdfcraft_model::pages(doc).into_iter().nth(*page);
-            let target_stream_obj = page_obj.as_ref().and_then(|p| match p.dict.get(b"Contents") {
+            let page_model = pdfcraft_model::pages(doc)
+                .into_iter()
+                .nth(*page)
+                .ok_or_else(|| EditError::Edit(pdfcraft_edit::EditError::Invalid(format!("page {} not found", page + 1))))?;
+            let target_stream_obj = match page_model.dict.get(b"Contents") {
                 None => None,
                 Some(c) => match &*doc.resolve(c) {
                     pdfcraft_cos::Object::Array(a) => a.get(img.stream).and_then(|o| o.as_ref()),
                     _ if img.stream == 0 => c.as_ref(),
                     _ => None,
                 },
-            });
+            };
 
             let added_items: Vec<(usize, Added)> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == *page).enumerate().collect();
             let matched_added = if let Some(st_ref) = target_stream_obj {
@@ -2788,24 +2803,50 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
             }
 
             if let Some((added_idx, mut ai)) = ai_to_update {
+                let view = page_model.view_matrix(doc);
+                let det = view[0] * view[3] - view[1] * view[2];
+                if det.abs() < 1e-12 || !det.is_finite() {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid page transform".into())));
+                }
+                let (ia, ib, ic, id) = (view[3] / det, -view[1] / det, -view[2] / det, view[0] / det);
+                let to_display = [ia, ib, ic, id, -(view[4] * ia + view[5] * ic), -(view[4] * ib + view[5] * id)];
+                let apply = |m: [f64; 6], x: f64, y: f64| (m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+                let bbox = |m: [f64; 6], r: [f64; 4]| {
+                    let pts = [apply(m, r[0], r[1]), apply(m, r[2], r[1]), apply(m, r[0], r[3]), apply(m, r[2], r[3])];
+                    let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
+                    for (x, y) in pts {
+                        b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                    }
+                    b
+                };
+
                 match change {
                     ImageEdit::Move(to) => {
-                        ai.rect = *to;
+                        if !to.iter().all(|v| v.is_finite()) {
+                            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
+                        }
+                        ai.rect = bbox(to_display, *to);
                         pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
                     }
                     ImageEdit::Transform(t) => {
-                        let apply = |x: f64, y: f64| (t[0] * x + t[2] * y + t[4], t[1] * x + t[3] * y + t[5]);
-                        let pts = [
-                            apply(ai.rect[0], ai.rect[1]),
-                            apply(ai.rect[2], ai.rect[1]),
-                            apply(ai.rect[0], ai.rect[3]),
-                            apply(ai.rect[2], ai.rect[3]),
-                        ];
-                        let mut b = [f64::MAX, f64::MAX, f64::MIN, f64::MIN];
-                        for (x, y) in pts {
-                            b = [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)];
+                        let mul = |m1: [f64; 6], m2: [f64; 6]| {
+                            [
+                                m1[0] * m2[0] + m1[1] * m2[2],
+                                m1[0] * m2[1] + m1[1] * m2[3],
+                                m1[2] * m2[0] + m1[3] * m2[2],
+                                m1[2] * m2[1] + m1[3] * m2[3],
+                                m1[4] * m2[0] + m1[5] * m2[2] + m2[4],
+                                m1[4] * m2[1] + m1[5] * m2[3] + m2[5],
+                            ]
+                        };
+                        let t_display = mul(mul(view, *t), to_display);
+                        if t_display[0] < 0.0 {
+                            ai.flip_h = !ai.flip_h;
                         }
-                        ai.rect = b;
+                        if t_display[3] < 0.0 {
+                            ai.flip_v = !ai.flip_v;
+                        }
+                        ai.rect = bbox(t_display, ai.rect);
                         pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
                     }
                     ImageEdit::Rotate(q) => {
@@ -2827,7 +2868,16 @@ fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut EditCtx) -> 
                         ai.flip_v = !ai.flip_v;
                         pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
                     }
-                    _ => {}
+                    ImageEdit::Replace { .. } => {
+                        let pdfcraft_edit::ImageChange::Replace(new_image) = c else {
+                            return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected replace".into())));
+                        };
+                        ai.image = new_image;
+                        pdfcraft_edit::update_content(doc, *page, added_idx, &AddedContent::Image(ai))?;
+                    }
+                    ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete => {
+                        pdfcraft_edit::change_image(doc, *page, *index, &c)?;
+                    }
                 }
             } else {
                 pdfcraft_edit::change_image(doc, *page, *index, &c)?;

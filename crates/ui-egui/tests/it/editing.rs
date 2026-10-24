@@ -7151,3 +7151,120 @@ fn copy_pasted_image_discards_coordinates_and_moves_without_offset() {
     let images_after_move = h.state().session.get(id).unwrap().page_images(0);
     assert_eq!(images_after_move[1].rect, target, "moved image rect matches target exactly without offset");
 }
+
+#[test]
+fn clicking_after_image_context_menu_action_resets_menu_state_and_updates_selection() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    // Move the first image to left side: [10.0, 10.0, 30.0, 30.0]
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Move([10.0, 10.0, 30.0, 30.0]),
+    });
+    // Add second image to right side: [50.0, 10.0, 70.0, 30.0]
+    let mut png2 = Vec::new();
+    image::RgbImage::from_pixel(20, 20, image::Rgb([40, 200, 40])).write_to(&mut std::io::Cursor::new(&mut png2), image::ImageFormat::Png).unwrap();
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::AddImage {
+        page: 0,
+        rect: Some([50.0, 10.0, 70.0, 30.0]),
+        name: "img2.png".into(),
+        bytes: std::sync::Arc::new(png2),
+    });
+    h.run_steps(4);
+
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let user_to_screen = |u: [f64; 2]| {
+        let info = &h.state().session.get(id).unwrap().info.pages[0];
+        let v = info.user_to_view(u[0] as f32, u[1] as f32);
+        let scale = r.width() / info.width;
+        egui::pos2(r.left() + v[0] * scale, r.top() + v[1] * scale)
+    };
+
+    let p0 = user_to_screen([20.0, 20.0]);
+    let p1 = user_to_screen([60.0, 20.0]);
+    let p_empty = user_to_screen([40.0, 35.0]);
+
+    // 1. Select image 0
+    h.hover_at(p0);
+    h.run_steps(1);
+    h.drag_at(p0);
+    h.run_steps(1);
+    h.drop_at(p0);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(0), "image 0 selected");
+
+    // 2. Select image 1 (switches selection)
+    h.hover_at(p1);
+    h.run_steps(1);
+    h.drag_at(p1);
+    h.run_steps(1);
+    h.drop_at(p1);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(1), "image 1 selected");
+
+    // 3. Click empty space (clears selection)
+    h.hover_at(p_empty);
+    h.run_steps(1);
+    h.drag_at(p_empty);
+    h.run_steps(1);
+    h.drop_at(p_empty);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_none(), "empty page clears selection");
+
+    // 4. Select image 0 again
+    h.hover_at(p0);
+    h.run_steps(1);
+    h.drag_at(p0);
+    h.run_steps(1);
+    h.drop_at(p0);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(0), "image 0 selected again");
+
+    // 5. Right-click image 0 to open context menu
+    h.hover_at(p0);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p0, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p0, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    // 6. Click "Flip horizontal"
+    h.get_by_label("Flip horizontal").click();
+    h.run_steps(3);
+
+    let flag_persisted = h.ctx.data_mut(|d| d.get_persisted::<bool>(egui::Id::new("image-menu")));
+    assert_eq!(flag_persisted, Some(false), "image-menu flag should be reset to false");
+
+    // 7. Click image 1: should switch selection to image 1
+    h.hover_at(p1);
+    h.run_steps(1);
+    h.drag_at(p1);
+    h.run_steps(1);
+    h.drop_at(p1);
+    h.run_steps(2);
+    assert_eq!(
+        h.state().views[0].image_selection.as_ref().map(|s| s.index),
+        Some(1),
+        "clicking other image switches selection after context menu action"
+    );
+
+    // 8. Click empty space: should clear selection
+    h.hover_at(p_empty);
+    h.run_steps(1);
+    h.drag_at(p_empty);
+    h.run_steps(1);
+    h.drop_at(p_empty);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_none(), "clicking empty page clears selection after context menu action");
+}

@@ -3755,7 +3755,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }
                 }
             }
-            ui.ctx().data_mut(|d| d.insert_persisted(resp.id.with("image-menu"), over_image));
+            ui.ctx().data_mut(|d| d.insert_persisted(crate::edit_text_ui::image_menu_id(), over_image));
         }
         let mut calc_hover = None;
         for &i in &visible_pages {
@@ -4629,7 +4629,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 return;
             }
             let is_image_menu = tool == QuickTool::EditText
-                && (ui.ctx().data_mut(|d| d.get_persisted::<bool>(resp.id.with("image-menu"))).unwrap_or(false)
+                && (ui.ctx().data_mut(|d| d.get_persisted::<bool>(crate::edit_text_ui::image_menu_id())).unwrap_or(false)
                     || view.image_selection.as_ref().is_some_and(|sel| {
                         let pointer_pos = ui.input(|inp| inp.pointer.hover_pos().or(inp.pointer.interact_pos()));
                         let Some(p) = pointer_pos else { return false };
@@ -4685,6 +4685,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let can_paste = can_paste_image;
             default_page_context_menu(ui, page, at, can_copy_items, can_paste, &mut page_action);
         });
+        if !resp.context_menu_opened() {
+            ui.ctx().data_mut(|d| d.insert_persisted(crate::edit_text_ui::image_menu_id(), false));
+        }
         (wanted, visible_now)
     });
     view.single_edges = visible_pages.first().copied().filter(|_| !view.continuous).map(|page| {
