@@ -28,13 +28,7 @@ fn harness_bytes_with_step_dt(bytes: Vec<u8>, step_dt: f32) -> Harness<'static, 
         app.set_option("zoom", "150").unwrap();
         app
     });
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     h
 }
 
@@ -161,13 +155,7 @@ fn text_tool_deleting_a_draft_hides_the_old_added_glyphs_and_cancel_restores_the
     click(&mut h, point);
     h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
     h.key_press(egui::Key::Backspace);
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     assert!(h.state().views[0].content.draft.as_ref().unwrap().text.is_empty());
     let shot = h.render().unwrap();
     for x in 105..140 {
@@ -795,18 +783,6 @@ fn red(pixels: &image::RgbaImage, r: egui::Rect) -> usize {
         .count()
 }
 
-/// Steps until no render is pending.
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
-        h.run_steps(1);
-        if !h.state().render_pending() {
-            return;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    panic!("the page did not finish rendering");
-}
-
 /// An added picture resized by a corner is drawn at its new size while dragged and after the
 /// release until the page is rendered again. It used to stay at its old size under the outline for
 /// the whole drag, and to show there again after the release.
@@ -826,7 +802,7 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
     h.state_mut().add_image("red.png".into(), png);
     h.run_steps(3);
     assert_eq!(h.state().views[0].content.selected, Some((0, 0)), "the picture is selected");
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let rect = added(&h)[0].content.rect();
     let r = item_on_screen(&h, rect);
     // The lower right corner to the middle: half the size, the upper left corner kept.
@@ -841,7 +817,7 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
         h.hover_at(grip + (to - grip) * (k as f32 / 4.0));
         h.run_steps(1);
     }
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, kept) > 100, "while dragged, the picture is drawn at its new size");
     assert_eq!(red(&pixels, gone), 0, "while dragged, the picture shows at its old size");
@@ -856,7 +832,7 @@ fn a_resized_added_picture_shows_only_at_its_new_size() {
     }
     assert_ne!(added(&h)[0].content.rect(), rect, "the resize is applied");
     h.state_mut().views[0].hold_rasters = false;
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h.run_steps(2);
     let pixels = h.render().unwrap();
     assert!(red(&pixels, kept) > 100 && red(&pixels, gone) == 0, "the page raster has the picture at its new size");

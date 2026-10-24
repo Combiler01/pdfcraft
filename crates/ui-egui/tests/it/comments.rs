@@ -40,18 +40,8 @@ fn harness_with_bytes(bytes: Vec<u8>, setup: impl FnOnce(&mut PdfCraftApp) + 'st
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
-}
-
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
 }
 
 /// A point on page 1 in PDF user space → screen (no rotation; MediaBox 300×200).
@@ -146,7 +136,7 @@ fn sidebar_comment_centres_the_annotation_at_high_zoom() {
             && let Ok(dir) = std::env::var("PDFCRAFT_SHOTS")
         {
             let _gpu = crate::gpu();
-            settle(&mut h);
+            crate::support::settle(&mut h);
             h.render().unwrap().save(format!("{dir}/comment-centred.png")).unwrap();
         }
     }
@@ -754,7 +744,7 @@ fn a_dragged_text_box_follows_a_rotated_view() {
         }
         h.state_mut().set_option("zoom", "150").unwrap();
         h.run_steps(3);
-        settle(&mut h);
+        crate::support::settle(&mut h);
         let screen = |h: &Harness<'static, PdfCraftApp>, x: f32, y: f32| {
             let r = h.state().views[0].page_screen_rect(0).expect("page 1 on screen");
             let (u, v) = (x / 300.0, (200.0 - y) / 200.0);
@@ -1726,7 +1716,7 @@ fn attachment_harness(setup: impl FnOnce(&mut PdfCraftApp) + 'static) -> Harness
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
 }
 
@@ -1915,7 +1905,7 @@ fn hovering_a_comment_shows_its_author_and_text() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     assert!(h.query_by_label_contains("Check this figure").is_none(), "no popup before hovering");
     let p = at(&h, 100.0, 85.0);
     h.hover_at(p);
@@ -1945,7 +1935,7 @@ fn preference_hides_author_only_highlight_hover_previews() {
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
 
     let p = at(&h, 100.0, 85.0);
     // By default, author-only hover is shown.
@@ -1992,7 +1982,7 @@ fn markup_hover_harness(pdf: Vec<u8>, view_rotation: u16) -> Harness<'static, Pd
         app
     });
     h.run_steps(4);
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h
 }
 

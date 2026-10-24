@@ -451,7 +451,7 @@ fn overflowing_tabs_can_be_reached_by_scrolling() {
     assert!(h.state().active.is_some_and(|i| i < 19));
     if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
         let _gpu = crate::gpu();
-        settle(&mut h);
+        crate::support::settle(&mut h);
         h.render().unwrap().save(format!("{dir}/overflow-tabs.png")).unwrap();
     }
 }
@@ -565,7 +565,7 @@ fn narrow_tab_strips_accept_vertical_wheel_scrolling() {
         assert!(h.get_by_label_contains("Display theme:").rect().right() <= width);
         if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
             let _gpu = crate::gpu();
-            settle(&mut h);
+            crate::support::settle(&mut h);
             h.render().unwrap().save(format!("{dir}/tabs-{width}.png")).unwrap();
         }
     }
@@ -612,23 +612,13 @@ endstream endobj
 trailer << /Root 1 0 R >>
 %%EOF";
 
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..200 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-
 #[test]
 fn find_counts_matches_across_pages() {
     let mut h = harness(|app| {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("find", "brown").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h.get_by_label_contains("of 2");
     let v = &h.state().views[0];
     let f = v.find.as_ref().expect("find open");
@@ -641,7 +631,7 @@ fn find_reports_no_matches() {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("find", "zebra").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     h.get_by_label("No matches");
 }
 
@@ -651,7 +641,7 @@ fn drag_selects_text_and_copy_returns_it() {
         app.open_bytes("text.pdf", None, TEXT_FIXTURE.to_vec()).expect("opens");
         app.set_option("left", "closed").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // "The quick brown fox": glyph 4 = 'q', glyph 14 = 'n' of "brown".
     let (a, b) = {
         let v = &h.state().views[0];
@@ -738,7 +728,7 @@ fn zoom_keeps_the_point_under_the_cursor_still() {
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let before = h.state().views[0].glyph_screen_pos(0, 4).expect("glyph on screen");
     let z = h.state().views[0].zoom;
     h.state_mut().views[0].zoom_at(z * 2.0, before);
@@ -754,7 +744,7 @@ fn trackpad_pinch_zooms_the_pdf_under_the_pointer() {
         app.set_option("left", "closed").unwrap();
         app.set_option("panel", "none").unwrap();
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let before = h.state().views[0].glyph_screen_pos(0, 4).expect("glyph on screen");
     let zoom = h.state().views[0].zoom;
     h.hover_at(before);
@@ -781,7 +771,7 @@ fn selection_works_in_every_view_rotation() {
             // Keep the whole rotated page on screen.
             app.set_option("zoom", "60").unwrap();
         });
-        settle(&mut h);
+        crate::support::settle(&mut h);
         let (a, b) = {
             let v = &h.state().views[0];
             (v.glyph_screen_pos(0, 4).expect("glyph"), v.glyph_screen_pos(0, 14).expect("glyph"))
@@ -1321,7 +1311,7 @@ fn document_tabs_expose_selection_and_activate_from_keyboard() {
         }
         if let Ok(dir) = std::env::var("PDFCRAFT_TAB_SHOTS") {
             let _gpu = crate::gpu();
-            settle(&mut h);
+            crate::support::settle(&mut h);
             h.render().unwrap().save(format!("{dir}/focused-tab-{key:?}.png")).unwrap();
         }
     }
@@ -1547,7 +1537,7 @@ fn short_window_rail_buttons_scroll_clear_of_page_navigation() {
         app.open_bytes("short.pdf", None, FIXTURE.to_vec()).unwrap();
         app
     });
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let rail = |h: &Harness<'static, PdfCraftApp>, label: &str| {
         h.query_all_by_label(label).map(|n| n.rect()).find(|r| r.left() >= width - 48.0).unwrap_or_else(|| panic!("{label} in the rail"))
     };

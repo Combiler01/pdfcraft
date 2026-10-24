@@ -115,12 +115,12 @@ fn a_pick_for_a_document_that_is_no_longer_active_is_dropped() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A scratch folder for one test.
+/// A scratch folder for one test, of its own for each call: the tests share one process and run
+/// in parallel, so two that picked the same name would delete each other's folder (#4186).
 fn scratch(name: &str) -> std::path::PathBuf {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let count = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("pdfcraft-pickers-{name}-{}-{count}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("pdfcraft-pickers-{name}-{}-{n}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

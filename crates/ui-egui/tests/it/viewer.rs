@@ -40,13 +40,7 @@ fn harness() -> Harness<'static, PdfCraftApp> {
         app
     });
     // Background rendering and text extraction can take seconds on a loaded CI runner (FreeBSD VM).
-    for _ in 0..3000 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     h
 }
 
@@ -1732,13 +1726,7 @@ fn a_picture_inside_form_artwork_under_text_is_selected_and_copied() {
         app.open_bytes("scan.pdf", None, pdf).unwrap();
         app
     });
-    for _ in 0..40 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     h.state_mut().system_clipboard = false;
     let i = h.state().active.unwrap();
     let r = h.state().views[i].page_screen_rect(0).expect("on screen");

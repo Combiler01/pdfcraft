@@ -103,17 +103,6 @@ fn ordinary_forms_and_documents_have_no_xfa_notice() {
     assert_eq!(xfa(&h), Some(pdfcraft_render::Xfa::Dynamic));
 }
 
-/// Run frames until the pages are drawn (fields can be clicked then).
-fn wait_for_pages(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..40 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-
 /// Click the centre of a field's widget.
 fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     let p = {
@@ -133,7 +122,7 @@ fn click_field(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
 #[test]
 fn xfa_buttons_run_their_scripts_in_the_app() {
     let mut h = open(pdfcraft_xfa::fixtures::shell(&pdfcraft_xfa::fixtures::scripted_template()));
-    wait_for_pages(&mut h);
+    crate::support::settle(&mut h);
     let names = |h: &Harness<'static, PdfCraftApp>| {
         let s = h.state();
         s.session.get(s.views[0].id).unwrap().form.iter().map(|f| f.name.clone()).collect::<Vec<_>>()
@@ -189,7 +178,7 @@ fn a_form_whose_scripts_were_turned_off_at_open_says_so() {
 fn scripts_turned_off_by_a_click_bring_a_closed_notice_bar_back() {
     let tpl = pdfcraft_xfa::fixtures::scripted_template().replace(r#"xfa.host.messageBox("Hello " + qty.rawValue);"#, RUNAWAY);
     let mut h = open(pdfcraft_xfa::fixtures::shell(&tpl));
-    wait_for_pages(&mut h);
+    crate::support::settle(&mut h);
     // The form opens with its scripts on, and the user closes the notice bar.
     let id = h.state().views[0].id;
     assert!(!h.state().session.get(id).unwrap().xfa_scripts_off());

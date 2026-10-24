@@ -2826,13 +2826,7 @@ fn deleting_a_draft_does_not_show_the_original_text_underneath() {
     h.drop_at(at);
     h.run_steps(3);
     h.state_mut().views[0].line_editor.as_mut().unwrap().text.clear();
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let shot = h.render().unwrap();
     if let Ok(path) = std::env::var("PDFCRAFT_TEXT_PREVIEW_SHOT") {
         shot.save(path).unwrap();
@@ -2931,13 +2925,7 @@ fn opening_a_paragraph_leaves_the_page_as_it_is() {
     });
     h.run_steps(4);
     assert!(h.state_mut().execute("edit.edit_text"));
-    for _ in 0..100 {
-        h.run_steps(1);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let page = h.state().views[0].page_screen_rect(0).expect("on screen");
     let k = page.width() / 300.0;
     let block = h.state().session.get(h.state().views[0].id).unwrap().text_blocks(0)[0].rect;
@@ -3008,13 +2996,7 @@ fn a_quick_click_into_another_paragraph_keeps_both_in_place() {
     };
     let (top, bottom) = (screen(&blocks[0]), screen(&blocks[1]));
     click_at(&mut h, top.center());
-    for _ in 0..100 {
-        h.run_steps(1);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     assert_eq!(h.state().views[0].line_editor.as_ref().map(|e| e.text.as_str()), Some("Top"));
     let ink = |pixels: &image::RgbaImage, r: egui::Rect| {
         (r.top() as u32..r.bottom() as u32)
@@ -4251,14 +4233,13 @@ fn save_paragraph_drag(h: &mut Harness<'static, PdfCraftApp>, name: &str, origin
 
 fn paragraph_drag_shot(h: &mut Harness<'static, PdfCraftApp>, name: &str) {
     if let Ok(directory) = std::env::var("PDFCRAFT_PARAGRAPH_DRAG_SHOTS") {
-        for _ in 0..60 {
-            h.run_steps(2);
-            if !h.state().render_pending() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        assert!(!h.state().render_pending(), "the screenshot must show the current document generation");
+        assert!(
+            crate::support::step_until(h, |h| {
+                h.run_steps(1);
+                !h.state().render_pending()
+            }),
+            "the screenshot must show the current document generation"
+        );
         let directory = std::path::Path::new(&directory);
         std::fs::create_dir_all(directory).unwrap();
         h.render().unwrap().save(directory.join(name)).unwrap();
@@ -5408,14 +5389,13 @@ fn image_pixels_follow_the_frame_while_a_corner_is_dragged() {
     h.run_steps(4);
     // The dragged pixels are the page raster's: wait for it, as a slow runner may not have it yet
     // (the drag then drew no picture at all).
-    for _ in 0..400 {
-        h.run_steps(1);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-    assert!(!h.state().render_pending(), "the page raster arrives");
+    assert!(
+        crate::support::step_until(&mut h, |h| {
+            h.run_steps(1);
+            !h.state().render_pending()
+        }),
+        "the page raster arrives"
+    );
     let page = h.state().views[0].page_screen_rect(0).unwrap();
     let at = |x: f32, y: f32| egui::pos2(page.left() + x / 200.0 * page.width(), page.top() + (300.0 - y) / 300.0 * page.height());
     let p = at(95.0, 195.0);
@@ -6989,13 +6969,7 @@ fn a_paragraph_running_off_its_page_edits_without_covering_the_next_page() {
     h.drag_at(p);
     h.run_steps(1);
     h.drop_at(p);
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     assert!(
         h.state().views[0].line_editor.as_ref().is_some_and(|e| e.page == 0 && e.text.contains("line 50")),
         "the paragraph's off-page lines are in it"
@@ -7084,15 +7058,13 @@ fn mode_tabs_keep_the_hand_over_page_text_scrolled_under_them() {
     h.run_steps(4);
     let top = h.state().views[0].page_screen_rect(0).expect("on screen").top();
     let mut cursor = egui::CursorIcon::Default;
-    for _ in 0..50 {
+    let text_cursor = crate::support::step_until(&mut h, |h| {
         h.hover_at(text.center() + egui::vec2(0.0, top));
         h.run_steps(2);
         cursor = h.output().platform_output.cursor_icon;
-        if cursor == egui::CursorIcon::Text {
-            break;
-        }
-    }
-    assert_eq!(cursor, egui::CursorIcon::Text);
+        cursor == egui::CursorIcon::Text
+    });
+    assert!(text_cursor, "the I-beam over page text, not {cursor:?}");
     assert_eq!(mode_tab_cursors(&mut h, text), HAND_ON_EVERY_TAB);
 }
 

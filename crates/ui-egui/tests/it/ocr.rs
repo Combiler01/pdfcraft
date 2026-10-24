@@ -133,13 +133,7 @@ fn an_ocr_word_opens_for_editing_and_stays_open() {
         assert!(app.execute("edit.edit_text"));
         app
     });
-    for _ in 0..60 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let (r, k) = {
         let app = h.state();
         let d = app.session.get(app.views[0].id).unwrap();

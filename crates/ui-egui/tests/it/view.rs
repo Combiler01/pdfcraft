@@ -1266,13 +1266,7 @@ fn highlight_fields_tints_the_field_area() {
     h.state_mut().set_option("panel", "none").unwrap();
     // Highlighting is on by default; start from plain fields.
     h.state_mut().set_option("fields", "off").unwrap();
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     // The field spans x 50..250, y 300..330 (PDF space, y up) on a 300×400 page; sample inside it.
     let at = egui::pos2(r.min.x + r.width() * (60.0 / 300.0), r.min.y + r.height() * (1.0 - 305.0 / 400.0));
@@ -1409,13 +1403,7 @@ fn required_radio_buttons_get_a_round_red_border() {
         app.set_option("fields", "on").unwrap();
         app
     });
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     let ppp = h.ctx.pixels_per_point();
     let img = h.render().expect("renders");
@@ -1560,13 +1548,7 @@ fn required_fields_get_a_red_border_when_highlighting() {
     h.state_mut().set_option("fields", "on").unwrap();
     let props = pdfcraft_engine::FieldProps { required: Some(true), ..Default::default() };
     h.state_mut().apply_edit(pdfcraft_engine::Edit::SetFieldProps { name: "fullname".into(), props: Box::new(props) });
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(&mut h);
     let r = rect(&h, 0).expect("page 1");
     // Just inside the left edge of the field (x 50, y 300..330 on a 300×400 page).
     let ppp = h.ctx.pixels_per_point();
@@ -1622,13 +1604,7 @@ trailer << /Root 1 0 R >>
 /// Mean and largest difference between page 1 on screen and the page rendered directly at the
 /// view's exact device scale, over the lined area of `page_raster_maps_one_to_one_onto_screen_pixels`.
 fn compare_page_with_raster(h: &mut Harness<'static, PdfCraftApp>, pdf: &[u8], zoom: f32) -> (f64, u8) {
-    for _ in 0..100 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
+    crate::support::settle(h);
     let ppp = h.ctx.pixels_per_point();
     let r = rect(h, 0).expect("page 1");
     let img = h.render().expect("renders");
@@ -1693,16 +1669,6 @@ fn grid_harness(pdf: Vec<u8>, zoom: &str) -> Harness<'static, PdfCraftApp> {
     })
 }
 
-fn settle(h: &mut Harness<'static, PdfCraftApp>) {
-    for _ in 0..400 {
-        h.run_steps(2);
-        if !h.state().render_pending() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-
 /// Detail in the middle of the window: the summed difference between neighbouring pixels.
 fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
     let img = h.render().expect("renders");
@@ -1720,7 +1686,7 @@ fn centre_detail(h: &mut Harness<'static, PdfCraftApp>) -> u64 {
 fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
     let _gpu = gpu();
     let mut h = grid_harness(fine_grid_pdf(), "300");
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let sharp = centre_detail(&mut h);
     // The first frame at a new zoom has no tiles for it yet (they are requested at its end).
     h.state_mut().set_option("zoom", "310").unwrap();
@@ -1736,13 +1702,13 @@ fn zooming_a_tiled_page_shows_its_earlier_tiles_until_new_ones_arrive() {
 fn returning_to_a_visited_zoom_reuses_its_cached_tiles() {
     let _gpu = gpu();
     let mut h = grid_harness(fine_grid_pdf(), "300");
-    settle(&mut h);
+    crate::support::settle(&mut h);
     let before = h.state().views[0].tiles_debug(0);
     assert!(!before.is_empty(), "the 300 % page should be tiled, but it cached no tiles");
     // Zoom right out, where the 1200 pt page fits in one raster and is not tiled at all, so
     // none of its tiles is demanded...
     h.state_mut().set_option("zoom", "50").unwrap();
-    settle(&mut h);
+    crate::support::settle(&mut h);
     // ...then back to the first zoom, which was already rendered sharp.
     h.state_mut().set_option("zoom", "300").unwrap();
     h.step();
