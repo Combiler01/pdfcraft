@@ -10,11 +10,11 @@
 //! otherwise it is set in Helvetica (WinAnsi), and the result says the font was substituted.
 //! Reflowing a paragraph to a new width is not done here (see `edit.text-reflow`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
 use pdfcraft_content::{Matrix, Op, Pieces, parse, serialize_ops};
-use pdfcraft_cos::{DecodeBudget, Dict, Document, Object, PdfString, Stream};
+use pdfcraft_cos::{DecodeBudget, Dict, Document, ObjRef, Object, PdfString, Stream};
 use pdfcraft_fonts::pdf::Metrics;
 use pdfcraft_fonts::{CraftFont, GlyphError, japanese_glyph_from};
 
@@ -156,6 +156,270 @@ pub fn register_text_font(doc: &mut Document, page: usize, bytes: &[u8]) -> Resu
     resources.set(b"Font".to_vec(), Object::Dict(fonts));
     doc.update_dict(p.obj, |d| d.set(b"Resources".to_vec(), Object::Dict(resources)))?;
     Ok(name)
+}
+
+fn page_content_bytes_for_subset(doc: &Document, page: &pdfcraft_model::Page) -> Vec<u8> {
+    let Some(c) = page.dict.get(b"Contents") else { return Vec::new() };
+    match doc.resolve(c).as_ref() {
+        Object::Stream(s) => s.decoded_within(16 << 20).unwrap_or_default(),
+        Object::Array(a) => a
+            .iter()
+            .flat_map(|x| match doc.resolve(x).as_ref() {
+                Object::Stream(s) => s.decoded_within(16 << 20).unwrap_or_default(),
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Subset any added TrueType fonts in `doc` (marked with `/PCFullFont`) to only the glyphs used,
+/// update their BaseFont/FontName with an `ABCDEF+` subset prefix, and remove `/PCFullFont`.
+pub fn subset_document_fonts(doc: &mut Document) -> Result<(), EditError> {
+    let mut added_programs: Vec<ObjRef> = Vec::new();
+    for (r, obj) in doc.scan_objects() {
+        if let Object::Stream(s) = obj.as_ref()
+            && s.dict.get(b"PCFullFont").is_some()
+        {
+            added_programs.push(r);
+        }
+    }
+    if added_programs.is_empty() {
+        return Ok(());
+    }
+
+    let mut desc_for_program: HashMap<ObjRef, ObjRef> = HashMap::new();
+    let mut cid_for_desc: HashMap<ObjRef, ObjRef> = HashMap::new();
+    let mut type0_for_cid: HashMap<ObjRef, Vec<ObjRef>> = HashMap::new();
+
+    for (r, obj) in doc.scan_objects() {
+        if let Object::Dict(d) = obj.as_ref() {
+            if d.name(b"Type") == Some(b"FontDescriptor") {
+                if let Some(Object::Ref(p_ref)) = d.get(b"FontFile2").or_else(|| d.get(b"FontFile3"))
+                    && added_programs.contains(p_ref)
+                {
+                    desc_for_program.insert(*p_ref, r);
+                }
+            } else if d.name(b"Type") == Some(b"Font") {
+                if d.name(b"Subtype") == Some(b"CIDFontType2") || d.name(b"Subtype") == Some(b"CIDFontType0") {
+                    if let Some(Object::Ref(d_ref)) = d.get(b"FontDescriptor") {
+                        cid_for_desc.insert(*d_ref, r);
+                    }
+                } else if d.name(b"Subtype") == Some(b"Type0") {
+                    let desc_opt = d.get(b"DescendantFonts").map(|o| doc.resolve(o));
+                    if let Some(desc_arc) = desc_opt
+                        && let Object::Array(descendants) = desc_arc.as_ref()
+                        && let Some(Object::Ref(c_ref)) = descendants.first()
+                    {
+                        type0_for_cid.entry(*c_ref).or_default().push(r);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut type0_to_program: HashMap<ObjRef, ObjRef> = HashMap::new();
+    for (&prog, &desc) in &desc_for_program {
+        if let Some(&cid) = cid_for_desc.get(&desc)
+            && let Some(type0s) = type0_for_cid.get(&cid)
+        {
+            for &t0 in type0s {
+                type0_to_program.insert(t0, prog);
+            }
+        }
+    }
+
+    let pages = pdfcraft_model::pages(doc);
+    let mut used_cids_by_program: HashMap<ObjRef, BTreeSet<u16>> = HashMap::new();
+
+    for page in &pages {
+        let Some(res) = page.dict.get(b"Resources").and_then(|r| doc.dict(r)) else { continue };
+        let mut font_res_to_program: HashMap<Vec<u8>, ObjRef> = HashMap::new();
+        if let Some(fonts) = res.get(b"Font").and_then(|f| doc.dict(f)) {
+            for (name, val) in fonts.iter() {
+                if let Object::Ref(r) = val
+                    && let Some(&prog) = type0_to_program.get(r)
+                {
+                    font_res_to_program.insert(name.clone(), prog);
+                }
+            }
+        }
+        if font_res_to_program.is_empty() {
+            continue;
+        }
+
+        let content = page_content_bytes_for_subset(doc, page);
+        let parsed = parse(&content);
+        let mut current_font: Option<Vec<u8>> = None;
+        for op in parsed.ops {
+            if op.is("Tf") {
+                current_font = op.operands.first().and_then(|o| o.as_name()).map(|n| n.to_vec());
+            } else if let Some(cur) = current_font.as_ref()
+                && let Some(&prog) = font_res_to_program.get(cur)
+            {
+                let cids = used_cids_by_program.entry(prog).or_default();
+                if op.is("Tj") || op.is("'") {
+                    if let Some(s) = op.operands.first().and_then(|o| o.as_string()) {
+                        for chunk in s.bytes.as_chunks::<2>().0 {
+                            cids.insert(u16::from_be_bytes(*chunk));
+                        }
+                    }
+                } else if op.is("\"") {
+                    if let Some(s) = op.operands.get(2).and_then(|o| o.as_string()) {
+                        for chunk in s.bytes.as_chunks::<2>().0 {
+                            cids.insert(u16::from_be_bytes(*chunk));
+                        }
+                    }
+                } else if op.is("TJ")
+                    && let Some(arr) = op.operands.first().and_then(|o| o.as_array())
+                {
+                    for item in arr {
+                        if let Some(s) = item.as_string() {
+                            for chunk in s.bytes.as_chunks::<2>().0 {
+                                cids.insert(u16::from_be_bytes(*chunk));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    for prog_ref in added_programs {
+        let Some(&desc_ref) = desc_for_program.get(&prog_ref) else { continue };
+        let Some(&cid_ref) = cid_for_desc.get(&desc_ref) else { continue };
+        let empty_set = BTreeSet::new();
+        let used_cids = used_cids_by_program.get(&prog_ref).unwrap_or(&empty_set);
+
+        let Some(cid_dict) = doc.dict(&Object::Ref(cid_ref)) else { continue };
+        let cid_to_gid_obj = cid_dict.get(b"CIDToGIDMap").cloned();
+        let mut map_bytes: Option<(ObjRef, Vec<u8>)> = None;
+        let mut used_gids = BTreeSet::new();
+        used_gids.insert(0u16);
+
+        if let Some(Object::Ref(map_ref)) = cid_to_gid_obj {
+            if let Object::Stream(map_stream) = doc.get(map_ref).as_ref()
+                && let Ok(bytes) = map_stream.decoded_within(1 << 17)
+            {
+                for &cid in used_cids {
+                    let offset = usize::from(cid).saturating_mul(2);
+                    if let Some(chunk) = bytes.get(offset..offset.saturating_add(2))
+                        && chunk.len() == 2
+                    {
+                        let gid = u16::from_be_bytes([chunk[0], chunk[1]]);
+                        used_gids.insert(gid);
+                    }
+                }
+                map_bytes = Some((map_ref, bytes));
+            }
+        } else {
+            for &cid in used_cids {
+                used_gids.insert(cid);
+            }
+        }
+
+        let Object::Stream(prog_stream) = doc.get(prog_ref).as_ref().clone() else { continue };
+        let Ok(font_bytes) = prog_stream.decoded_within(16 << 20) else { continue };
+
+        let prefix = pdfcraft_fonts::embedding::subset_tag(u64::from(prog_ref.num));
+        let mut desc_dict = doc.dict(&Object::Ref(desc_ref)).unwrap_or_default();
+        let orig_name =
+            desc_dict.name(b"FontName").or_else(|| cid_dict.name(b"BaseFont")).and_then(|n| std::str::from_utf8(n).ok()).unwrap_or("Font");
+        let clean_name = orig_name.rsplit('+').next().unwrap_or(orig_name);
+        let subset_name = format!("{prefix}{clean_name}");
+
+        let used_gids_vec: Vec<u16> = used_gids.into_iter().collect();
+
+        if let Ok((subset_bytes, old_to_new)) = pdfcraft_fonts::embedding::subset_truetype(&font_bytes, &used_gids_vec, &subset_name) {
+            let mut new_prog_dict = prog_stream.dict.clone();
+            new_prog_dict.remove(b"PCFullFont");
+            new_prog_dict.set(b"Length1".to_vec(), Object::Int(subset_bytes.len() as i64));
+            doc.set(prog_ref, Object::Stream(Stream::flate(new_prog_dict, &subset_bytes)));
+
+            if let Some((map_ref, mut m_bytes)) = map_bytes {
+                let max_cid = used_cids.iter().copied().next_back().unwrap_or(0);
+                let needed_len = usize::from(max_cid).saturating_add(1).saturating_mul(2);
+                if m_bytes.len() > needed_len {
+                    m_bytes.truncate(needed_len);
+                }
+                for i in 0..m_bytes.len() / 2 {
+                    let s_idx = i.saturating_mul(2);
+                    if let Some(chunk) = m_bytes.get(s_idx..s_idx.saturating_add(2)) {
+                        let old_gid = u16::from_be_bytes([chunk[0], chunk[1]]);
+                        let new_gid = old_to_new.get(&old_gid).copied().unwrap_or(0);
+                        if let Some(target) = m_bytes.get_mut(s_idx..s_idx.saturating_add(2)) {
+                            target.copy_from_slice(&new_gid.to_be_bytes());
+                        }
+                    }
+                }
+                doc.set(map_ref, Object::Stream(Stream::flate(Dict::new(), &m_bytes)));
+            }
+        } else {
+            let mut new_prog_dict = prog_stream.dict.clone();
+            new_prog_dict.remove(b"PCFullFont");
+            doc.set(prog_ref, Object::Stream(Stream::flate(new_prog_dict, &font_bytes)));
+        }
+
+        desc_dict.set(b"FontName".to_vec(), Object::name(&subset_name));
+        doc.set(desc_ref, Object::Dict(desc_dict));
+
+        let mut new_cid_dict = cid_dict.clone();
+        new_cid_dict.set(b"BaseFont".to_vec(), Object::name(&subset_name));
+
+        let first_t0 = type0_for_cid.get(&cid_ref).and_then(|t0s| t0s.first()).and_then(|r| doc.dict(&Object::Ref(*r)));
+        let m_opt = first_t0.as_ref().map(|d| Metrics::from_dict(doc, d));
+
+        if let Some(ref m) = m_opt {
+            let mut w_array = Vec::new();
+            for &cid in used_cids {
+                let w = m.width(u32::from(cid)) * 1000.0;
+                w_array.push(Object::Int(i64::from(cid)));
+                w_array.push(Object::Array(vec![Object::Real(w)]));
+            }
+            if !w_array.is_empty() {
+                new_cid_dict.set(b"W".to_vec(), Object::Array(w_array));
+            }
+
+            let mut cmap = String::from(
+                "/CIDInit /ProcSet findresource begin\n12 dict begin\nbegincmap\n/CMapName /PCUnicode def\n/CMapType 2 def\n1 begincodespacerange\n<0000> <FFFF>\nendcodespacerange\n",
+            );
+            let used_cids_vec: Vec<u16> = used_cids.iter().copied().collect();
+            for chunk in used_cids_vec.chunks(100) {
+                use std::fmt::Write as _;
+                let _ = writeln!(cmap, "{} beginbfchar", chunk.len());
+                for &cid in chunk {
+                    let text = m.decode(&cid.to_be_bytes());
+                    let hex: String = if text.is_empty() { format!("{cid:04X}") } else { text.encode_utf16().map(|u| format!("{u:04X}")).collect() };
+                    let _ = writeln!(cmap, "<{cid:04X}> <{hex}>");
+                }
+                cmap.push_str("endbfchar\n");
+            }
+            cmap.push_str("endcmap\nCMapName currentdict /CMap defineresource pop\nend\nend\n");
+
+            if let Some(type0s) = type0_for_cid.get(&cid_ref) {
+                for &t0_ref in type0s {
+                    if let Some(t0_dict) = doc.dict(&Object::Ref(t0_ref))
+                        && let Some(Object::Ref(to_uni_ref)) = t0_dict.get(b"ToUnicode")
+                    {
+                        doc.set(*to_uni_ref, Object::Stream(Stream::flate(Dict::new(), cmap.as_bytes())));
+                    }
+                }
+            }
+        }
+
+        doc.set(cid_ref, Object::Dict(new_cid_dict));
+
+        if let Some(type0s) = type0_for_cid.get(&cid_ref) {
+            for &t0_ref in type0s {
+                if let Some(mut t0_dict) = doc.dict(&Object::Ref(t0_ref)) {
+                    t0_dict.set(b"BaseFont".to_vec(), Object::name(&subset_name));
+                    doc.set(t0_ref, Object::Dict(t0_dict));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Read-only draft bounds, measured with the same PDF rewrite used by Apply/Save.
