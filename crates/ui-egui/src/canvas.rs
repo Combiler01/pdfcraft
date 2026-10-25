@@ -1020,25 +1020,31 @@ pub(crate) enum PageMenuAction {
     DocProperties,
 }
 
-pub(crate) fn default_page_context_menu(
-    ui: &mut egui::Ui,
-    page: usize,
-    at: [f64; 2],
-    can_copy: bool,
-    can_paste: bool,
-    action: &mut Option<PageMenuAction>,
-) {
+pub(crate) struct PageMenuPerms {
+    pub can_modify: bool,
+    pub can_assemble: bool,
+    pub can_annotate: bool,
+    pub can_print: bool,
+    pub can_copy: bool,
+    pub can_paste: bool,
+}
+
+pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64; 2], perms: PageMenuPerms, action: &mut Option<PageMenuAction>) {
     // Top horizontal icon bar: Rotate CCW, Print, Select tool, Hand tool, Marquee Zoom
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if crate::icons::button(ui, "rotate-ccw", 24.0, false, tl!("Rotate Counterclockwise")).clicked() {
-            *action = Some(PageMenuAction::RotateCCW(page));
-            ui.close();
-        }
-        if crate::icons::button(ui, "printer", 24.0, false, tl!("Print")).clicked() {
-            *action = Some(PageMenuAction::Print);
-            ui.close();
-        }
+        ui.add_enabled_ui(perms.can_assemble, |ui| {
+            if crate::icons::button(ui, "rotate-ccw", 24.0, false, tl!("Rotate Counterclockwise")).clicked() {
+                *action = Some(PageMenuAction::RotateCCW(page));
+                ui.close();
+            }
+        });
+        ui.add_enabled_ui(perms.can_print, |ui| {
+            if crate::icons::button(ui, "printer", 24.0, false, tl!("Print")).clicked() {
+                *action = Some(PageMenuAction::Print);
+                ui.close();
+            }
+        });
         if crate::icons::button(ui, "mouse-pointer-2", 24.0, false, tl!("Select Tool")).clicked() {
             *action = Some(PageMenuAction::SelectTool);
             ui.close();
@@ -1055,49 +1061,49 @@ pub(crate) fn default_page_context_menu(
 
     ui.separator();
 
-    if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy")).shortcut_text("Ctrl+C")).clicked() {
+    if ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Copy")).shortcut_text("Ctrl+C")).clicked() {
         *action = Some(PageMenuAction::Copy);
         ui.close();
     }
-    if ui.add_enabled(can_paste, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V")).clicked() {
+    if ui.add_enabled(perms.can_paste, egui::Button::new(tl!("Paste")).shortcut_text("Ctrl+V")).clicked() {
         *action = Some(PageMenuAction::Paste(page, at));
         ui.close();
     }
 
     ui.separator();
 
-    if ui.button(tl!("Add comment")).clicked() {
+    if ui.add_enabled(perms.can_annotate, egui::Button::new(tl!("Add comment"))).clicked() {
         *action = Some(PageMenuAction::AddComment(page, at));
         ui.close();
     }
-    if ui.button(tl!("Add bookmark")).clicked() {
+    if ui.add_enabled(perms.can_assemble, egui::Button::new(tl!("Add bookmark"))).clicked() {
         *action = Some(PageMenuAction::AddBookmark(page));
         ui.close();
     }
-    if ui.button(tl!("Take a snapshot")).clicked() {
+    if ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Take a snapshot"))).clicked() {
         *action = Some(PageMenuAction::TakeSnapshot);
         ui.close();
     }
 
     ui.separator();
 
-    if ui.add(egui::Button::new(egui::RichText::new(tl!("Edit this PDF")).strong())).clicked() {
+    if ui.add_enabled(perms.can_modify, egui::Button::new(egui::RichText::new(tl!("Edit this PDF")).strong())).clicked() {
         *action = Some(PageMenuAction::EditPdf);
         ui.close();
     }
-    if ui.button(tl!("Add text")).clicked() {
+    if ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Add text"))).clicked() {
         *action = Some(PageMenuAction::AddText);
         ui.close();
     }
-    if ui.button(tl!("Add image")).clicked() {
+    if ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Add image"))).clicked() {
         *action = Some(PageMenuAction::AddImage);
         ui.close();
     }
-    if ui.button(tl!("Delete page")).clicked() {
+    if ui.add_enabled(perms.can_assemble, egui::Button::new(tl!("Delete page"))).clicked() {
         *action = Some(PageMenuAction::DeletePage(page));
         ui.close();
     }
-    if ui.button(tl!("Export this PDF")).clicked() {
+    if ui.add_enabled(perms.can_copy, egui::Button::new(tl!("Export this PDF"))).clicked() {
         *action = Some(PageMenuAction::ExportPdf);
         ui.close();
     }
@@ -4682,8 +4688,16 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             let (page, at) = view.comments.context_at.unwrap_or((view.current, [0.0, 0.0]));
             let can_copy_items = can_copy && (view.image_selection.is_some() || view.selected_text().is_some() || has_copy_image);
-            let can_paste = can_paste_image;
-            default_page_context_menu(ui, page, at, can_copy_items, can_paste, &mut page_action);
+            let can_paste = can_paste_image && can_modify;
+            let perms = PageMenuPerms {
+                can_modify,
+                can_assemble: doc.allows_assembly(),
+                can_annotate: allowed,
+                can_print: doc.allows_printing(),
+                can_copy: can_copy_items,
+                can_paste,
+            };
+            default_page_context_menu(ui, page, at, perms, &mut page_action);
         });
         if !resp.context_menu_opened() {
             ui.ctx().data_mut(|d| d.insert_persisted(crate::edit_text_ui::image_menu_id(), false));

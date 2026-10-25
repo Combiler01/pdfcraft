@@ -3712,6 +3712,50 @@ fn default_page_context_menu_when_not_in_edit_mode() {
 }
 
 #[test]
+fn page_context_menu_items_disabled_on_protected_pdf() {
+    let bytes = protected("", "owner", 0b0100);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("protected.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert_eq!(h.state().quick_tool, pdfcraft_ui_egui::QuickTool::Select);
+
+    let doc_id = h.state().views[0].id;
+    let doc = h.state().session.get(doc_id).unwrap();
+    assert!(!doc.allows_modification());
+    assert!(!doc.allows_assembly());
+    assert!(!doc.allows_annotation());
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+    // Right click on page in Select mode
+    h.hover_at(c);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    let is_disabled =
+        |h: &mut Harness<'static, PdfCraftApp>, label: &str| h.query_by(|n| n.label().as_deref() == Some(label) && n.is_disabled()).is_some();
+
+    // Context menu is open; check restricted items are greyed out (disabled)
+    assert!(is_disabled(&mut h, "Edit this PDF"), "Edit this PDF should be disabled on protected document");
+    assert!(is_disabled(&mut h, "Add text"), "Add text should be disabled");
+    assert!(is_disabled(&mut h, "Add image"), "Add image should be disabled");
+    assert!(is_disabled(&mut h, "Delete page"), "Delete page should be disabled");
+    assert!(is_disabled(&mut h, "Add comment"), "Add comment should be disabled");
+    assert!(is_disabled(&mut h, "Add bookmark"), "Add bookmark should be disabled");
+
+    // View-only items should still be enabled
+    assert!(!is_disabled(&mut h, "Select Tool"));
+    assert!(!is_disabled(&mut h, "Hand Tool"));
+    assert!(!is_disabled(&mut h, "Find text or tools"));
+}
+
+#[test]
 fn image_edge_handle_stretch_and_crop_mode() {
     let mut png = Vec::new();
     image::RgbImage::from_pixel(100, 100, image::Rgb([100, 150, 200]))

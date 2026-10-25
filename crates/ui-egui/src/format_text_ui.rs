@@ -77,6 +77,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
     widgets::section_title(ui, tl!("Format text"));
 
     // The font, across the panel.
+    ui.spacing_mut().combo_height = 360.0;
     let width = ui.available_width();
     let font_resp = egui::ComboBox::from_id_salt("format-font")
         .selected_text(fonts.shown.as_str())
@@ -104,22 +105,74 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                     out.font = Some(FontChoice::Load);
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                ui.menu_button(tl!("Installed fonts…"), |ui| match crate::files::installed_font_files(ui.ctx()) {
-                    Some(list) if list.is_empty() => {
-                        ui.label(tl!("No openly licensed document fonts found. Load a font file."));
-                    }
-                    Some(list) => {
-                        for font in list {
-                            if ui.button(&font.face).clicked() {
-                                out.font = Some(FontChoice::Installed(font.path));
-                                ui.close();
+                ui.menu_button(tl!("Installed fonts…"), |ui| {
+                    ui.set_min_width(260.0);
+                    match crate::files::installed_font_files(ui.ctx()) {
+                        Some(list) if list.is_empty() => {
+                            ui.label(tl!("No openly licensed document fonts found. Load a font file."));
+                        }
+                        Some(list) => {
+                            let search_id = ui.id().with("installed-font-search");
+                            let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("🔍").size(12.0));
+                                let resp = ui
+                                    .add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search…")).desired_width(ui.available_width() - 8.0));
+                                if resp.changed() {
+                                    ui.data_mut(|d| d.insert_temp(search_id, query.clone()));
+                                }
+                            });
+                            ui.separator();
+
+                            let query_lower = query.trim().to_lowercase();
+                            let mut families: std::collections::BTreeMap<&str, Vec<&pdfcraft_engine::text_fonts::FontFile>> =
+                                std::collections::BTreeMap::new();
+                            for font in &list {
+                                if query_lower.is_empty()
+                                    || font.family.to_lowercase().contains(&query_lower)
+                                    || font.face.to_lowercase().contains(&query_lower)
+                                {
+                                    families.entry(&font.family).or_default().push(font);
+                                }
+                            }
+
+                            if families.is_empty() {
+                                ui.label(tl!("No openly licensed document fonts found. Load a font file."));
+                            } else {
+                                egui::ScrollArea::vertical().max_height(350.0).show(ui, |ui| {
+                                    for (family, faces) in families {
+                                        if faces.len() == 1 {
+                                            if let Some(&font) = faces.first() {
+                                                let label =
+                                                    if font.face != font.family && !font.face.is_empty() { font.face.as_str() } else { family };
+                                                if ui.button(label).clicked() {
+                                                    out.font = Some(FontChoice::Installed(font.path.clone()));
+                                                    ui.close();
+                                                }
+                                            }
+                                        } else {
+                                            ui.menu_button(family, |ui| {
+                                                ui.set_min_width(180.0);
+                                                for font in faces {
+                                                    let label =
+                                                        font.face.strip_prefix(family).map(str::trim).filter(|s| !s.is_empty()).unwrap_or(&font.face);
+                                                    if ui.button(label).clicked() {
+                                                        out.font = Some(FontChoice::Installed(font.path.clone()));
+                                                        ui.close();
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                });
                             }
                         }
-                    }
-                    None => {
-                        ui.label(tl!("Finding document fonts…"));
+                        None => {
+                            ui.label(tl!("Finding document fonts…"));
+                        }
                     }
                 });
+                ui.add_space(4.0);
             }
         })
         .response;
