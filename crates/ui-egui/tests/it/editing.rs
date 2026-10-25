@@ -7268,3 +7268,86 @@ fn clicking_after_image_context_menu_action_resets_menu_state_and_updates_select
     h.run_steps(2);
     assert!(h.state().views[0].image_selection.is_none(), "clicking empty page clears selection after context menu action");
 }
+
+#[test]
+fn format_panel_shows_selection_size_and_updates_after_font_applied() {
+    let mut objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [4 0 R] /Count 1 /MediaBox [0 0 200 300] >>".into(),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /Page /Parent 2 0 R /Contents 5 0 R /Resources << /Font << /F1 3 0 R >> >> >>".into(),
+    ];
+    let body = "BT /F1 24 Tf 20 200 Td (Heading) Tj /F1 12 Tf 0 -25 Td (Paragraph) Tj ET";
+    objs.push(format!("<< /Length {} >>\nstream\n{body}\nendstream", body.len()));
+    let mut pdf = Vec::from(b"%PDF-1.7\n");
+    let mut xref = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        xref.push(pdf.len());
+        pdf.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref_pos = pdf.len();
+    pdf.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in xref {
+        pdf.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    pdf.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n", objs.len() + 1).as_bytes());
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("test.pdf", None, pdf).expect("fixture opens");
+        app
+    });
+    h.run_steps(4);
+
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 180.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+
+    assert!(h.state().views[0].line_editor.is_some(), "editor opened");
+    let text = h.state().views[0].line_editor.as_ref().unwrap().text.clone();
+    assert!(text.contains("Paragraph"), "text is {text}");
+
+    // Select the 12 pt paragraph text "Paragraph" via keyboard selection in the TextEdit
+    h.key_press_modifiers(Modifiers::COMMAND, Key::ArrowRight);
+    h.run_steps(1);
+    for _ in 0.."Paragraph".len() {
+        h.key_press_modifiers(Modifiers::SHIFT, Key::ArrowLeft);
+        h.run_steps(1);
+    }
+    use egui::accesskit::Role;
+    let size_node = h.get_by_role_and_label(Role::ComboBox, "Font size");
+    assert_eq!(size_node.value().as_deref(), Some("12"), "size combo box value is 12");
+
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
+    assert_eq!(font_node.value().as_deref(), Some("Helvetica"), "initial font is Helvetica");
+
+    // Apply Times to the selection
+    font_node.click();
+    h.run_steps(2);
+    h.get_by_label("Times").click();
+    h.run_steps(4);
+
+    // Font combo box for the whole block is now Mixed because Heading is Helvetica and Paragraph is Times
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
+    assert_eq!(font_node.value().as_deref(), Some("Mixed"), "whole block has mixed fonts");
+
+    // Apply Times to the whole block
+    font_node.click();
+    h.run_steps(2);
+    h.get_by_label("Times").click();
+    h.run_steps(4);
+
+    // Now all text is Times, so font combo box updates to Times
+    let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
+    assert_eq!(font_node.value().as_deref(), Some("Times"), "font combo box updates to Times");
+}
+

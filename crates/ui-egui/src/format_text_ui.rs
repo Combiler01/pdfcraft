@@ -37,6 +37,7 @@ pub(crate) struct Fonts<'a> {
     pub sources: Option<&'a [(String, String)]>,
     /// The name the list shows for the current choice.
     pub shown: String,
+    pub mixed_size: bool,
 }
 
 /// What the panel changed: the style (in place) and a font picked from the list.
@@ -77,7 +78,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
 
     // The font, across the panel.
     let width = ui.available_width();
-    egui::ComboBox::from_id_salt("format-font")
+    let font_resp = egui::ComboBox::from_id_salt("format-font")
         .selected_text(fonts.shown.as_str())
         .width(width)
         .show_ui(ui, |ui| {
@@ -121,22 +122,25 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                 });
             }
         })
-        .response
-        .on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));
+        .response;
+    font_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), tl!("Font")));
+    font_resp.on_hover_text(format!("{}\n{}", tl!("Font"), tl!("Thai and Arabic use regular fallback fonts when available.")));
     ui.add_space(4.0);
 
     // Size and colour | bullets, numbering and alignment.
     row(ui, |ui| {
-        let _ = egui::ComboBox::from_id_salt("format-size")
-            .selected_text(number(look.size))
+        let size_str = if fonts.mixed_size || look.size <= 0.0 { tl!("Mixed").to_string() } else { number(look.size) };
+        let size_resp = egui::ComboBox::from_id_salt("format-size")
+            .selected_text(size_str)
             .width(64.0)
             .show_ui(ui, |ui| {
                 for size in SIZES {
                     ui.selectable_value(&mut look.size, size, number(size));
                 }
             })
-            .response
-            .on_hover_text(tl!("Font size"));
+            .response;
+        size_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), tl!("Font size")));
+        size_resp.on_hover_text(tl!("Font size"));
         let swatch = colour_button(ui, t, look.color);
         egui::Popup::menu(&swatch).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             if let Some(picked) = crate::comments::swatch_grid(ui, Some(look.color)) {
@@ -204,12 +208,13 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
             labelled_icon(ui, t, "arrow-up-down", tl!("Line spacing"));
             let own = tl!("Auto").to_string();
             let shown = if e.line_spacing == 0.0 { own.clone() } else { number(e.line_spacing) };
-            egui::ComboBox::from_id_salt("format-line-spacing").selected_text(shown).width(half).show_ui(ui, |ui| {
+            let spacing_resp = egui::ComboBox::from_id_salt("format-line-spacing").selected_text(shown).width(half).show_ui(ui, |ui| {
                 ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
                 for v in LINE_SPACINGS {
                     ui.selectable_value(&mut e.line_spacing, v, number(v));
                 }
-            });
+            }).response;
+            spacing_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), tl!("Line spacing")));
             ui.add_space(8.0);
             ui.add_enabled_ui(false, |ui| {
                 labelled_icon(ui, t, "pilcrow", tl!("Paragraph spacing"));
@@ -295,7 +300,8 @@ fn number_with_presets(ui: &mut egui::Ui, n: Number<'_>, presets: &[f64], width:
         ui.spacing_mut().item_spacing.x = 2.0;
         let field = egui::DragValue::new(&mut *n.value).range(n.range).speed(n.speed).max_decimals(2).suffix(n.suffix);
         let height = ui.spacing().interact_size.y;
-        ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), height], field).labelled_by(label.0);
+        let drag_resp = ui.add_sized([(width - PRESET_LIST - 2.0).max(30.0), height], field).labelled_by(label.0);
+        drag_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::DragValue, ui.is_enabled(), label.1));
         let list = icons::button(ui, "chevron-down", PRESET_LIST, false, label.1);
         egui::Popup::menu(&list).show(|ui| {
             for &v in presets {

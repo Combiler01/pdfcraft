@@ -116,6 +116,8 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, is_pinned: bool) -> (e
 
     let pin_rect = Rect::from_center_size(body.right_center() - vec2(14.0, 0.0), vec2(22.0, 22.0));
     let pin_resp = ui.interact(pin_rect, ui.id().with(("pin_toggle_row", g.id)), Sense::click());
+    let tip = if is_pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
+    pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
     let pin_hovered = pin_resp.hovered();
     let mut pin_clicked = false;
 
@@ -566,8 +568,11 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .into_iter()
             .map(|f| (f.resource, f.face))
             .collect();
-        let shown = ed.font_shown(&sources);
-        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown });
+        let fmt = ed.selection_formatting(&sources);
+        ed.sync_selection_look(&fmt);
+        let shown = fmt.font_shown;
+        let mixed_size = fmt.size.is_none();
+        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown, mixed_size });
         let mut changed = out.changed;
         match out.font {
             Some(FontChoice::KeepSource) => {
@@ -647,7 +652,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
 /// Format text for added text: the standard families, size, colour, style and alignment.
 fn added_text_format(ui: &mut egui::Ui, t: &Tokens, style: &mut pdfcraft_engine::AddedText) {
     let shown = style.family.label().to_string();
-    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown });
+    let out = crate::format_text_ui::panel(ui, t, style, None, crate::format_text_ui::Fonts { sources: None, shown, mixed_size: false });
     if let Some(crate::format_text_ui::FontChoice::Family(family)) = out.font {
         style.family = family;
     }

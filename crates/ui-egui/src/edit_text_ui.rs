@@ -726,7 +726,6 @@ impl LineEditor {
 
     /// After applying formatting: the paragraph now has it.
     pub fn applied(&mut self) {
-        self.selection = None;
         self.font_resource = None;
         self.family_chosen = false;
         self.look0 = self.look.clone();
@@ -743,6 +742,132 @@ impl LineEditor {
         self.text = block.editor_text.clone();
         self.original = self.text.clone();
     }
+
+    pub fn selection_formatting(&self, sources: &[(String, String)]) -> SelectionFormatting {
+        let Some((block, lines)) = &self.source else {
+            return SelectionFormatting {
+                font_shown: self.font_shown(sources),
+                size: Some(self.look.size),
+                family: Some(self.look.family),
+                bold: Some(self.look.bold),
+                italic: Some(self.look.italic),
+                color: Some(self.look.color),
+            };
+        };
+
+        let spans = block.edited_spans(&self.text);
+        let matching_lines: Vec<&pdfcraft_engine::TextLine> = match &self.selection {
+            Some(range) if range.start < range.end => spans
+                .iter()
+                .filter(|(span, _)| span.start < range.end && span.end > range.start)
+                .filter_map(|(_, idx)| lines.get(*idx))
+                .collect(),
+            _ => spans.iter().filter_map(|(_, idx)| lines.get(*idx)).collect(),
+        };
+
+        if matching_lines.is_empty() {
+            return SelectionFormatting {
+                font_shown: self.font_shown(sources),
+                size: Some(self.look.size),
+                family: Some(self.look.family),
+                bold: Some(self.look.bold),
+                italic: Some(self.look.italic),
+                color: Some(self.look.color),
+            };
+        }
+
+        let line_font = |l: &pdfcraft_engine::TextLine| -> String {
+            if let Some((_, face)) = sources.iter().find(|(res, _)| res == &l.font) {
+                return face.clone();
+            }
+            let base = l.base_font.as_str();
+            let name = match base.split_once('+') {
+                Some((tag, rest)) if tag.len() == 6 && tag.bytes().all(|b| b.is_ascii_uppercase()) => rest,
+                _ => base,
+            };
+            if let Some((_, face)) = sources.iter().find(|(_, face)| face.as_str() == name) {
+                return face.clone();
+            }
+            let look = look_of_line(l);
+            let lower = name.to_ascii_lowercase();
+            if ["times", "serif", "roman", "courier", "helvetica", "arial"].iter().any(|s| lower.contains(s)) {
+                return look.family.label().to_string();
+            }
+            if name.is_empty() {
+                tl!("Keep source fonts").to_string()
+            } else {
+                name.to_string()
+            }
+        };
+
+        let first_font = line_font(matching_lines[0]);
+        let same_font = matching_lines.iter().skip(1).all(|l| line_font(l) == first_font);
+        let font_shown = if same_font {
+            if self.font_resource.is_some() || self.look.family != self.look0.family || self.family_chosen {
+                self.font_shown(sources)
+            } else {
+                first_font
+            }
+        } else {
+            tl!("Mixed").to_string()
+        };
+
+        let first_size = (matching_lines[0].size * 10.0).round() / 10.0;
+        let same_size = matching_lines.iter().skip(1).all(|l| ((l.size * 10.0).round() / 10.0 - first_size).abs() < 0.05);
+        let size = if same_size { Some(first_size) } else { None };
+
+        let first_look = look_of_line(matching_lines[0]);
+        let same_family = matching_lines.iter().skip(1).all(|l| look_of_line(l).family == first_look.family);
+        let family = if same_family { Some(first_look.family) } else { None };
+        let same_bold = matching_lines.iter().skip(1).all(|l| l.bold == matching_lines[0].bold);
+        let bold = if same_bold { Some(matching_lines[0].bold) } else { None };
+        let same_italic = matching_lines.iter().skip(1).all(|l| l.italic == matching_lines[0].italic);
+        let italic = if same_italic { Some(matching_lines[0].italic) } else { None };
+        let same_color = matching_lines.iter().skip(1).all(|l| l.color == matching_lines[0].color);
+        let color = if same_color { Some(matching_lines[0].color) } else { None };
+
+        SelectionFormatting { font_shown, size, family, bold, italic, color }
+    }
+
+    pub(crate) fn sync_selection_look(&mut self, fmt: &SelectionFormatting) {
+        if let Some(sz) = fmt.size {
+            self.look.size = sz;
+            self.look0.size = sz;
+        } else {
+            self.look.size = 0.0;
+            self.look0.size = 0.0;
+        }
+        if let Some(f) = fmt.family {
+            self.look.family = f;
+            self.look0.family = f;
+        }
+        if let Some(b) = fmt.bold {
+            self.look.bold = b;
+            self.look0.bold = b;
+        }
+        if let Some(it) = fmt.italic {
+            self.look.italic = it;
+            self.look0.italic = it;
+        }
+        if let Some(c) = fmt.color {
+            self.look.color = c;
+            self.look0.color = c;
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionFormatting {
+    pub font_shown: String,
+    pub size: Option<f64>,
+    pub family: Option<pdfcraft_engine::FontFamily>,
+    pub bold: Option<bool>,
+    pub italic: Option<bool>,
+    pub color: Option<[f64; 3]>,
+}
+
+fn look_of_line(l: &pdfcraft_engine::TextLine) -> pdfcraft_engine::AddedText {
+    source_look(&l.base_font, l.size, l.color, l.bold, l.italic)
 }
 
 /// The look shown for a paragraph: the family and weight guessed from its PDF font name.

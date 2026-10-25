@@ -1221,11 +1221,12 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
                     crate::icons::paint(ui, icon_rect, "search", 16.0, t.text_muted);
-                    ui.add(
+                    let search_resp = ui.add(
                         egui::TextEdit::singleline(&mut app.pin_tool_search)
                             .hint_text(tl!("Search tools…"))
                             .desired_width(ui.available_width() - 32.0),
                     );
+                    search_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), tl!("Search tools…")));
                     if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", tl!("Clear search")).clicked() {
                         app.pin_tool_search.clear();
                     }
@@ -1254,6 +1255,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
                         let pinned = app.is_tool_pinned(g.id);
                         let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
                         let press = theme::Press::track(ui, &resp);
                         press.wash(ui, rect, 6, false);
                         let body = rect.translate(press.offset());
@@ -1280,6 +1282,8 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         } else {
                             (egui::Color32::TRANSPARENT, egui::Stroke::new(1.0, t.border), t.text_muted, tl!("Pin"))
                         };
+                        let tip = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
+                        btn_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, pinned, format!("{tip}: {label}")));
 
                         ui.painter().rect(btn_rect, egui::CornerRadius::same(6), btn_fill, btn_stroke, egui::StrokeKind::Inside);
                         ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, btn_label, theme::medium(12.0), text_color);
