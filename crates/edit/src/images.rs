@@ -1059,10 +1059,13 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         }
     };
 
-    // A marked-content sequence that holds other content too moves only the image out of the
-    // sequence, wrapping it in its own tag at the destination so it is not grouped with the
-    // other content and leaves the remaining tagged content intact.
+    // A marked-content sequence that holds other content cannot be split without generating
+    // a new structure element and MCID, so we refuse to rearrange it to avoid leaving the image untagged.
+    // If the sequence holds only this image, the whole marked unit is moved intact.
     let marked_unit = ops.get(target_unit.start).is_some_and(|o| o.is("BDC") || o.is("BMC"));
+    if marked_unit && has_other_paint {
+        return Err(EditError::Invalid("cannot rearrange an image that shares a marked-content sequence with other content".into()));
+    }
 
     let target_op = ops.get(target).ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
     let (mut target_span, scope_start, rem_start, rem_end) = if has_other_paint {
@@ -1105,15 +1108,47 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     };
 
     let mut q_depth = 0usize;
-    let mut leaking_non_ctm_ops = Vec::new();
+    let mut leaking_ops = Vec::new();
+    let mut pending_clip_path: Vec<Op> = Vec::new();
+    let mut pending_clip = false;
+    let mut has_leaking_clip = false;
     for op in ops.get(rem_start..rem_end).unwrap_or_default() {
         match op.op.as_slice() {
             b"q" => q_depth = q_depth.saturating_add(1),
             b"Q" => q_depth = q_depth.saturating_sub(1),
-            b"rg" | b"RG" | b"g" | b"G" | b"k" | b"K" | b"w" | b"J" | b"j" | b"M" | b"d" | b"ri" | b"i" | b"gs" | b"cs" | b"CS" if q_depth == 0 => {
-                leaking_non_ctm_ops.push(op.clone());
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" | b"h" if q_depth == 0 => {
+                pending_clip_path.push(op.clone());
             }
-            _ => {}
+            b"W" | b"W*" if q_depth == 0 => {
+                if !pending_clip_path.is_empty() {
+                    pending_clip = true;
+                    pending_clip_path.push(op.clone());
+                }
+            }
+            b"n" if q_depth == 0 => {
+                if pending_clip {
+                    pending_clip_path.push(op.clone());
+                    leaking_ops.extend(std::mem::take(&mut pending_clip_path));
+                    has_leaking_clip = true;
+                    pending_clip = false;
+                } else {
+                    pending_clip_path.clear();
+                }
+            }
+            b"rg" | b"RG" | b"g" | b"G" | b"k" | b"K" | b"cs" | b"CS" | b"sc" | b"scn" | b"SC" | b"SCN" | b"w" | b"J" | b"j" | b"M" | b"d"
+            | b"ri" | b"i" | b"gs" | b"Tf" | b"Tc" | b"Tw" | b"Tz" | b"TL" | b"Tr" | b"Ts"
+                if q_depth == 0 =>
+            {
+                leaking_ops.push(op.clone());
+            }
+            b"cm" if q_depth == 0 => {
+                leaking_ops.push(op.clone());
+            }
+            _ => {
+                if q_depth == 0 && !op.is("BDC") && !op.is("BMC") && !op.is("EMC") && !pending_clip {
+                    pending_clip_path.clear();
+                }
+            }
         }
     }
 
@@ -1297,11 +1332,13 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     serialized.push(b'\n');
 
     let leaking = if let Some(inv) = ctm_before_removal.invert() { ctm_after_removal.then(&inv) } else { Matrix::IDENTITY };
-    let mut leak_ops = Vec::new();
-    if leaking != Matrix::IDENTITY {
-        leak_ops.push(Op::new("cm", leaking.0.map(pdfcraft_content::num).to_vec()));
+    if leaking != Matrix::IDENTITY && has_leaking_clip {
+        return Err(EditError::Invalid("unsupported graphics state: moving the image would alter clipping path transform".into()));
     }
-    leak_ops.extend(leaking_non_ctm_ops);
+    let mut leak_ops = leaking_ops;
+    if leaking != Matrix::IDENTITY && leak_ops.iter().all(|o| !o.is("cm")) {
+        leak_ops.insert(0, Op::new("cm", leaking.0.map(pdfcraft_content::num).to_vec()));
+    }
     let removal_replacement = if !leak_ops.is_empty() {
         let mut s = Vec::new();
         s.push(b'\n');

@@ -2901,47 +2901,53 @@ fn image_arrange_moves_a_bmc_sequence_as_a_whole() {
     assert!(body < art && art < img && img < emc, "text first, then the whole artifact sequence: {s}");
 }
 
-/// An image that shares its marked-content sequence with other content keeps the remaining
-/// content in its original tag, while moving only the image without duplicating the MCID.
+/// An image sharing a marked-content sequence with other content must not end up untagged.
+/// Either the arrange call is refused with Err, or every image paint remains inside a marked-content sequence.
+#[test]
+fn arrange_image_in_shared_tagged_block_refuses_or_keeps_tagged() {
+    let content =
+        "/Figure <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Caption) Tj ET EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
+    let mut doc = image_page_with(content);
+    let res = images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront);
+    match res {
+        Err(_) => {
+            // Refusing is the expected safe behavior when moving out of a shared tagged unit.
+        }
+        Ok(()) => {
+            let doc = reopen(&doc);
+            let bytes = page_content_bytes(&doc, 0);
+            let ops = pdfcraft_content::parse(&bytes).ops;
+            let mut mc_depth = 0usize;
+            for op in ops {
+                if op.is("BDC") || op.is("BMC") {
+                    mc_depth += 1;
+                } else if op.is("EMC") {
+                    mc_depth = mc_depth.saturating_sub(1);
+                } else if op.is("Do") {
+                    assert!(mc_depth > 0, "every image paint must be inside a marked-content sequence: {}", String::from_utf8_lossy(&bytes));
+                }
+            }
+        }
+    }
+}
+
+/// An image that shares its marked-content sequence with other content cannot be rearranged
+/// without leaving the image untagged or duplicating MCIDs, so it is refused.
 #[test]
 fn image_arrange_splits_a_shared_marked_sequence_into_own_tag() {
     let content =
         "/Figure <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Caption) Tj ET EMC BT /F1 12 Tf 72 700 Td (Body) Tj ET";
     let mut doc = image_page_with(content);
-    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
-    let doc = reopen(&doc);
-    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    // The caption remains inside its original Figure tag.
-    let fig = s.find("/Figure <</MCID 0>> BDC").expect("figure tag preserved");
-    let caption = s.find("(Caption)").expect("caption preserved");
-    let emc1 = s.find("EMC").expect("first EMC");
-    assert!(fig < caption && caption < emc1, "caption stays in Figure sequence: {s}");
-    // The moved image is placed after Body, without duplicating the structural MCID tag (ISO 32000-1 § 14.7.4.2).
-    let body = s.find("(Body)").expect("body text");
-    let img = s.find("/Im0 Do").expect("image moved");
-    assert!(emc1 < body && body < img, "image moved after body: {s}");
-    assert_eq!(s.matches("/Figure <</MCID 0>> BDC").count(), 1, "MCID must not be duplicated");
-    assert_eq!(images::page_images(&doc, 0).unwrap().len(), 1);
+    assert!(images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).is_err());
 }
 
-/// Send backward also splits out the image without duplicating the MCID when it shares its sequence with text,
-/// placing it before the preceding unit and keeping the remaining content tagged.
+/// Send backward also refuses to rearrange an image when it shares its sequence with other content.
 #[test]
 fn image_arrange_send_backward_splits_shared_marked_sequence() {
     let content =
         "BT /F1 12 Tf 72 700 Td (Header) Tj ET /Table <</MCID 0>> BDC q 100 0 0 100 50 50 cm /Im0 Do Q BT /F1 9 Tf 50 40 Td (Cell) Tj ET EMC";
     let mut doc = image_page_with(content);
-    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).unwrap();
-    let doc = reopen(&doc);
-    let s = String::from_utf8_lossy(&page_content_bytes(&doc, 0)).into_owned();
-    let header = s.find("(Header)").expect("header text");
-    let img = s.find("/Im0 Do").expect("image");
-    let cell = s.find("(Cell)").expect("cell text");
-    assert!(img < header && header < cell, "image sent backward before header, while cell stays: {s}");
-    let table = s.find("/Table <</MCID 0>> BDC").expect("table tag preserved");
-    let emc = s.rfind("EMC").expect("EMC");
-    assert!(table < cell && cell < emc, "cell text stays in table sequence: {s}");
-    assert_eq!(s.matches("/Table <</MCID 0>> BDC").count(), 1, "MCID must not be duplicated");
+    assert!(images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendBackward).is_err());
 }
 
 #[test]
@@ -2961,11 +2967,7 @@ fn arrange_preserves_color_leaking_out_of_marked_content() {
 fn arrange_shared_tagged_does_not_duplicate_mcid() {
     let content = "/Figure <</MCID 0>> BDC q 100 0 0 100 0 0 cm /Im0 Do Q 0 0 m 10 10 l S EMC";
     let mut doc = image_page_with(content);
-    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).unwrap();
-    let bytes = page_content_bytes(&doc, 0);
-    let s = String::from_utf8_lossy(&bytes);
-    let mcid_count = s.matches("/MCID 0").count();
-    assert_eq!(mcid_count, 1, "MCID 0 must not be duplicated in the content stream");
+    assert!(images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::SendToBack).is_err());
 }
 
 #[test]
@@ -7605,4 +7607,49 @@ fn a_flatten_refused_on_a_later_page_changes_nothing() {
     let before = (*doc.get(first)).clone();
     assert!(matches!(flatten(&mut doc, &[0, 1], true, false), Err(EditError::Invalid(_))));
     assert_eq!((*doc.get(first)).clone(), before, "the first page keeps its comment and content");
+}
+
+#[test]
+fn arrange_preserves_clip_leaked_out_of_marked_unit() {
+    let content = "/Figure <</MCID 0>> BDC 0 0 300 300 re W n q 10 0 0 10 50 50 cm /Im0 Do Q EMC q 10 0 0 10 400 400 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let initial = images::page_images(&doc, 0).unwrap();
+    assert_eq!(initial.len(), 2);
+    assert!(initial[0].visible_rect.is_some());
+    assert!(initial[1].visible_rect.is_none(), "second image is fully clipped initially");
+
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 2);
+    let img1 = after.iter().find(|img| (img.rect[0] - 400.0).abs() < 1e-3).expect("second image exists");
+    assert!(img1.visible_rect.is_none(), "second image must stay clipped after BringToFront");
+
+    // Conflicting leaking transform with leaking clip must be refused
+    let content_cm_clip =
+        "/Figure <</MCID 0>> BDC 2 0 0 2 0 0 cm 0 0 300 300 re W n q 10 0 0 10 50 50 cm /Im0 Do Q EMC q 10 0 0 10 400 400 cm /Im0 Do Q";
+    let mut doc3 = image_page_with(content_cm_clip);
+    let res3 = images::arrange_image(&mut doc3, 0, 0, images::ArrangeOrder::BringToFront);
+    assert!(res3.is_err(), "moving marked unit with both leaking cm and leaking clip must be refused");
+}
+
+#[test]
+fn arrange_preserves_leaked_color_and_text_state() {
+    let content = "/Figure <</MCID 0>> BDC /DeviceRGB cs 1 0 0 sc /F1 14 Tf 2 Tc q 10 0 0 10 50 50 cm /Im0 Do Q EMC 0 0 10 10 re f q 10 0 0 10 200 200 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("1 0 0 sc"), "sc must be preserved in content stream: {s}");
+    assert!(s.contains("/F1 14 Tf"), "Tf must be preserved in content stream: {s}");
+    assert!(s.contains("2 Tc"), "Tc must be preserved in content stream: {s}");
+
+    // Pixel test: 0 0 10 10 re f still fills red [255, 0, 0] after arrange
+    let pdf_bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer = pdfcraft_render::PageRenderer::new(Arc::new(pdf_bytes), pdfcraft_render::RenderConfig::default());
+    let page =
+        renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() });
+    let idx = (((page.height - 5) * page.width + 5) * 4) as usize;
+    assert_eq!(page.rgba[idx..idx + 3], [255, 0, 0], "point (5, 5 from bottom) inside 10x10 rect fills red");
 }
