@@ -1368,7 +1368,7 @@ pub(crate) fn image_owns_pointer(_ui: &egui::Ui, xf: &PageXform, ptr: &PagePoint
     }
     let Some(image) = view.edit_images.get(&page).and_then(|(_, images)| images.get(selection.index)) else { return false };
     let obb = ImageObb::from_image(image, xf, info, page);
-    let p = if ptr.primary_down { ptr.origin } else { ptr.pos };
+    let p = if ptr.primary_down { ptr.origin.or(ptr.pos) } else { ptr.pos };
     let Some(p) = p else { return false };
 
     obb.handles().iter().any(|(_, h)| h.distance(p) < 8.0) || obb.s_rot.distance(p) < 8.0

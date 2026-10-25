@@ -1029,6 +1029,7 @@ pub(crate) enum PageMenuAction {
     ExportPdf,
     Find,
     DocProperties,
+    FlattenComments,
 }
 
 pub(crate) struct PageMenuPerms {
@@ -1038,6 +1039,7 @@ pub(crate) struct PageMenuPerms {
     pub can_print: bool,
     pub can_copy: bool,
     pub can_paste: bool,
+    pub has_annotations: bool,
 }
 
 pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64; 2], perms: PageMenuPerms, action: &mut Option<PageMenuAction>) {
@@ -1085,6 +1087,10 @@ pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64
 
     if ui.add_enabled(perms.can_annotate, egui::Button::new(tl!("Add comment"))).clicked() {
         *action = Some(PageMenuAction::AddComment(page, at));
+        ui.close();
+    }
+    if perms.has_annotations && ui.add_enabled(perms.can_modify, egui::Button::new(tl!("Flatten comments"))).clicked() {
+        *action = Some(PageMenuAction::FlattenComments);
         ui.close();
     }
     if ui.add_enabled(perms.can_assemble, egui::Button::new(tl!("Add bookmark"))).clicked() {
@@ -4802,6 +4808,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 can_print: doc.allows_printing(),
                 can_copy: can_copy_items,
                 can_paste,
+                has_annotations: !info.annotations.is_empty(),
             };
             default_page_context_menu(ui, page, at, perms, &mut page_action);
         });
@@ -5234,6 +5241,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(PageMenuAction::AddComment(page, at)) => {
             app.views[index].comments.composer =
                 Some(crate::comments::Composer { page, at, kind: crate::comments::ComposerKind::Note, text: String::new(), focus: true });
+        }
+        Some(PageMenuAction::FlattenComments) => {
+            app.views[index].comments.selected = None;
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::Flatten { comments: true, fields: false });
         }
         Some(PageMenuAction::AddBookmark(_page)) => {
             app.bookmark_action(crate::panels::BmAction::New);
