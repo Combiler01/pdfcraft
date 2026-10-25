@@ -757,11 +757,9 @@ impl LineEditor {
 
         let spans = block.edited_spans(&self.text);
         let matching_lines: Vec<&pdfcraft_engine::TextLine> = match &self.selection {
-            Some(range) if range.start < range.end => spans
-                .iter()
-                .filter(|(span, _)| span.start < range.end && span.end > range.start)
-                .filter_map(|(_, idx)| lines.get(*idx))
-                .collect(),
+            Some(range) if range.start < range.end => {
+                spans.iter().filter(|(span, _)| span.start < range.end && span.end > range.start).filter_map(|(_, idx)| lines.get(*idx)).collect()
+            }
             _ => spans.iter().filter_map(|(_, idx)| lines.get(*idx)).collect(),
         };
 
@@ -793,11 +791,7 @@ impl LineEditor {
             if ["times", "serif", "roman", "courier", "helvetica", "arial"].iter().any(|s| lower.contains(s)) {
                 return look.family.label().to_string();
             }
-            if name.is_empty() {
-                tl!("Keep source fonts").to_string()
-            } else {
-                name.to_string()
-            }
+            if name.is_empty() { tl!("Keep source fonts").to_string() } else { name.to_string() }
         };
 
         let first_font = line_font(matching_lines[0]);

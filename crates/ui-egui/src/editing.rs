@@ -187,40 +187,7 @@ impl PdfCraftApp {
                 }
                 if let (Some((target, ambiguous_before)), Edit::EditPageImage { page, .. }) = (target_arrange_image, &edit) {
                     let page_images = doc.page_images(*page);
-                    let exact_matches: Vec<usize> = page_images
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, img)| img.name == target.name && img.object == target.object && img.rect == target.rect)
-                        .map(|(idx, _)| idx)
-                        .collect();
-                    let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
-                        Some(exact_matches[0])
-                    } else if !ambiguous_before && exact_matches.is_empty() {
-                        let name_obj_matches: Vec<usize> = page_images
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, img)| img.name == target.name && img.object == target.object)
-                            .map(|(idx, _)| idx)
-                            .collect();
-                        if name_obj_matches.len() == 1 {
-                            Some(name_obj_matches[0])
-                        } else if name_obj_matches.is_empty() {
-                            let name_matches: Vec<usize> =
-                                page_images.iter().enumerate().filter(|(_, img)| img.name == target.name).map(|(idx, _)| idx).collect();
-                            if name_matches.len() == 1 { Some(name_matches[0]) } else { None }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    if let Some(s) = view.image_selection.as_mut().filter(|s| s.page == *page) {
-                        if let Some(idx) = new_idx {
-                            s.index = idx;
-                        } else {
-                            view.image_selection = None;
-                        }
-                    }
+                    re_resolve_image_selection(view, *page, &target, ambiguous_before, &page_images);
                 }
                 if std::mem::take(&mut view.comments.tool_done) && !self.comment_prefs.pinned {
                     self.quick_tool = crate::QuickTool::Select;
@@ -284,13 +251,33 @@ impl PdfCraftApp {
 
     fn history_step(&mut self, undo: bool) {
         let Some((i, id)) = self.active_ids() else { return };
+        let target_image = self.views.get(i).and_then(|v| v.image_selection.as_ref()).and_then(|s| {
+            let doc = self.session.get(id)?;
+            let images = doc.page_images(s.page);
+            let target = images.get(s.index).cloned()?;
+            let ambiguous = images.iter().filter(|img| img.name == target.name && img.object == target.object && img.rect == target.rect).count() > 1;
+            Some((s.page, target, ambiguous))
+        });
+        let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
+
         let result = if undo { self.session.undo(id) } else { self.session.redo(id) };
         match result {
             Ok(label) => {
-                if let Some(doc) = self.session.get(id) {
-                    self.views[i].document_changed(&doc.info);
+                if let Some(doc) = self.session.get(id)
+                    && let Some(view) = self.views.get_mut(i)
+                {
+                    view.document_changed(&doc.info);
+                    view.picked_image = None;
+                    if let Some((page, target, ambiguous_before)) = target_image {
+                        let page_images = doc.page_images(page);
+                        re_resolve_image_selection(view, page, &target, ambiguous_before, &page_images);
+                    } else if had_selection {
+                        view.image_selection = None;
+                    }
                 }
-                self.views[i].comments.selected = None;
+                if let Some(view) = self.views.get_mut(i) {
+                    view.comments.selected = None;
+                }
                 let label = crate::i18n::edit_label(&label);
                 if undo {
                     self.notify_fmt("Undid {label}", &[("label", &label)]);
@@ -1015,6 +1002,44 @@ impl PdfCraftApp {
         } else {
             // A clean quit: nothing is left to recover.
             self.shutdown_recovery();
+        }
+    }
+}
+
+fn re_resolve_image_selection(
+    view: &mut crate::DocView,
+    page: usize,
+    target: &pdfcraft_engine::PageImage,
+    ambiguous_before: bool,
+    page_images: &[pdfcraft_engine::PageImage],
+) {
+    let exact_matches: Vec<usize> = page_images
+        .iter()
+        .enumerate()
+        .filter(|(_, img)| img.name == target.name && img.object == target.object && img.rect == target.rect)
+        .map(|(idx, _)| idx)
+        .collect();
+    let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
+        exact_matches.first().copied()
+    } else if !ambiguous_before && exact_matches.is_empty() {
+        let name_obj_matches: Vec<usize> =
+            page_images.iter().enumerate().filter(|(_, img)| img.name == target.name && img.object == target.object).map(|(idx, _)| idx).collect();
+        if name_obj_matches.len() == 1 {
+            name_obj_matches.first().copied()
+        } else if name_obj_matches.is_empty() {
+            let name_matches: Vec<usize> = page_images.iter().enumerate().filter(|(_, img)| img.name == target.name).map(|(idx, _)| idx).collect();
+            if name_matches.len() == 1 { name_matches.first().copied() } else { None }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(s) = view.image_selection.as_mut().filter(|s| s.page == page) {
+        if let Some(idx) = new_idx {
+            s.index = idx;
+        } else {
+            view.image_selection = None;
         }
     }
 }

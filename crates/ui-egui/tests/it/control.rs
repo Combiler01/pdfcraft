@@ -1931,4 +1931,3 @@ fn accessible_labels_on_format_text_and_pin_dialog() {
     let char_spin = ok(&mut h, &c, "ui.inspect", json!({"query": "Character spacing", "role": "SpinButton"}));
     assert!(char_spin["count"].as_u64().unwrap() >= 1, "character spacing spin button has accessible label: {char_spin}");
 }
-

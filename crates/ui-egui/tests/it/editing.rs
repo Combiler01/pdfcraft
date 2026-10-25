@@ -6898,6 +6898,99 @@ fn arrange_unique_image_preserves_selection() {
     assert_eq!(sel.index, 1, "selection index tracks the unique image's new position");
 }
 
+#[test]
+fn undo_arrange_re_resolves_image_selection_or_clears() {
+    use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
+    let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
+    let page = pdfcraft_model::pages(&doc)[0].clone();
+    let mut form = Dict::new();
+    form.set(b"Subtype".to_vec(), Object::name("Form"));
+    form.set(b"BBox".to_vec(), Object::Array([0, 0, 200, 300].map(Object::Int).to_vec()));
+    let artwork1 = doc.add(Object::Stream(Stream::flate(form.clone(), b"0.2 0.5 0.9 rg 20 20 160 260 re f")));
+    let artwork2 = doc.add(Object::Stream(Stream::flate(form, b"0.9 0.2 0.5 rg 40 40 100 100 re f")));
+    let contents = doc.add(Object::Stream(Stream::flate(Dict::new(), b"q 1 0 0 1 0 0 cm /FigA Do Q q 1 0 0 1 0 0 cm /FigB Do Q")));
+    doc.update_dict(page.obj, |d| {
+        d.set(b"Contents".to_vec(), Object::Ref(contents));
+        let mut xo = Dict::new();
+        xo.set(b"FigA".to_vec(), Object::Ref(artwork1));
+        xo.set(b"FigB".to_vec(), Object::Ref(artwork2));
+        let mut resources = Dict::new();
+        resources.set(b"XObject".to_vec(), Object::Dict(xo));
+        d.set(b"Resources".to_vec(), Object::Dict(resources));
+    })
+    .unwrap();
+    let bytes = write_incremental(&doc, &SaveOptions::default()).unwrap();
+
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("undo_arrange.pdf", None, bytes.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let doc_id = h.state().views[0].id;
+    let images = h.state().session.get(doc_id).unwrap().page_images(0);
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0].name, "FigA");
+    assert_eq!(images[1].name, "FigB");
+
+    // Select FigA (back image, index 0)
+    h.state_mut().views[0].image_selection = Some(pdfcraft_ui_egui::edit_text_ui::ImageSelection {
+        page: 0,
+        index: 0,
+        drag: None,
+        crop: None,
+        crop_mode: false,
+        crop_rect: None,
+        turning: false,
+        settled: None,
+    });
+    h.run_steps(2);
+
+    // Bring to front
+    let applied = h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+    });
+    assert!(applied);
+    h.run_steps(2);
+
+    // Selection now tracks FigA at index 1
+    let sel = h.state().views[0].image_selection.as_ref().expect("selected after arrange");
+    assert_eq!(sel.index, 1);
+
+    // Undo
+    assert!(h.state_mut().execute("edit.undo"));
+    h.run_steps(2);
+
+    let doc_after = h.state().session.get(doc_id).unwrap();
+    let images_after = doc_after.page_images(0);
+    assert_eq!(images_after[0].name, "FigA");
+    assert_eq!(images_after[1].name, "FigB");
+
+    // After undoing Bring to front, selection must either be FigA (index 0) or None, never FigB (index 1)
+    let sel_after = h.state().views[0].image_selection.as_ref().expect("selection re-resolved to the same image");
+    assert_eq!(sel_after.index, 0, "selection should point to FigA at index 0, not FigB at index 1");
+    assert_eq!(images_after[sel_after.index].name, "FigA");
+
+    // Redo
+    assert!(h.state_mut().execute("edit.redo"));
+    h.run_steps(2);
+
+    let doc_redo = h.state().session.get(doc_id).unwrap();
+    let images_redo = doc_redo.page_images(0);
+    assert_eq!(images_redo[0].name, "FigB");
+    assert_eq!(images_redo[1].name, "FigA");
+
+    let sel_redo = h.state().views[0].image_selection.as_ref().expect("selection re-resolved after redo");
+    assert_eq!(sel_redo.index, 1, "selection should point to FigA at index 1");
+    assert_eq!(images_redo[sel_redo.index].name, "FigA");
+}
+
 /// #3061: a paragraph running past its page's bottom edge (an HTML converter relying on the
 /// page clip) opens in an editor that draws on its page only. It covered the next page.
 #[test]
@@ -7350,4 +7443,3 @@ fn format_panel_shows_selection_size_and_updates_after_font_applied() {
     let font_node = h.get_by_role_and_label(Role::ComboBox, "Font");
     assert_eq!(font_node.value().as_deref(), Some("Times"), "font combo box updates to Times");
 }
-

@@ -208,12 +208,16 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
             labelled_icon(ui, t, "arrow-up-down", tl!("Line spacing"));
             let own = tl!("Auto").to_string();
             let shown = if e.line_spacing == 0.0 { own.clone() } else { number(e.line_spacing) };
-            let spacing_resp = egui::ComboBox::from_id_salt("format-line-spacing").selected_text(shown).width(half).show_ui(ui, |ui| {
-                ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
-                for v in LINE_SPACINGS {
-                    ui.selectable_value(&mut e.line_spacing, v, number(v));
-                }
-            }).response;
+            let spacing_resp = egui::ComboBox::from_id_salt("format-line-spacing")
+                .selected_text(shown)
+                .width(half)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut e.line_spacing, 0.0, own.as_str());
+                    for v in LINE_SPACINGS {
+                        ui.selectable_value(&mut e.line_spacing, v, number(v));
+                    }
+                })
+                .response;
             spacing_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), tl!("Line spacing")));
             ui.add_space(8.0);
             ui.add_enabled_ui(false, |ui| {
