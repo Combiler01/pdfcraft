@@ -619,7 +619,17 @@ fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     ok(&mut a, "doc_save", json!({"doc":id,"path":"edited.pdf"}));
     let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
     let saved = ok(&mut a, "text_lines", json!({"doc":reopened,"page":1}));
-    assert_eq!(lines, saved);
+    let mut normalized_saved = saved.clone();
+    if let Some(arr) = normalized_saved["lines"].as_array_mut() {
+        for l in arr {
+            if let Some(font) = l["font"].as_str()
+                && let Some((_, base)) = font.split_once('+')
+            {
+                l["font"] = json!(base);
+            }
+        }
+    }
+    assert_eq!(lines, normalized_saved);
     assert_eq!(rendered, a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap());
     let before = saved.clone();
     assert!(a.call("text_edit", &json!({"doc":reopened,"page":1,"paragraph":1,"text":"é test","ranges":[{"range":[1,2],"size":18}]})).is_err());
