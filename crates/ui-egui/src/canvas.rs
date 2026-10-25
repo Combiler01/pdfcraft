@@ -12,6 +12,7 @@ use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Sense, Stroke, TextureHand
 use pdfcraft_engine::{DocId, Edit};
 use pdfcraft_render::{DestView, DocInfo, LayerOp, LinkTarget, PRINT_TAG, PageText, RenderPool, RenderRequest, RequestKind, Tile, device_pixels};
 
+use crate::page_pointer::PagePointer;
 use crate::theme::{self, Tokens};
 use crate::{PdfCraftApp, QuickTool, RightPanel, comments, icons, widgets};
 
@@ -777,6 +778,9 @@ pub struct DocView {
     pub(crate) text_failed: HashSet<usize>,
     pub find: Option<Find>,
     selection: Option<Selection>,
+    /// Select All while scrolling continuously (#2639): the text of every page of the document,
+    /// highlighted on each page as its text arrives and copied whole ([`DocView::whole_text`]).
+    pub(crate) all_text: bool,
     /// The selection whose action bar was closed by its Copy button: the bar stays hidden
     /// until the selection changes, as it does once a markup button consumes the selection.
     actions_dismissed: Option<Selection>,
@@ -808,6 +812,11 @@ pub struct DocView {
     zoom_anchor: Option<(usize, f32, f32, Vec2)>,
     /// The page view has been shown, so its scroll offset in egui's memory is this document's.
     shown: bool,
+    /// Pages that Edit already tried to turn into editable text (once each, so Undo sticks).
+    pub(crate) auto_ocr_tried: std::collections::HashSet<usize>,
+    /// Pages Edit looked at and found not to be a scan, with the document's edit generation then:
+    /// they are looked at again only after the document changes (an image added, say).
+    pub(crate) auto_ocr_skipped: std::collections::HashMap<usize, u64>,
     /// Turns wheel input into page turns in single-page view.
     wheel: crate::wheel_pager::WheelPager,
     /// Until this time, apply precise (touchpad) wheel input 1:1 and suppress egui's eased copy.
@@ -977,6 +986,8 @@ pub enum ViewAction {
     Save,
     Extract,
     Split,
+    /// Split before each selected page: opens Split on that mode.
+    SplitBeforeSelected,
     /// Copy the selected pages (Cut also deletes them).
     CopyPages {
         cut: bool,
@@ -1214,6 +1225,7 @@ impl DocView {
             text_failed: HashSet::new(),
             find: None,
             selection: None,
+            all_text: false,
             actions_dismissed: None,
             selection_drag: false,
             clicks: 0,
@@ -1231,6 +1243,8 @@ impl DocView {
             viewport_screen: Rect::NOTHING,
             zoom_anchor: None,
             shown: false,
+            auto_ocr_tried: Default::default(),
+            auto_ocr_skipped: Default::default(),
             wheel: Default::default(),
             precise_scroll_until: 0.0,
             wheel_boost_x: Default::default(),
@@ -1459,6 +1473,7 @@ impl DocView {
         self.waiting_since.clear();
         self.last_queue.clear();
         self.selection = None;
+        self.all_text = false;
         if let Some(f) = self.find.as_mut() {
             f.matches.clear();
             f.current = None;
@@ -1565,6 +1580,35 @@ impl DocView {
         Some((*page, at))
     }
 
+    /// The user-space `[left, top]` at the window's top-left (where `/XYZ` puts its point), on the
+    /// page showing there: what a destination's null coordinate keeps (ISO 32000-2 §12.3.2.2).
+    /// Acrobat keeps the place this way across pages, so a CAD sheet's cross-reference opens the
+    /// next sheet where the reader was looking. A coordinate is `None` along a screen axis the
+    /// page fits, which keeps the layout's own placement (centred, or the page's top); the whole
+    /// place is `None` before the first frame has laid pages out.
+    fn place_at_corner(&self, info: &DocInfo) -> Option<[Option<f32>; 2]> {
+        let area = self.viewport_screen;
+        if !area.is_positive() {
+            return None;
+        }
+        let corner = area.min + vec2(SIDE, 0.0);
+        let (page, xf) = self
+            .screen_xforms
+            .iter()
+            .filter(|(_, xf)| xf.rect.is_positive())
+            .min_by(|a, b| a.1.rect.distance_sq_to_pos(corner).total_cmp(&b.1.rect.distance_sq_to_pos(corner)).then(a.0.cmp(&b.0)))?;
+        let p = info.pages.get(*page)?;
+        let (x, y) = xf.screen_to_view(corner.clamp(xf.rect.min, xf.rect.max));
+        // `max` drops a NaN size, so the bounds stay ordered and `clamp` can't panic.
+        let (x, y) = (x.clamp(0.0, p.width.max(0.0)), y.clamp(0.0, p.height.max(0.0)));
+        // The page counts with its side gutters, as the layout places it.
+        let wide = xf.rect.width() + 2.0 * SIDE > area.width();
+        let tall = xf.rect.height() > area.height();
+        // The view's x runs across the screen unless the view is turned a quarter.
+        let (keep_x, keep_y) = if xf.rot.is_multiple_of(180) { (wide, tall) } else { (tall, wide) };
+        Some(p.xyz_for_view(keep_x.then_some(x), keep_y.then_some(y)))
+    }
+
     /// A page's thumbnail texture, when rendered.
     pub(crate) fn thumb_id(&self, page: usize) -> Option<egui::TextureId> {
         self.thumbs.get(&page).map(|t| t.tex.id())
@@ -1610,6 +1654,7 @@ impl DocView {
 
     /// Select text on `page` from glyph `from` to glyph `to` (tests and automation).
     pub fn select_text(&mut self, page: usize, from: usize, to: usize) {
+        self.all_text = false;
         self.selection = Some(Selection::run(page, from, to));
     }
 
@@ -1718,7 +1763,12 @@ impl DocView {
     }
 
     /// Selected text, if any (⌘C).
+    /// The selected text: of the pages read so far, after Select All of the document (Copy reads
+    /// the others, [`DocView::pages_without_text`]).
     pub fn selected_text(&self) -> Option<String> {
+        if self.all_text {
+            return Some(self.whole_text(&HashMap::new())).filter(|x| !x.is_empty());
+        }
         let s = self.selection?;
         let t = self.texts.get(&s.page)?;
         Some(s.text(t)).filter(|x| !x.is_empty())
@@ -1773,10 +1823,16 @@ impl DocView {
     /// and zoomed as `dest` asks, as Acrobat does. `/XYZ` puts (left, top) at the window's
     /// top-left at its zoom (null or 0 keeps the zoom); `/Fit`, `/FitH` and `/FitV` switch to fit
     /// page, width and height with `top` or `left` at the window's edge; `/FitR` zooms so the
-    /// rectangle fits, centred. The `B` (content box) forms are read as the page. A null
-    /// coordinate keeps that scroll position (null `top` on a new page: its top), and a point
-    /// past the end of the document scrolls as far as it can.
+    /// rectangle fits, centred. The `B` (content box) forms are read as the page. A null `/XYZ`
+    /// coordinate keeps the reader's place: the same user-space point stays at the window's
+    /// top-left on the new page, as Acrobat does. A point past the end of the document scrolls
+    /// as far as it can.
     pub fn go_to_dest(&mut self, page: usize, dest: DestView, info: &DocInfo) {
+        // Read before the jump: it is where the reader is now.
+        let kept = match dest {
+            DestView::Xyz { left, top, .. } if left.is_none() || top.is_none() => self.place_at_corner(info),
+            _ => None,
+        };
         self.go_to_page(page);
         let page = self.current;
         self.goto_point = None;
@@ -1793,7 +1849,8 @@ impl DocView {
                     self.fit = Fit::None;
                     self.zoom_anchor = None;
                 }
-                let [fx, fy] = point(left, top);
+                let [kept_left, kept_top] = kept.unwrap_or([None, None]);
+                let [fx, fy] = point(left.or(kept_left), top.or(kept_top));
                 (fx, fy, corner)
             }
             DestView::Fit => {
@@ -1910,6 +1967,16 @@ impl DocView {
             self.select_anchor = (self.page_count > 0).then_some(self.current);
             return !self.selected.is_empty();
         }
+        // Scrolling continuously, Select All takes the whole document's text (#2639); one page at
+        // a time, the page shown.
+        // Like the page's, true once some text is selected: the pages whose text isn't read yet are
+        // read when the selection is copied.
+        if self.continuous && self.page_count > 1 {
+            self.selection = None;
+            self.all_text = true;
+            return self.selected_text().is_some();
+        }
+        self.all_text = false;
         let page = self.current;
         let Some(t) = self.texts.get(&page) else { return false };
         if t.glyphs.is_empty() {
@@ -1917,6 +1984,29 @@ impl DocView {
         }
         self.selection = Some(Selection::run(page, 0, t.glyphs.len() - 1));
         true
+    }
+
+    /// Pages whose text [`DocView::whole_text`] still needs: not read yet, nor failed.
+    pub(crate) fn pages_without_text(&self) -> Vec<usize> {
+        (0..self.page_count).filter(|p| !self.texts.contains_key(p) && !self.text_failed.contains(p)).collect()
+    }
+
+    /// The whole document's text in page order, one page after another on new lines, from the
+    /// pages' text read so far and `more` (pages read for this, keyed by page).
+    pub(crate) fn whole_text(&self, more: &HashMap<usize, Arc<PageText>>) -> String {
+        let mut out = String::new();
+        for p in 0..self.page_count {
+            let Some(t) = self.texts.get(&p).or_else(|| more.get(&p)) else { continue };
+            let text = t.text_of(0..t.glyphs.len());
+            if text.is_empty() {
+                continue;
+            }
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&text);
+        }
+        out
     }
 
     /// Rotate the view 90° clockwise or counter-clockwise (View ▸ Rotate View, ⇧⌘+ / ⇧⌘−).
@@ -1957,6 +2047,17 @@ impl DocView {
         self.fit = saved.fit;
         self.zoom = saved.zoom;
         self.goto = Some((self.current, 0.0));
+    }
+
+    /// The display shown outside full screen: the one presenting replaced, or the current one.
+    pub fn normal_display(&self) -> SavedDisplay {
+        self.presentation.unwrap_or(SavedDisplay {
+            layout: self.layout,
+            continuous: self.continuous,
+            cover: self.cover,
+            fit: self.fit,
+            zoom: self.zoom,
+        })
     }
 
     /// Whether the view is in full screen's one-page-at-a-time display.
@@ -2011,6 +2112,8 @@ impl DocView {
     pub fn set_continuous(&mut self, continuous: bool) {
         if self.continuous != continuous {
             self.continuous = continuous;
+            // Select All of the document belongs to continuous scrolling.
+            self.all_text = false;
             self.goto = Some((self.current, 0.0));
             self.reset_coarse_state();
         }
@@ -2717,7 +2820,7 @@ impl DocView {
 /// show none: they are page content being edited, not comments.
 /// If `display_author_no_comment` is false, highlighted text markup with no comment body shows no popup.
 fn annotation_hover_text(a: &pdfcraft_render::Annotation) -> Option<String> {
-    if a.in_reply_to.is_some() || a.fill_sign {
+    if a.is_reply() || a.fill_sign {
         return None;
     }
     let who = a.author.clone().unwrap_or_else(|| a.subtype.clone());
@@ -3061,8 +3164,9 @@ pub fn shortcuts(view: &mut DocView, ctx: &egui::Context, speed: crate::scroll_s
     if key(Key::Escape) && !egui::Popup::is_any_open(ctx) {
         if view.camera.is_some() || view.camera_done.is_some() {
             view.pending_action = Some(ViewAction::CancelCamera);
-        } else if view.selection.is_some() {
+        } else if view.selection.is_some() || view.all_text {
             view.selection = None;
+            view.all_text = false;
         } else {
             view.find = None;
         }
@@ -3198,6 +3302,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let editing_content =
         (app.left_open && app.left == crate::LeftPanel::Tool("edit")) || matches!(app.quick_tool, QuickTool::AddText | QuickTool::EditText);
     let text_style = app.text_style.clone();
+    let show_secured_notice = app.show_secured_notice;
     // Asking means opening the system clipboard (and decoding any image on it), so it's asked
     // once when a right-click opens a menu, not on every frame.
     let can_paste_key = egui::Id::new("can-paste-image");
@@ -3209,8 +3314,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         ui.data(|d| d.get_temp(can_paste_key)).unwrap_or(false)
     };
     let view = &mut app.views[index];
-    // Opened without the owner password and something is restricted.
-    let secured = doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
+    // Opened without the owner password and something is restricted. The notice says so unless
+    // the user turned it off (#4035): the restrictions themselves, and Document Properties ▸
+    // Security, stay as they are.
+    let secured = show_secured_notice && doc.security_summary().is_some_and(|s| !(s.owner || (s.permissions.modify() && s.permissions.assemble())));
     let repaired = !doc.repair_log().is_empty();
     match notices(view, doc, secured, repaired, crate::sign_ui::banner(&doc.signatures), ui, &t) {
         #[cfg(not(target_arch = "wasm32"))]
@@ -3230,10 +3337,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         Some(Notice::Signatures) => app.right = Some(RightPanel::Signatures),
         Some(Notice::FieldHighlights(on)) => app.view_defaults.highlight_fields = on,
         Some(Notice::Console) => app.dialog = Some(crate::Dialog::JsConsole),
+        // Back on in Preferences ▸ General.
+        Some(Notice::HideSecured) => app.show_secured_notice = false,
         None => {}
     }
     // No dialog, close prompt or palette over the page: only then does page input count.
-    let unobstructed = !app.modal_open() && !app.palette_open;
+    let modal = app.modal_open();
+    let unobstructed = !modal && !app.palette_open;
     let organize_zoom = app.organize_zoom;
     let view = &mut app.views[index];
     if view.organize {
@@ -3277,11 +3387,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Full screen: a click on the document goes forward a page and a shift-click back, as in
     // Acrobat, unless the click did something else (a link, a word selected). Decided below,
     // once the pages have had the click.
-    let present_click = view.presentation.is_some()
-        && navigation_enabled
-        && ui.rect_contains_pointer(navigation_rect)
-        && ui.input(|i| i.pointer.primary_clicked())
-        && app.quick_tool == QuickTool::Select;
+    let present_click =
+        view.presentation.is_some() && navigation_enabled && presentation_click(ui, navigation_rect) && app.quick_tool == QuickTool::Select;
     // Shift as held now, or as the click's own event carried it (a synthetic click).
     let present_back = present_click
         && ui.input(|i| {
@@ -3292,7 +3399,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         });
     if zoom_delta.is_finite() && zoom_delta > 0.0 && zoom_delta != 1.0 && navigation_enabled && ui.rect_contains_pointer(navigation_rect) {
         let z = view.zoom * zoom_delta;
-        match ui.input(|i| i.pointer.hover_pos()) {
+        match zoom_anchor(ui) {
             Some(p) => view.zoom_at(z, p),
             None => view.set_zoom(z),
         }
@@ -3308,7 +3415,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     // Drawing a comment: the pointer in a band along any edge (or just past it) scrolls the view
     // that way, so a point beyond what is shown can be reached without letting go of the tool.
     let edge_delta = if unobstructed && matches!(view.comments.gesture, Some(comments::Gesture::Draw { .. })) {
-        let (pointer, dt) = ui.input(|i| (if i.pointer.any_down() { i.pointer.latest_pos() } else { i.pointer.hover_pos() }, i.stable_dt));
+        let (pointer, dt) = drawing_edge_pointer(ui);
         crate::autoscroll::edge_scroll(pointer, avail, dt)
     } else {
         Vec2::ZERO
@@ -3446,7 +3553,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let may_glide = !paging_owns_vertical && !middle_gesture && navigation_enabled && unobstructed && animates;
     let over_page = ui.rect_contains_pointer(avail);
     ui.input(|i| view.fling.read(&i.events, now, may_glide && over_page));
-    let interrupted = ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })));
+    let interrupted = glide_interrupted(ui);
     if !may_glide || interrupted || key_scroll != 0.0 || auto_delta != Vec2::ZERO || zoom_delta != 1.0 {
         view.fling.stop();
     }
@@ -3613,15 +3720,6 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let mut open_signature = false;
     let mut hover_text: Option<(Pos2, String)> = None;
     let mut badge_hover: Option<(Pos2, String)> = None;
-    // A dialog, save prompt or palette covers the page. Hover tips are drawn above those
-    // windows, so a comment under the pointer would otherwise float over the dialog.
-    let page_covered = app.dialog.is_some()
-        || app.close_request.is_some()
-        || app.palette_open
-        || app.password_prompt.is_some()
-        || app.pending_link.is_some()
-        || app.pending_remote_link.is_some()
-        || app.updates.open;
     let mut clicked_link: Option<LinkTarget> = None;
     let mut remote_open: Option<(pdfcraft_engine::DocId, String, pdfcraft_render::RemoteDestination)> = None;
     let mut canvas_action: Option<comments::CanvasAction> = None;
@@ -3720,11 +3818,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
         let mut best_overlap = -1.0f32;
         let mut current_overlap = -1.0f32;
         let mut current_height = f32::INFINITY;
-        let pointer = ui.input(|i| i.pointer.hover_pos());
+        // The pointer as the pages see it: nothing over them (a dialog from the frame it opens),
+        // or a press they hold. The page modules read it rather than egui's raw pointer state.
+        let ptr = PagePointer::read(ui, &resp, modal);
+        let pointer = ptr.pos;
         // A press on a page makes it the current one (as in Acrobat), so a page command with
         // no selection (Rotate, Delete) acts on the page the reader pointed at, not on a page
         // gone to earlier that still shows whole beside it.
-        let pressed = unobstructed && ui.input(|i| i.pointer.primary_pressed()) && ui.rect_contains_pointer(avail);
+        let pressed = unobstructed && ptr.pressed().is_some();
         let mut pressed_page = None;
         if resp.secondary_clicked() {
             // Set again below when the right-click lands on a link.
@@ -3952,14 +4053,14 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             view.text_background.paint(painter, &xf, i, view.line_editor.as_ref(), view.content.draft.as_ref());
             if editing_content {
                 let page_tex = view.pages.get(&i).map(|p| p.tex.id());
-                view.move_background.paint(ui, painter, &xf, i, info, &view.content, page_tex);
+                view.move_background.paint(painter, &xf, i, info, &view.content, page_tex, pointer);
             }
             if view.show_page_gaps {
                 painter.rect_stroke(r, CornerRadius::ZERO, Stroke::new(0.5, t.border.gamma_multiply(0.8)), egui::StrokeKind::Outside);
             }
 
             // Comments: tools, selection, moving and resizing come before text selection.
-            let pcx = comments::PageCx { page: i, xf: &xf, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
+            let pcx = comments::PageCx { page: i, xf: &xf, ptr: &ptr, info, tool, prefs, allowed, hidden: comments_hidden, redact_mark };
             if let QuickTool::Measure(measure_tool) = tool {
                 crate::measure_ui::page_input(ui, &resp, doc, view, &pcx, measure_tool, units);
             }
@@ -3968,7 +4069,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // every viewing mode); then comments; then text selection.
             if let QuickTool::Stamp(kind) = tool
                 && allowed
-                && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
+                && let Some(p) = ptr.within(xf.rect)
             {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 if resp.clicked() {
@@ -3992,7 +4093,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
             if let Some(cs) = custom_stamp.as_ref()
                 && allowed
-                && let Some(p) = ui.input(|inp| inp.pointer.hover_pos()).filter(|p| xf.rect.contains(*p))
+                && let Some(p) = ptr.within(xf.rect)
             {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 if resp.clicked() {
@@ -4013,12 +4114,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             // Over a mark already placed, the Fill & Sign tool picks it up (comments, below).
             if let QuickTool::Fill(ft) = tool
                 && allowed
-                && !comments::fill_grabs(ui, &pcx, view)
+                && !comments::fill_grabs(&pcx, view)
             {
                 match crate::fill_sign::page_input(
                     ui,
                     &resp,
                     &xf,
+                    &ptr,
                     i,
                     info,
                     ft,
@@ -4042,15 +4144,15 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 }
             }
             if matches!(tool, QuickTool::SignArea { .. }) {
-                crate::sign_ui::page_input(ui, &resp, &xf, i, info, view);
+                crate::sign_ui::page_input(ui, &resp, &xf, &ptr, i, info, view);
             }
             if matches!(tool, QuickTool::MarqueeZoom | QuickTool::Snapshot) {
-                crate::zoom_snap::page_input(ui, &resp, &xf, i, view);
+                crate::zoom_snap::page_input(ui, &resp, &xf, &ptr, i, view);
             }
             if tool == QuickTool::EnhanceCamera {
-                crate::camera_ui::page_input(ui, &resp, &xf, i, view, can_modify);
+                crate::camera_ui::page_input(ui, &resp, &xf, &ptr, i, view, can_modify);
             }
-            if tool == QuickTool::Crop && crate::crop::page_input(ui, &resp, &xf, i, info, view, can_crop) {
+            if tool == QuickTool::Crop && crate::crop::page_input(ui, &resp, &xf, &ptr, i, info, view, can_crop) {
                 view.current = i;
                 open_boxes = true;
             }
@@ -4062,7 +4164,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 };
                 // While a table is being set up, nothing else is drawn or moved.
                 let allowed = can_modify && table_preview.is_none() && open_table.is_none();
-                let o = crate::prepare::page_input(ui, &resp, &xf, i, info, &form, field_tool, allowed, view);
+                let o = crate::prepare::page_input(ui, &resp, &xf, &ptr, i, info, &form, field_tool, allowed, view);
                 field_props |= o.properties;
                 field_placed |= o.placed;
                 open_table = open_table.or(o.table);
@@ -4070,10 +4172,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             } else {
                 use crate::forms_ui::FieldPointer;
                 let field = if tool == QuickTool::Select
-                    && !(editing_content && can_modify && crate::content_ui::select_grabs(ui, &xf, i, info, &added, view))
-                    && !comments::select_grabs(ui, &pcx, view)
+                    && !(editing_content && can_modify && crate::content_ui::select_grabs(&xf, &ptr, i, info, &added, view))
+                    && !comments::select_grabs(&pcx, view)
                 {
-                    crate::forms_ui::page_input(ui, &resp, &xf, i, info, &form, can_fill, view)
+                    crate::forms_ui::page_input(ui, &resp, &xf, &ptr, i, info, &form, can_fill, view)
                 } else {
                     FieldPointer::Away
                 };
@@ -4087,11 +4189,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     let (vx, vy) = xf.screen_to_view(p);
                     text.as_ref().is_some_and(|t| t.glyphs.iter().any(|g| vx >= g.rect[0] && vx <= g.rect[2] && vy >= g.rect[1] && vy <= g.rect[3]))
                 };
-                crate::redact_ui::page_input(ui, &resp, &xf, i, info, over_text, view)
+                crate::redact_ui::page_input(ui, &resp, &xf, &ptr, i, info, over_text, view)
             };
-            let image_owns_pointer = tool == QuickTool::EditText && crate::edit_text_ui::image_owns_pointer(ui, &xf, i, info, view);
+            let image_owns_pointer = tool == QuickTool::EditText && crate::edit_text_ui::image_owns_pointer(ui, &xf, &ptr, i, info, view);
             let on_objects =
-                !image_owns_pointer && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(ui, &resp, &xf, i, doc, view);
+                !image_owns_pointer && tool == QuickTool::EditText && can_modify && crate::object_ui::page_input(ui, &resp, &xf, &ptr, i, doc, view);
             let lines = if matches!(tool, QuickTool::AddText | QuickTool::EditText) && can_modify {
                 let generation = doc.edit_generation();
                 match view.edit_lines.get(&i) {
@@ -4123,6 +4225,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         ui,
                         &resp,
                         &xf,
+                        &ptr,
                         i,
                         info,
                         &added,
@@ -4151,11 +4254,13 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 };
                 // Editable text takes precedence over background/overlapping artwork. Both
                 // inventories are painted every frame, even when text owns the pointer.
-                let text_used = crate::edit_text_ui::page_input(ui, &resp, &xf, i, doc, &lines, view, !others_own_pointer && !image_owns_pointer);
+                let text_used =
+                    crate::edit_text_ui::page_input(ui, &resp, &xf, &ptr, i, doc, &lines, view, !others_own_pointer && !image_owns_pointer);
                 let image_used = crate::edit_text_ui::image_input(
                     ui,
                     &resp,
                     &xf,
+                    &ptr,
                     i,
                     info,
                     &images,
@@ -4165,7 +4270,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 );
                 !others_own_pointer && (text_used || image_used)
             };
-            let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, i, info, &doc_links, view);
+            let on_link = tool == QuickTool::Link && can_modify && crate::link_ui::page_input(ui, &resp, &xf, &ptr, i, info, &doc_links, view);
             if tool == QuickTool::Select
                 && resp.secondary_clicked()
                 && can_modify
@@ -4181,6 +4286,12 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             view.signature_drag.prepare(ui.ctx(), doc, preview_target, scale);
             view.signature_drag.paint(painter, &pcx, &view.comments, view.pending_edit.as_ref());
 
+            // Any press on the page ends Select All of the document: text read or not, any tool,
+            // on a link too.
+            // A press that lands on something drawn over the page (a menu, a dialog) is not one.
+            if view.all_text && pressed_page == Some(i) {
+                view.all_text = false;
+            }
             // Text layer: find matches, selection, I-beam and drag-to-select.
             let to_screen = |g: [f32; 4]| xf.view_rect(g);
             if let Some(text) = view.texts.get(&i).cloned() {
@@ -4198,6 +4309,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                             };
                             painter.rect_filled(to_screen(lr).expand(1.0), CornerRadius::same(2), fill);
                         }
+                    }
+                }
+                if view.all_text {
+                    for lr in text.line_rects(0..text.glyphs.len()) {
+                        painter.rect_filled(to_screen(lr), CornerRadius::same(1), Color32::from_rgba_unmultiplied(0x3A, 0x7B, 0xF0, 70));
                     }
                 }
                 if let Some(sel) = view.selection.filter(|s| s.page == i) {
@@ -4232,23 +4348,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     } else if over_text && cursor_free {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Text);
                     }
-                    let press_here = ui
-                        .input(|inp| {
-                            inp.pointer.press_origin().or_else(|| {
-                                // A press and release can arrive in one pass; egui has already
-                                // cleared press_origin, but the press still starts multi-click selection.
-                                inp.events.iter().find_map(|event| match event {
-                                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. }
-                                        if pos.is_finite() =>
-                                    {
-                                        Some(*pos)
-                                    }
-                                    _ => None,
-                                })
-                            })
-                        })
-                        .is_some_and(|o| r.contains(o));
-                    let pressed = ui.input(|inp| inp.pointer.primary_pressed());
+                    // The pages' press, kept when its release came in the same frame (#2100): it
+                    // still starts multi-click selection.
+                    let press_here = ptr.origin.is_some_and(|o| r.contains(o));
+                    let pressed = ptr.pressed().is_some();
                     if pressed && press_here && !over_link {
                         let now = ui.input(|inp| inp.time);
                         // The same limits egui uses to count clicks on release.
@@ -4273,7 +4376,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                         // re-drag over text whose bar Copy closed would keep the bar hidden.
                         view.actions_dismissed = None;
                         view.selection_drag = true;
-                        let origin = ui.input(|inp| inp.pointer.press_origin()).unwrap_or(p);
+                        let origin = ptr.origin.unwrap_or(p);
                         let (ox, oy) = xf.screen_to_view(origin);
                         if view.clicks < 2 {
                             view.selection = if column {
@@ -4363,11 +4466,11 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 crate::redact_ui::after_text(&resp, i, info, view);
             }
             if area_tool {
-                crate::redact_ui::paint(ui, painter, i, view);
+                crate::redact_ui::paint(painter, i, view, pointer);
             }
             comments::paint_page(ui, painter, &pcx, view);
             if editing_content {
-                crate::content_ui::paint_page(ui, painter, &xf, i, info, &added, view);
+                crate::content_ui::paint_page(painter, &xf, i, info, &added, view, pointer);
             }
             if tool == QuickTool::EditText {
                 crate::object_ui::paint(painter, &xf, i, info, &view.objects);
@@ -4376,21 +4479,23 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 crate::camera_ui::paint(painter, &xf, i, view);
             }
             if tool == QuickTool::Link {
-                crate::link_ui::paint(ui, painter, &xf, i, info, &doc_links, view);
+                crate::link_ui::paint(painter, &xf, i, info, &doc_links, view, pointer);
             }
             if preparing {
-                crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view);
+                crate::prepare::paint_page(ui, painter, &xf, i, info, &form, view, pointer);
                 if let Some(preview) = &table_preview {
                     crate::field_table_ui::paint_preview(painter, &xf, i, preview);
                 }
                 if calc_order {
                     let selected = view.prepare.selected.as_ref().map(|(name, _)| name.as_str());
-                    if let Some(name) = crate::calc_order_ui::paint_page(ui, painter, &xf, i, info, &form, &view.calc_order, generation, selected) {
+                    if let Some(name) =
+                        crate::calc_order_ui::paint_page(painter, &xf, i, info, &form, &view.calc_order, generation, selected, pointer)
+                    {
                         calc_hover = Some(name);
                     }
                 }
             } else {
-                crate::forms_ui::paint_page(ui, painter, &xf, i, info, &form, view);
+                crate::forms_ui::paint_page(painter, &xf, i, info, &form, view, pointer);
             }
 
             // Form-field highlight (Acrobat's "Highlight existing fields"); required fields get a
@@ -4418,9 +4523,10 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                     }
                 }
             }
-            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback.
-            if !page_covered
-                && !matches!(tool, QuickTool::Fill(_))
+            // Fill & Sign keeps its placement cursor clear of link/comment hover feedback. Tips
+            // draw above the palette, so none shows while it is open, even beside it.
+            if !matches!(tool, QuickTool::Fill(_))
+                && unobstructed
                 && let Some(p) = pointer
             {
                 for l in info.links.iter().filter(|l| l.page == i) {
@@ -4542,7 +4648,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             && navigation_enabled
             && unobstructed
             && !single_paging
-            && let Some(p) = ui.input(|i| i.pointer.latest_pos())
+            && let Some(p) = ptr.pos
         {
             let dy = crate::autoscroll::edge_delta(p.y, avail, ui.input(|i| i.stable_dt));
             if dy != 0.0 {
@@ -4653,7 +4759,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
                 return;
             }
             if view.comments.selected.is_some() {
-                canvas_action = comments::context_menu(ui, view, info, prefs, allowed);
+                canvas_action = comments::context_menu(ui, view, info, prefs, allowed, can_modify);
                 return;
             }
             // Over a picture (and no comment): Copy Image, as in Acrobat's page menu.
@@ -4834,7 +4940,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             }
         });
     }
-    // Text layers: visible pages for selection, every page while a search is active.
+    // Text layers: visible pages for selection, every page while a search is active. (Select All
+    // of the document needs no more: shown pages highlight as their text comes, and Copy reads
+    // the rest, as text far away is let go to bound memory.)
     let need_text = |p: &usize| !view.texts.contains_key(p) && !view.text_failed.contains(p);
     let mut text_pages: Vec<usize> = if hand { Vec::new() } else { visible_now.iter().copied().filter(need_text).collect() };
     if view.find.as_ref().is_some_and(|f| !f.case_query.trim().is_empty()) {
@@ -4854,7 +4962,9 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     view.frame_visible = visible_now.iter().copied().collect();
 
     if let Some((pos, text)) = hover_text {
-        egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
+        // Click-through, as a tooltip is: the pages lose the pointer under anything that isn't.
+        let tip = egui::Area::new(egui::Id::new("canvas-hover")).order(egui::Order::Tooltip).interactable(false);
+        tip.fixed_pos(pos + vec2(14.0, 16.0)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_max_width(320.0);
                 ui.label(text);
@@ -4872,7 +4982,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     if let Some(e) = crate::edit_text_ui::overlay(ui.ctx(), view, info) {
         view.pending_edit = Some(e);
     }
-    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, today) {
+    let text_box = crate::forms_ui::text_box(doc, view, &form);
+    if let Some(e) = crate::forms_ui::overlay(ui.ctx(), view, info, &form, text_box.as_ref(), today) {
         view.pending_edit = Some(e);
     }
     if let Some(e) = crate::fill_sign::type_box(ui.ctx(), view, info, &author) {
@@ -5393,6 +5504,31 @@ fn set_layers(app: &mut PdfCraftApp, index: usize, changes: &[(LayerOp, (u32, u1
     }
 }
 
+/// Where a pinch or ⌘-scroll zooms the view about: the pointer, wherever it is over the view. Not
+/// page input: it is read before the pages' widget exists, once `rect_contains_pointer` has found
+/// the view under the pointer.
+fn zoom_anchor(ui: &egui::Ui) -> Option<Pos2> {
+    ui.input(|i| i.pointer.hover_pos())
+}
+
+/// The pointer and frame time that scroll the view while a comment is drawn. Not page input: it is
+/// read before the pages' widget exists, and the pointer may be past the view's edge.
+fn drawing_edge_pointer(ui: &egui::Ui) -> (Option<Pos2>, f32) {
+    ui.input(|i| (i.pointer.latest_pos(), i.stable_dt))
+}
+
+/// A press anywhere, or a key, stops the touchpad's glide (#531).
+fn glide_interrupted(ui: &egui::Ui) -> bool {
+    ui.input(|i| i.pointer.any_pressed() || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. })))
+}
+
+/// Full screen's click on the document, which turns the page: a primary click this frame with the
+/// view on top under it in `area`. Not page input: it is read before the pages' widget exists, and
+/// the turn waits until the pages have had the click.
+fn presentation_click(ui: &egui::Ui, area: Rect) -> bool {
+    ui.rect_contains_pointer(area) && ui.input(|i| i.pointer.primary_clicked())
+}
+
 /// Whether `p` lies in the bottom-left quadrant of `area`, where the page size shows (#1855).
 fn in_size_hint_zone(area: Rect, p: Pos2) -> bool {
     p.x >= area.min.x && p.x < area.center().x && p.y > area.center().y && p.y <= area.max.y
@@ -5541,6 +5677,8 @@ enum Notice {
     Unlock,
     /// Close this historical snapshot tab (View signed version / View revision).
     Close,
+    /// Stop showing the secured-document notice, in every document (#4035).
+    HideSecured,
 }
 
 /// The notice bar above the pages: a file changed on disk first, then what a historical
@@ -5618,6 +5756,7 @@ fn notices(
     }
     let mut open_security = false;
     let mut unlock = false;
+    let mut hide_secured = false;
     let mut open_repairs = false;
     let mut open_console = false;
     let mut toggled = None;
@@ -5632,8 +5771,12 @@ fn notices(
         let mut text =
             crate::i18n::fmt(tl!("Dynamic XFA form laid out from its template: {pages}, {fields}."), &[("pages", &pages), ("fields", &fields)]);
         if !x.warnings.is_empty() {
+            // The notes are clauses ("a picture is left out"); the first starts a sentence here.
+            let notes = x.warnings.join("; ");
+            let mut chars = notes.chars();
             text.push(' ');
-            text.push_str(&x.warnings.join("; "));
+            text.extend(chars.next().into_iter().flat_map(char::to_uppercase));
+            text.push_str(chars.as_str());
             text.push('.');
         }
         Some(("text-cursor-input", text, true))
@@ -5699,6 +5842,10 @@ fn notices(
         if secured && doc.can_unlock() && crate::widgets::pill_button(ui, tl!("Unlock…"), true).clicked() {
             unlock = true;
         }
+        // Only when the bar shows the security message: a form's stopped scripts come first.
+        if secured && !scripts_off && crate::widgets::pill_button(ui, tl!("Don't show again"), false).clicked() {
+            hide_secured = true;
+        }
         if repaired && !secured && info.fields.is_empty() && crate::widgets::pill_button(ui, tl!("Details"), false).clicked() {
             open_repairs = true;
         }
@@ -5711,6 +5858,9 @@ fn notices(
     }
     if unlock {
         return Some(Notice::Unlock);
+    }
+    if hide_secured {
+        return Some(Notice::HideSecured);
     }
     open_security.then_some(Notice::Security).or(toggled)
 }
@@ -5941,7 +6091,7 @@ fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
                                         .info
                                         .annotations
                                         .iter()
-                                        .any(|a| a.page == page && a.index == annotation && a.in_reply_to.is_none() && comments::made_by(a, tool))
+                                        .any(|a| a.page == page && a.index == annotation && !a.is_reply() && comments::made_by(a, tool))
                             })
                         {
                             app.apply_edit(Edit::StyleAnnotation {
@@ -6275,6 +6425,10 @@ fn organize_grid(view: &mut DocView, info: &DocInfo, editable: bool, dirty: bool
                         view.pending_action = Some(ViewAction::Extract);
                         ui.close();
                     }
+                    if ui.button(tl!("Split document…")).clicked() {
+                        view.pending_action = Some(ViewAction::SplitBeforeSelected);
+                        ui.close();
+                    }
                     if ui.add_enabled(editable, egui::Button::new(tl!("Replace pages…"))).clicked() {
                         view.pending_action = Some(ViewAction::ReplacePages);
                         ui.close();
@@ -6525,6 +6679,8 @@ mod tests {
             modified: None,
             name: None,
             in_reply_to: None,
+            parent: None,
+            grouped: false,
             rect: [0.0; 4],
             color: None,
             index: 0,
@@ -6533,6 +6689,7 @@ mod tests {
             locked: false,
             intent: None,
             fill_sign,
+            no_rotate: false,
             points: Vec::new(),
         }
     }
@@ -6809,6 +6966,219 @@ trailer << /Root 1 0 R >>
         assert!(!v.texts.contains_key(&99), "far pages go");
         assert_eq!(v.texts.len(), 2 + 1 + MAX_CACHED_TEXT_PAGES, "visible + matched + prefetch window");
         assert!(v.text_failed.contains(&0) && v.text_failed.contains(&99), "failures are bytes-free: never evict");
+    }
+
+    /// A PDF of one line of text on each page, `lines[i]` on page `i`.
+    fn text_pages_pdf(lines: &[&str]) -> Vec<u8> {
+        let n = lines.len();
+        // 1 catalog, 2 pages, 3 font, then a page and its content stream for each line.
+        let mut objects = vec![
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            format!("<< /Type /Pages /Count {n} /Kids [{}] >>", (0..n).map(|i| format!("{} 0 R", 4 + 2 * i)).collect::<Vec<_>>().join(" ")),
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".to_string(),
+        ];
+        for (i, line) in lines.iter().enumerate() {
+            let content = format!("BT /F1 18 Tf 72 700 Td ({line}) Tj ET");
+            objects.push(format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents {} 0 R >>",
+                5 + 2 * i
+            ));
+            objects.push(format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()));
+        }
+        let mut out = b"%PDF-1.7\n".to_vec();
+        let mut offsets = Vec::new();
+        for (i, o) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+        for o in offsets {
+            out.extend(format!("{o:010} 00000 n \n").bytes());
+        }
+        out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+        out
+    }
+
+    /// #2639: scrolling continuously, Select All takes every page's text, and Copy gets all of it
+    /// in page order, reading the pages whose text wasn't read for display.
+    #[test]
+    fn select_all_copies_the_whole_document_while_scrolling_continuously() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+        let v = &mut app.views[0];
+        assert!(v.continuous, "continuous scrolling is the default");
+        assert!(v.texts.is_empty(), "no page's text read yet");
+        // Nothing shown is selected yet (false, as for a page whose text isn't read), but the whole
+        // document is: Copy reads every page.
+        assert!(!v.select_all());
+        assert!(v.all_text && v.selection.is_none());
+        assert_eq!(v.pages_without_text(), vec![0, 1, 2]);
+        // Copy reads the pages off the UI thread; the clipboard gets the text once they're read.
+        let ctx = egui::Context::default();
+        assert!(app.copy_selected_text(0, &ctx), "the copy starts");
+        assert!(app.document_copy.is_some(), "reading the pages, not on this thread");
+        let mut text = None;
+        for _ in 0..500 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| app.finish_document_copy(ui.ctx()));
+            out.textures_delta.clear();
+            text = out.platform_output.commands.iter().find_map(|c| match c {
+                egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                _ => None,
+            });
+            if text.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let text = text.expect("the copied text arrives");
+        assert!(app.document_copy.is_none(), "done");
+        let at = |w: &str| text.find(w).unwrap_or_else(|| panic!("{w:?} missing from {text:?}"));
+        assert!(at("Alpha") < at("Bravo") && at("Bravo") < at("Charlie"), "page order: {text:?}");
+        assert_eq!(text.lines().count(), 3, "a line per page: {text:?}");
+        // A new scope ends it: one page at a time, Select All is the page's again.
+        app.views[0].set_continuous(false);
+        assert!(!app.views[0].all_text, "not after switching to one page at a time");
+        // So do a page selection and a change of the document's content (an edit, undo).
+        app.views[0].set_continuous(true);
+        app.views[0].select_all();
+        app.views[0].select_text(0, 0, 0);
+        assert!(!app.views[0].all_text, "a page selection replaces it");
+        app.views[0].select_all();
+        app.views[0].invalidate_content();
+        assert!(!app.views[0].all_text, "not past an edit of the document");
+    }
+
+    /// A whole-document copy reads the pages without text, keeps those already read and skips
+    /// those that failed before.
+    #[test]
+    fn a_document_copy_reads_only_the_pages_it_needs() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+        app.views[0].text_failed.insert(2);
+        let job = crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
+        let kinds: Vec<_> = job.pages.iter().map(|p| matches!(p, crate::CopyPage::ToRead)).collect();
+        assert_eq!(kinds, vec![true, true, false], "pages 1 and 2 to read, page 3 failed before");
+        assert!(matches!(job.pages[2], crate::CopyPage::Skip));
+    }
+
+    /// A later copy wins: a whole-document copy still reading its pages never replaces what was
+    /// copied after it started, from the page or anywhere else (a text field, a comment).
+    #[test]
+    fn a_later_copy_cancels_a_document_copy_still_reading() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+        let ctx = egui::Context::default();
+        // Another copy in the same frame (here a text field's) drops it.
+        app.views[0].select_all();
+        assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.ctx().copy_text("a word".to_owned());
+            app.finish_document_copy(ui.ctx());
+        });
+        out.textures_delta.clear();
+        assert!(app.document_copy.is_none(), "cancelled");
+        let copies: Vec<_> = out.platform_output.commands.iter().filter(|c| matches!(c, egui::OutputCommand::CopyText(_))).collect();
+        assert_eq!(copies, vec![&egui::OutputCommand::CopyText("a word".to_owned())], "the later copy stays");
+        // So does copying a page selection.
+        app.views[0].select_all();
+        assert!(app.copy_selected_text(0, &ctx) && app.document_copy.is_some());
+        app.views[0].select_text(0, 0, 5);
+        app.copy_selected_text(0, &ctx);
+        assert!(app.document_copy.is_none(), "a page selection's copy cancels it");
+    }
+
+    /// A press anywhere on a page ends Select All of the document, whatever the tool (here the
+    /// Hand, which selects no text) and whether the page's text is read yet.
+    #[test]
+    fn a_press_on_a_page_ends_select_all_of_the_document() {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+            let mut app = PdfCraftApp::new();
+            app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+            app
+        });
+        let mut on_screen = None;
+        for _ in 0..600 {
+            h.run_steps(2);
+            on_screen = h.state().views[0].page_screen_rect(0);
+            if on_screen.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let r = on_screen.expect("the first page is on screen");
+        h.state_mut().quick_tool = crate::QuickTool::Hand;
+        h.state_mut().views[0].select_all();
+        assert!(h.state().views[0].all_text);
+        let at = r.center();
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        assert!(!h.state().views[0].all_text, "a press on the page ends it");
+
+        // A press while a dialog is up lands on the dialog, not the page: the selection stays.
+        h.state_mut().views[0].select_all();
+        h.state_mut().dialog = Some(crate::Dialog::JsConsole);
+        h.run_steps(2);
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        assert!(h.state().views[0].all_text, "a press beneath a dialog doesn't end it");
+    }
+
+    /// The pages of a whole-document copy come out in order whatever was read before, and a
+    /// cancelled copy gives nothing (a new copy or a closed document cancels the old one).
+    #[test]
+    fn a_document_copy_reads_in_page_order_and_stops_when_cancelled() {
+        let mut app = PdfCraftApp::new();
+        app.open_bytes("three.pdf", None, text_pages_pdf(&["Alpha one", "Bravo two", "Charlie three"])).unwrap();
+        // The middle page's text read for display already; the others read by the copy.
+        let doc = app.session.get(app.views[0].id).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+        let middle = r.render(RenderRequest { page: 1, kind: RequestKind::Text, ..Default::default() }).text.unwrap();
+        app.views[0].texts.insert(1, middle);
+        let job = || crate::DocumentCopyJob::of(&app.views[0], app.session.get(app.views[0].id).unwrap());
+        let text = job().text(&std::sync::atomic::AtomicBool::new(false)).unwrap();
+        assert!(text.find("Alpha").unwrap() < text.find("Bravo").unwrap() && text.find("Bravo").unwrap() < text.find("Charlie").unwrap(), "{text:?}");
+        assert_eq!(job().text(&std::sync::atomic::AtomicBool::new(true)), None, "cancelled");
+    }
+
+    /// Select All keeps to the page shown one page at a time, and in a document of one page; of
+    /// the document, it reads the text already read and doesn't ask again for failed pages.
+    #[test]
+    fn select_all_of_the_document_only_while_scrolling_through_several_pages() {
+        let info = thumbnail_info(3);
+        let one_line = |s: &str| PageText {
+            glyphs: s
+                .chars()
+                .map(|c| pdfcraft_render::TextGlyph { text: c.into(), rect: [0.0, 0.0, 10.0, 10.0], quad: [[0.0, 0.0]; 4], direction: [1.0, 0.0] })
+                .collect(),
+            line_of: s.chars().map(|_| 0).collect(),
+            space_before: s.chars().map(|_| false).collect(),
+        };
+        let mut v = DocView::new(DocId(1), &info, ViewDefaults::default());
+        for p in 0..3 {
+            v.texts.insert(p, Arc::new(one_line("abc")));
+        }
+        v.continuous = false;
+        v.current = 1;
+        assert!(v.select_all());
+        assert!(!v.all_text && v.selection.is_some_and(|s| s.page == 1), "one page at a time: the page shown");
+        let single = thumbnail_info(1);
+        let mut w = DocView::new(DocId(2), &single, ViewDefaults::default());
+        w.texts.insert(0, Arc::new(one_line("abc")));
+        assert!(w.select_all());
+        assert!(!w.all_text && w.selection.is_some(), "a one-page document: that page");
+        // Text read for display is used; pages that failed aren't asked for again.
+        let mut d = DocView::new(DocId(3), &info, ViewDefaults::default());
+        d.texts.insert(1, Arc::new(one_line("abc")));
+        d.text_failed.insert(2);
+        assert!(d.select_all() && d.all_text);
+        assert_eq!(d.pages_without_text(), vec![0]);
     }
 
     #[test]
@@ -7623,6 +7993,47 @@ trailer << /Root 1 0 R >>
         }
         assert_eq!(PageLayout::try_parse(" Two-Up "), Some(PageLayout::TwoUp));
         assert_eq!(PageLayout::try_parse("facing"), None);
+    }
+
+    #[test]
+    fn a_null_xyz_coordinate_keeps_the_readers_place_on_the_new_page() {
+        // CAD exports link each cross-reference as `/XYZ null null 0`. Acrobat keeps the
+        // point at the window's top-left (and the zoom) when following one to another sheet.
+        let info = pdfcraft_render::DocInfo {
+            pages: (0..3)
+                .map(|_| pdfcraft_render::PageInfo { width: 842.0, height: 595.0, label: String::new(), crop: [0.0, 0.0, 842.0, 595.0], rotation: 0 })
+                .collect(),
+            ..Default::default()
+        };
+        // Page 1 at 400 %, scrolled so its point 200 pt across and 125 pt down is at the corner
+        // where /XYZ puts its point.
+        let zoomed = |rot: u16, size: Vec2| {
+            let mut v = view(3, PageLayout::Single, true);
+            v.rotation = rot;
+            v.viewport_screen = Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 600.0));
+            v.screen_xforms = vec![(0, PageXform { rect: Rect::from_min_size(pos2(SIDE - 800.0, -500.0), size), rot, pw: 842.0, ph: 595.0 })];
+            v
+        };
+        let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 1e-4);
+        let mut v = zoomed(0, vec2(4.0 * 842.0, 4.0 * 595.0));
+        v.go_to_dest(1, DestView::Xyz { left: None, top: None, zoom: None }, &info);
+        let (page, fx, fy, rel) = v.goto_point.expect("the place is kept");
+        assert_eq!((v.current, page, rel), (1, 1, vec2(SIDE, 0.0)));
+        assert!(near(fx, 200.0 / 842.0) && near(fy, 125.0 / 595.0), "{fx:?} {fy:?}");
+        // A coordinate the destination gives wins; only the null one is kept.
+        let mut v = zoomed(0, vec2(4.0 * 842.0, 4.0 * 595.0));
+        v.go_to_dest(2, DestView::Xyz { left: Some(421.0), top: None, zoom: Some(4.0) }, &info);
+        let (_, fx, fy, _) = v.goto_point.expect("the place is kept");
+        assert!(near(fx, 0.5) && near(fy, 125.0 / 595.0), "{fx:?} {fy:?}");
+        // With the view turned a quarter, the point under the corner is still the one kept.
+        let mut v = zoomed(90, vec2(4.0 * 595.0, 4.0 * 842.0));
+        v.go_to_dest(1, DestView::Xyz { left: None, top: None, zoom: None }, &info);
+        let (_, fx, fy, _) = v.goto_point.expect("the place is kept");
+        assert!(near(fx, 800.0 / (4.0 * 595.0)) && near(fy, 500.0 / (4.0 * 842.0)), "{fx:?} {fy:?}");
+        // A page that fits the window keeps the layout's placement: no point, as before.
+        let mut v = zoomed(0, vec2(800.0, 565.0));
+        v.go_to_dest(1, DestView::Xyz { left: None, top: None, zoom: None }, &info);
+        assert_eq!((v.current, v.goto, v.goto_point), (1, Some((1, 0.0)), None));
     }
 
     #[test]
