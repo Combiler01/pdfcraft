@@ -3832,7 +3832,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             view.links.context = None;
             let mut over_image = false;
             if tool == QuickTool::EditText {
-                let pointer_pos = ui.input(|inp| inp.pointer.hover_pos().or(inp.pointer.interact_pos()));
+                let pointer_pos = ptr.pos;
                 if let Some(p) = pointer_pos {
                     for (page_idx, xf) in &view.screen_xforms {
                         let images = doc.page_images(*page_idx);
@@ -4743,7 +4743,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             let is_image_menu = tool == QuickTool::EditText
                 && (ui.ctx().data_mut(|d| d.get_persisted::<bool>(crate::edit_text_ui::image_menu_id())).unwrap_or(false)
                     || view.image_selection.as_ref().is_some_and(|sel| {
-                        let pointer_pos = ui.input(|inp| inp.pointer.hover_pos().or(inp.pointer.interact_pos()));
+                        let pointer_pos = ptr.pos;
                         let Some(p) = pointer_pos else { return false };
                         let Some((_, xf)) = view.screen_xforms.iter().find(|(page_idx, _)| *page_idx == sel.page) else { return false };
                         let images = doc.page_images(sel.page);

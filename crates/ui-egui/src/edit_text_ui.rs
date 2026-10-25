@@ -1805,7 +1805,7 @@ pub(crate) fn image_input(
                     }
                 }
 
-                if resp.drag_stopped() || !ui.input(|inp| inp.pointer.primary_down()) {
+                if resp.drag_stopped() || !ptr.primary_down {
                     if let Some(s) = view.image_selection.as_mut() {
                         s.drag = None;
                         let norm = |r: Rect| {
