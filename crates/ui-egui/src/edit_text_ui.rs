@@ -1509,6 +1509,7 @@ fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
     [u[0].min(v[0]) as f64, u[1].min(v[1]) as f64, u[0].max(v[0]) as f64, u[1].max(v[1]) as f64]
 }
 
+#[doc(hidden)]
 pub fn image_menu_id() -> egui::Id {
     egui::Id::unique("image-menu")
 }
