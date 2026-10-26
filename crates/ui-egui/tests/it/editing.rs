@@ -1087,6 +1087,9 @@ fn save_prompt_fits_the_smallest_window_whatever_the_name() {
     let size = egui::vec2(820.0, 520.0);
     for name in names {
         let start: String = name.chars().take(10).collect();
+        if support::skip_without_glyphs(&format!("save_prompt_fits_the_smallest_window_whatever_the_name ({start}…)"), "en", &name) {
+            continue;
+        }
         let mut h = Harness::builder().with_size(size).build_eframe(move |_cc| {
             let mut app = PdfCraftApp::new();
             app.set_option("language", "en").unwrap();
@@ -1370,7 +1373,9 @@ fn edit_menu_names_the_step_to_undo() {
     });
     h.get_by_label("Menu").click();
     h.run_steps(2);
-    h.get_by_label("Edit ⏵").hover(); // submenus open on hover; their labels carry the arrow
+    // The popup's Edit entry and the left panel's Edit tool carry the same visible label. The
+    // tool reports a toggle state; the menu entry does not.
+    h.get_all_by_label("Edit").find(|n| n.accesskit_node().toggled().is_none()).expect("the Edit menu entry").hover(); // submenus open on hover; their labels carry the arrow
     h.run_steps(3);
     h.get_by_label_contains("Undo Rotate page").click(); // the label includes the shortcut
     h.run_steps(3);
@@ -3573,6 +3578,9 @@ fn an_applied_paragraph_keeps_its_edited_look_until_the_page_is_redrawn() {
 /// as a form field does; the editor used to close with the error and the typing was lost.
 #[test]
 fn a_paragraph_whose_edit_fails_stays_open_with_its_typing() {
+    if crate::support::skip_without_glyphs("a_paragraph_whose_edit_fails_stays_open_with_its_typing", "en", "Top ก") {
+        return;
+    }
     let bytes = source_font_fixture_with_text("BT /F1 24 Tf 20 220 Td (Top) Tj ET BT /F2 24 Tf 20 120 Td (Bottom) Tj ET");
     let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
         let mut app = PdfCraftApp::new();
@@ -7596,6 +7604,7 @@ fn a_paragraph_running_off_its_page_edits_without_covering_the_next_page() {
         delta: egui::vec2(0.0, -300.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
     h.run_steps(4);
     let scrolled = h.state().views[0].page_screen_rect(0).unwrap();
