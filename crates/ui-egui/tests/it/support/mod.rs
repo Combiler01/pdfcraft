@@ -51,6 +51,27 @@ pub fn wait_until(h: &mut Harness<'static, PdfCraftApp>, what: &str, ready: impl
     );
 }
 
+/// Open the in-window menu bar's `title` menu (File, Edit, View…).
+pub fn open_menu(h: &mut Harness<'static, PdfCraftApp>, title: &str) {
+    use egui_kittest::kittest::Queryable;
+    h.get_by(|n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(title)).click();
+    h.run_steps(2);
+}
+
+/// The menu row labelled `label` in an open menu.
+pub fn menu_row<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &str) -> egui_kittest::Node<'h> {
+    use egui_kittest::kittest::Queryable;
+    let label = label.to_owned();
+    h.get_by(move |n| n.role() == egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(label.as_str()))
+}
+
+/// The widget labelled `label` outside the menu bar, whose titles (File, Edit, Sign…) may share it.
+pub fn outside_menus<'h>(h: &'h Harness<'static, PdfCraftApp>, label: &str) -> egui_kittest::Node<'h> {
+    use egui_kittest::kittest::Queryable;
+    let label = label.to_owned();
+    h.get_by(move |n| n.role() != egui::accesskit::Role::MenuItem && n.label().as_deref() == Some(label.as_str()))
+}
+
 /// Whether the test `name` must skip because the interface fonts lack a glyph for a character it
 /// draws: one in `text` or in the catalog of the interface `language`. egui 0.37 test harnesses
 /// panic on a missing glyph, and Japanese, Chinese and Thai faces come only from the optional

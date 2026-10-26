@@ -1371,13 +1371,8 @@ fn edit_menu_names_the_step_to_undo() {
     let mut h = harness(2, |app| {
         app.apply_edit(pdfcraft_engine::Edit::RotatePages { pages: vec![0], degrees: 90 });
     });
-    h.get_by_label("Menu").click();
-    h.run_steps(2);
-    // The popup's Edit entry and the left panel's Edit tool carry the same visible label. The
-    // tool reports a toggle state; the menu entry does not.
-    h.get_all_by_label("Edit").find(|n| n.accesskit_node().toggled().is_none()).expect("the Edit menu entry").hover(); // submenus open on hover; their labels carry the arrow
-    h.run_steps(3);
-    h.get_by_label_contains("Undo Rotate page").click(); // the label includes the shortcut
+    support::open_menu(&mut h, "Edit");
+    support::menu_row(&h, "Undo Rotate page").click();
     h.run_steps(3);
     let app = h.state();
     let doc = app.session.get(app.views[0].id).unwrap();
@@ -3706,7 +3701,7 @@ fn editing_existing_text_in_place() {
 /// paragraph editor and retypes it as "Chapter One", leaving the editor open.
 fn edit_tab_with_an_open_paragraph(h: &mut Harness<'static, PdfCraftApp>) {
     use pdfcraft_ui_egui::{Mode, QuickTool};
-    h.get_by_label("Edit").click();
+    support::outside_menus(h, "Edit").click();
     h.run_steps(3);
     assert_eq!((h.state().mode, h.state().quick_tool), (Mode::Edit, QuickTool::EditText));
     open_the_first_line(h);
