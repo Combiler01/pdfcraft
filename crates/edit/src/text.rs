@@ -346,6 +346,9 @@ pub fn subset_document_fonts(doc: &mut Document) -> Result<(), EditError> {
                 if m_bytes.len() > needed_len {
                     m_bytes.truncate(needed_len);
                 }
+                if m_bytes.len() % 2 != 0 {
+                    m_bytes.pop();
+                }
                 for i in 0..m_bytes.len() / 2 {
                     let s_idx = i.saturating_mul(2);
                     if let Some(chunk) = m_bytes.get(s_idx..s_idx.saturating_add(2)) {

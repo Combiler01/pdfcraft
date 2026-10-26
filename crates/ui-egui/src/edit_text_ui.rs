@@ -300,7 +300,7 @@ pub fn toggle_numbered_list(text: &mut String) -> bool {
                 && t[..dot_idx].chars().all(|c| c.is_ascii_digit())
                 && t[dot_idx..].starts_with(". ")
             {
-                new_text.push_str(&t[dot_idx + 2..]);
+                new_text.push_str(t.get(dot_idx + 2..).unwrap_or(""));
                 continue;
             }
             new_text.push_str(line);
@@ -735,6 +735,7 @@ impl LineEditor {
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
+        self.selection = None;
         self.focus = true;
     }
 
@@ -1057,7 +1058,7 @@ pub(crate) fn quad_contains(quad: [Pos2; 4], p: Pos2) -> bool {
             }
         }
     }
-    true
+    sign != 0
 }
 
 pub use crate::canvas::{ImageObb, PainterExt, project_delta};
@@ -1510,9 +1511,13 @@ pub(crate) fn image_input(
     info: &DocInfo,
     images: &[pdfcraft_engine::PageImage],
     view: &mut DocView,
-    _action: &mut Option<ImageAction>,
+    action: &mut Option<ImageAction>,
     allow_interaction: bool,
 ) -> bool {
+    // `action` is wired by the caller (canvas.rs) and forwarded to image_context_menu; it is not
+    // dispatched from within this function directly but must remain named (not prefixed with `_`)
+    // so that future in-function dispatch paths compile without a dead-wire rename.
+    let _ = &action;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
     let hover_pos = ptr.pos;

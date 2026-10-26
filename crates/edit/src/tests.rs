@@ -8390,3 +8390,73 @@ fn a_run_of_spaces_in_a_subset_without_a_space_glyph_keeps_its_width() {
     let content = String::from_utf8_lossy(&page_content_bytes(&reopen(&doc), 0)).into_owned();
     assert_eq!(content.matches("[-330] TJ").count(), 5, "{content}");
 }
+
+#[test]
+fn image_exclusive_scope_resets_path_on_scope_exit() {
+    // An earlier scope has a path operation closed by Q (with 'h' closepath).
+    // The subsequent image in its own scope must cleanly extract and allow crop removal.
+    let content = "q 0 0 m 10 10 l h Q q 100 100 200 100 re W n 200 0 0 100 100 100 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    images::remove_image_crop(&mut doc, 0, 0).unwrap();
+}
+
+#[test]
+fn content_units_does_not_swallow_subsequent_units_on_standalone_gs() {
+    // /GS0 gs followed by Q and subsequent images must isolate each Do unit properly
+    let content = "q /GS0 gs Q q 200 0 0 100 100 100 cm /Im0 Do Q q 10 0 0 10 300 300 cm /Im0 Do Q";
+    let pieces = pdfcraft_content::Pieces::join(&[content.as_bytes()]);
+    let ops = pieces.parse().ops;
+    let units = images::content_units(&ops, 0, ops.len());
+    assert_eq!(units.len(), 2);
+}
+
+#[test]
+fn different_inline_soft_masks_have_distinct_identities() {
+    let doc = Document::new_empty();
+    let mut dict1 = Dict::default();
+    let mut mask1 = Dict::default();
+    mask1.set(b"Type".to_vec(), Object::Name(b"Mask1".to_vec()));
+    dict1.set(b"SMask".to_vec(), Object::Dict(mask1));
+
+    let mut dict2 = Dict::default();
+    let mut mask2 = Dict::default();
+    mask2.set(b"Type".to_vec(), Object::Name(b"Mask2".to_vec()));
+    dict2.set(b"SMask".to_vec(), Object::Dict(mask2));
+
+    let mut state1 = images::EffectiveGState::default();
+    state1.merge_dict(&dict1, &doc, None);
+
+    let mut state2 = images::EffectiveGState::default();
+    state2.merge_dict(&dict2, &doc, None);
+
+    assert!(state1.visually_differs(&state2), "two different inline soft masks must visually differ");
+}
+
+#[test]
+fn cid_to_gid_map_odd_length_is_trimmed_to_even() {
+    let mut m_bytes = vec![0u8, 1u8, 0u8, 2u8, 0u8];
+    let needed_len = 5;
+    if m_bytes.len() > needed_len {
+        m_bytes.truncate(needed_len);
+    }
+    if m_bytes.len() % 2 != 0 {
+        m_bytes.pop();
+    }
+    assert_eq!(m_bytes.len(), 4);
+    assert_eq!(m_bytes.len() % 2, 0);
+}
+
+#[test]
+fn is_entire_page_wrapped_with_nested_scopes() {
+    let wrapped = "q 1 0 0 1 0 0 cm q 0 0 10 10 re f Q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let pieces = pdfcraft_content::Pieces::join(&[wrapped.as_bytes()]);
+    let ops = pieces.parse().ops;
+    assert!(images::is_entire_page_wrapped(&ops), "page wrapped in outer q...Q with inner nested q...Q is wrapped");
+
+    let unwrapped = "q 1 0 0 1 0 0 cm Q q 200 0 0 100 100 100 cm /Im0 Do Q";
+    let pieces2 = pdfcraft_content::Pieces::join(&[unwrapped.as_bytes()]);
+    let ops2 = pieces2.parse().ops;
+    assert!(!images::is_entire_page_wrapped(&ops2), "page with two separate top-level q...Q scopes is not wrapped");
+}

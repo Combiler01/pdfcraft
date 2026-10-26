@@ -991,18 +991,33 @@ impl crate::PdfCraftApp {
 
         let target_rect = rect;
 
-        let before = self.session.get(id).map_or(0, |d| d.page_images(page).len());
         if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
             self.last_copied_image_rect = None;
             let added_count = self.session.get(id).map_or(0, |d| d.added().iter().filter(|a| a.page == page).count());
             let added_idx = added_count.saturating_sub(1);
+            let pasted_idx = self.session.get(id).map_or(0, |d| {
+                let images = d.page_images(page);
+                if let Some(target) = target_rect {
+                    images
+                        .iter()
+                        .rposition(|im| {
+                            (im.rect[0] - target[0]).abs() < 1e-2
+                                && (im.rect[1] - target[1]).abs() < 1e-2
+                                && (im.rect[2] - target[2]).abs() < 1e-2
+                                && (im.rect[3] - target[3]).abs() < 1e-2
+                        })
+                        .unwrap_or(images.len().saturating_sub(1))
+                } else {
+                    images.len().saturating_sub(1)
+                }
+            });
             if let Some(v) = self.views.get_mut(i) {
                 v.current = page;
                 v.content.selected = Some((page, added_idx));
                 v.content.select_added = Some((page, added_idx));
                 v.image_selection = Some(crate::edit_text_ui::ImageSelection {
                     page,
-                    index: before,
+                    index: pasted_idx,
                     crop_mode: false,
                     crop_rect: None,
                     drag: None,

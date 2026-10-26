@@ -556,10 +556,10 @@ pub(crate) fn is_entire_page_wrapped(ops: &[Op]) -> bool {
         if op.is("q") {
             depth = depth.saturating_add(1);
         } else if op.is("Q") {
-            depth = depth.saturating_sub(1);
-            if depth == 0 && i < ops.len().saturating_sub(1) {
+            if depth == 1 && i < ops.len().saturating_sub(1) {
                 return false;
             }
+            depth = depth.saturating_sub(1);
         }
     }
     depth == 0
@@ -651,13 +651,18 @@ pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> V
                     j = j.saturating_add(1);
                     found_end = true;
                     break;
-                } else if j > i && matches!(next.op.as_slice(), b"q" | b"BT" | b"BI" | b"Do" | b"sh" | b"BDC" | b"BMC") {
+                } else if j > i
+                    && matches!(
+                        next.op.as_slice(),
+                        b"q" | b"Q" | b"BT" | b"BI" | b"Do" | b"sh" | b"BDC" | b"BMC" | b"EMC" | b"Tj" | b"TJ" | b"'" | b"\""
+                    )
+                {
                     found_end = true;
                     break;
                 }
                 j = j.saturating_add(1);
             }
-            let u_end = if found_end { j } else { scan_end };
+            let u_end = if found_end { j } else { i.saturating_add(1) };
             units.push(i..u_end);
             i = u_end;
         }
@@ -684,38 +689,38 @@ pub(crate) struct ExtractedScopeState {
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
-struct EffectiveGState {
-    ca: Option<f64>,
-    ca_stroke: Option<f64>,
-    bm: Option<Vec<u8>>,
-    smask: Option<MaskIdentity>,
+pub(crate) struct EffectiveGState {
+    pub(crate) ca: Option<f64>,
+    pub(crate) ca_stroke: Option<f64>,
+    pub(crate) bm: Option<Vec<u8>>,
+    pub(crate) smask: Option<MaskIdentity>,
 }
 
 impl EffectiveGState {
-    fn effective_ca(&self) -> f64 {
+    pub(crate) fn effective_ca(&self) -> f64 {
         self.ca.unwrap_or(1.0)
     }
 
-    fn effective_ca_stroke(&self) -> f64 {
+    pub(crate) fn effective_ca_stroke(&self) -> f64 {
         self.ca_stroke.unwrap_or(1.0)
     }
 
-    fn effective_bm(&self) -> &[u8] {
+    pub(crate) fn effective_bm(&self) -> &[u8] {
         self.bm.as_deref().unwrap_or(b"Normal")
     }
 
-    fn effective_smask(&self) -> Option<&MaskIdentity> {
+    pub(crate) fn effective_smask(&self) -> Option<&MaskIdentity> {
         self.smask.as_ref()
     }
 
-    fn visually_differs(&self, other: &EffectiveGState) -> bool {
+    pub(crate) fn visually_differs(&self, other: &EffectiveGState) -> bool {
         (self.effective_ca() - other.effective_ca()).abs() > 1e-4
             || (self.effective_ca_stroke() - other.effective_ca_stroke()).abs() > 1e-4
             || self.effective_bm() != other.effective_bm()
             || self.effective_smask() != other.effective_smask()
     }
 
-    fn merge_dict(&mut self, dict: &Dict, doc: &Document, gs_name: Option<&[u8]>) {
+    pub(crate) fn merge_dict(&mut self, dict: &Dict, doc: &Document, gs_name: Option<&[u8]>) {
         if let Some(val) = dict.get(b"ca").map(|v| doc.resolve(v)).and_then(|v| v.as_f64()) {
             self.ca = Some(val);
         }
@@ -749,7 +754,15 @@ impl EffectiveGState {
                 } else if let Some(name) = gs_name {
                     self.smask = Some(MaskIdentity::Named(name.to_vec()));
                 } else {
-                    self.smask = Some(MaskIdentity::Named(b"CustomMask".to_vec()));
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+                    let mut hasher = DefaultHasher::new();
+                    for (k, v) in mask_dict.iter() {
+                        k.as_slice().hash(&mut hasher);
+                        format!("{v:?}").hash(&mut hasher);
+                    }
+                    let id = format!("InlineMask_{:016x}", hasher.finish());
+                    self.smask = Some(MaskIdentity::Named(id.into_bytes()));
                 }
             } else if let Some(r) = raw_smask.as_ref() {
                 self.smask = Some(MaskIdentity::Ref(r.num, r.generation));
@@ -763,24 +776,31 @@ struct ExtendedGStateTracker {
     stack: Vec<(EffectiveGState, Vec<(Op, Matrix)>)>,
     current_state: EffectiveGState,
     active_gs_ops: Vec<(Op, Matrix)>,
+    overflow_depth: usize,
 }
 
 impl ExtendedGStateTracker {
     fn step(&mut self, op: &Op, ext_gstates: &Dict, doc: &Document, ctm: Matrix) -> Result<(), EditError> {
         match op.op.as_slice() {
             b"q" => {
-                if self.stack.len() >= 4096 {
+                if self.stack.len() >= 4096 || self.overflow_depth > 0 {
+                    self.overflow_depth = self.overflow_depth.saturating_add(1);
                     return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
                 }
                 self.stack.push((self.current_state.clone(), self.active_gs_ops.clone()));
             }
             b"Q" => {
-                if let Some((prev_state, prev_ops)) = self.stack.pop() {
+                if self.overflow_depth > 0 {
+                    self.overflow_depth = self.overflow_depth.saturating_sub(1);
+                } else if let Some((prev_state, prev_ops)) = self.stack.pop() {
                     self.current_state = prev_state;
                     self.active_gs_ops = prev_ops;
                 }
             }
             b"gs" => {
+                if self.overflow_depth > 0 {
+                    return Ok(());
+                }
                 if let Some(name) = op.name(0) {
                     if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
                         self.current_state.merge_dict(&dict, doc, Some(name));
@@ -1357,7 +1377,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         edits.push((dest_pos..dest_pos, serialized));
         edits.push((target_span, removal_replacement));
     } else {
-        return Err(EditError::Invalid("no change in image stacking order".into()));
+        return Err(EditError::Invalid("cannot arrange image into overlapping content range".into()));
     }
 
     let changed = pieces.splice(edits);
@@ -1401,6 +1421,8 @@ fn image_exclusive_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
                     }
                     matrix = scope.matrix;
                     clipped = scope.inherited_clip;
+                    path = scope.inherited_path;
+                    pending_clip = false;
                 }
             }
             b"cm" => {
@@ -1410,7 +1432,7 @@ fn image_exclusive_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
             }
             b"BT" => text = true,
             b"ET" => text = false,
-            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" => path = true,
+            b"m" | b"l" | b"c" | b"v" | b"y" | b"re" | b"h" => path = true,
             b"W" | b"W*" => pending_clip = true,
             _ => {}
         }

@@ -99,16 +99,16 @@ pub fn image_selectable_bounds(im: &pdfcraft_engine::PageImage) -> [f64; 4] {
 /// the final selectable `egui::Rect` is the mathematical intersection of the image's
 /// full CTM-derived rect and the clipping path's rect.
 pub fn image_screen_rect(im: &pdfcraft_engine::PageImage, xf: &PageXform, info: &DocInfo, page: usize) -> Rect {
-    let full = xf.user_rect(info, page, im.rect.map(|v| v as f32));
+    let full = xf.user_rect_f64(info, page, im.rect);
     if let Some(clip) = im.clip_rect {
-        let clip_r = xf.user_rect(info, page, clip.map(|v| v as f32));
+        let clip_r = xf.user_rect_f64(info, page, clip);
         let inter = full.intersect(clip_r);
         if inter.is_positive() {
             return inter;
         }
     }
     if let Some(vr) = im.visible_rect {
-        let r = xf.user_rect(info, page, vr.map(|v| v as f32));
+        let r = xf.user_rect_f64(info, page, vr);
         if r.is_positive() {
             return r;
         }
@@ -2980,6 +2980,24 @@ impl PageXform {
         Rect::from_two_pos(self.norm_to_screen(a.0, a.1), self.norm_to_screen(b.0, b.1))
     }
 
+    /// A PDF user-space rect with f64 precision (crop box, document `/Rotate`) -> screen rect.
+    pub fn user_rect_f64(&self, info: &DocInfo, page: usize, r: [f64; 4]) -> Rect {
+        let p = &info.pages[page];
+        let [cx0, cy0, cx1, cy1] = p.crop.map(f64::from);
+        let (cw, ch) = ((cx1 - cx0).max(1.0), (cy1 - cy0).max(1.0));
+        let norm = |x: f64, y: f64| -> (f64, f64) {
+            let (u, v) = ((x - cx0) / cw, (cy1 - y) / ch);
+            match p.rotation {
+                90 => (1.0 - v, u),
+                180 => (1.0 - u, 1.0 - v),
+                270 => (v, 1.0 - u),
+                _ => (u, v),
+            }
+        };
+        let (a, b) = (norm(r[0], r[1]), norm(r[2], r[3]));
+        Rect::from_two_pos(self.norm_to_screen(a.0 as f32, a.1 as f32), self.norm_to_screen(b.0 as f32, b.1 as f32))
+    }
+
     /// This transform resized to a raster of `px` device pixels (width, height before the view
     /// rotation), so each of its texels covers one screen pixel. The rectangle's corner must
     /// already be on a whole pixel ([`snap_to_pixels`]).
@@ -5219,8 +5237,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.paste_image_at(page, at);
         }
         Some(PageMenuAction::RotateCCW(page)) => {
-            let _ = page;
-            app.views[index].rotate_view(false);
+            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: -90 });
         }
         Some(PageMenuAction::RotateCW(page)) => {
             let _ = page;

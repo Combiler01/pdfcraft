@@ -420,12 +420,12 @@ pub fn reset_crop(image_rect: Rect, uv_rect: Rect) -> (Rect, Rect) {
 
     let full_min_x = image_rect.min.x - uv_rect.min.x * px_per_uv_x;
     let full_min_y = image_rect.min.y - uv_rect.min.y * px_per_uv_y;
-    let full_w = px_per_uv_x;
-    let full_h = px_per_uv_y;
+    let full_uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    let full_w = px_per_uv_x * full_uv.width();
+    let full_h = px_per_uv_y * full_uv.height();
 
     let new_rect = Rect::from_min_size(pos2(full_min_x, full_min_y), vec2(full_w, full_h));
-    let new_uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-    (new_rect, new_uv)
+    (new_rect, full_uv)
 }
 
 // ============================================================================
@@ -775,6 +775,13 @@ mod tests {
                 let p = pos2(px, py);
                 let _ = crate::edit_text_ui::quad_contains(quad, p);
             }
+        }
+
+        #[test]
+        fn degenerate_quad_does_not_contain_points() {
+            let zero_quad = [pos2(0.0, 0.0), pos2(0.0, 0.0), pos2(0.0, 0.0), pos2(0.0, 0.0)];
+            assert!(!crate::edit_text_ui::quad_contains(zero_quad, pos2(10.0, 10.0)));
+            assert!(!crate::edit_text_ui::quad_contains(zero_quad, pos2(0.0, 0.0)));
         }
     }
 }
