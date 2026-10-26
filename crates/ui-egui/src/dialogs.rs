@@ -1379,7 +1379,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             .hint_text(tl!("Search tools…"))
                             .desired_width(ui.available_width() - 32.0),
                     );
-                    search_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), tl!("Search tools…")));
+                    search_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tl!("Search tools…")));
                     if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", tl!("Clear search")).clicked() {
                         app.pin_tool_search.clear();
                     }
@@ -1408,7 +1408,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
 
                         let pinned = app.is_tool_pinned(g.id);
                         let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), egui::Sense::click());
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
                         let press = theme::Press::track(ui, &resp);
                         press.wash(ui, rect, 6, false);
                         let body = rect.translate(press.offset());
@@ -1425,7 +1425,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                         let btn_w = 78.0;
                         let btn_rect =
                             egui::Rect::from_center_size(body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0), egui::vec2(btn_w, 26.0));
-                        let btn_resp = ui.interact(btn_rect, ui.id().with(("pin_modal_btn", g.id)), egui::Sense::click());
+                        let btn_resp = ui.interact(btn_rect, ui.scope_id().with(("pin_modal_btn", g.id)), egui::Sense::click());
                         let btn_hovered = btn_resp.hovered();
 
                         let (btn_fill, btn_stroke, text_color, btn_label) = if pinned {
@@ -1436,7 +1436,7 @@ fn dialogs(app: &mut PdfCraftApp, ctx: &egui::Context) {
                             (egui::Color32::TRANSPARENT, egui::Stroke::new(1.0, t.border), t.text_muted, tl!("Pin"))
                         };
                         let tip = if pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
-                        btn_resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, pinned, format!("{tip}: {label}")));
+                        btn_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, pinned, format!("{tip}: {label}")));
 
                         ui.painter().rect(btn_rect, egui::CornerRadius::same(6), btn_fill, btn_stroke, egui::StrokeKind::Inside);
                         ui.painter().text(btn_rect.center(), egui::Align2::CENTER_CENTER, btn_label, theme::medium(12.0), text_color);

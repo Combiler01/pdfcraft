@@ -7863,7 +7863,7 @@ fn clicking_after_image_context_menu_action_resets_menu_state_and_updates_select
     h.get_by_label("Flip horizontal").click();
     h.run_steps(3);
 
-    let flag_persisted = h.ctx.data_mut(|d| d.get_persisted::<bool>(egui::Id::new("image-menu")));
+    let flag_persisted = h.ctx.data_mut(|d| d.get_persisted::<bool>(egui::Id::unique("image-menu")));
     assert_eq!(flag_persisted, Some(false), "image-menu flag should be reset to false");
 
     // 7. Click image 1: should switch selection to image 1

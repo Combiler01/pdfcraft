@@ -1227,9 +1227,9 @@ fn crop_input(
     let cancel = Rect::from_min_size(Pos2::new(done.min.x - spacing - cancel_w, y), egui::vec2(cancel_w, 22.0));
     let reset = reset_w.map(|w| Rect::from_min_size(Pos2::new(cancel.min.x - spacing - w, y), egui::vec2(w, 22.0)));
 
-    let done_id = ui.id().with("crop_pill_done").with(page).with(i);
-    let cancel_id = ui.id().with("crop_pill_cancel").with(page).with(i);
-    let reset_id = ui.id().with("crop_pill_reset").with(page).with(i);
+    let done_id = ui.scope_id().with("crop_pill_done").with(page).with(i);
+    let cancel_id = ui.scope_id().with("crop_pill_cancel").with(page).with(i);
+    let reset_id = ui.scope_id().with("crop_pill_reset").with(page).with(i);
 
     let done_resp = ui.interact(done, done_id, egui::Sense::click());
     let cancel_resp = ui.interact(cancel, cancel_id, egui::Sense::click());
@@ -1510,7 +1510,7 @@ fn user_box(xf: &PageXform, info: &DocInfo, page: usize, r: Rect) -> [f64; 4] {
 }
 
 pub(crate) fn image_menu_id() -> egui::Id {
-    egui::Id::new("image-menu")
+    egui::Id::unique("image-menu")
 }
 
 /// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.
@@ -1656,14 +1656,14 @@ pub(crate) fn image_input(
         }
 
         let mut handle_drag = None;
-        for (h, h_pos, handle_id) in obb.handles_with_ids(ui.id().with("img_handle")) {
+        for (h, h_pos, handle_id) in obb.handles_with_ids(ui.scope_id().with("img_handle")) {
             let handle_rect = Rect::from_center_size(h_pos, egui::vec2(18.0, 18.0));
             let handle_resp = ui.interact(handle_rect, handle_id, egui::Sense::drag());
             if allow_interaction && handle_resp.drag_started() {
                 handle_drag = Some(h);
             }
         }
-        let rot_id = ui.id().with("img_handle").with(8);
+        let rot_id = ui.scope_id().with("img_handle").with(8);
         let rot_rect = Rect::from_center_size(if obb.is_rotated { obb.s_rot } else { knob }, egui::vec2(12.0, 12.0));
         let rot_resp = ui.interact(rot_rect, rot_id, egui::Sense::drag());
         let rot_drag = allow_interaction && rot_resp.drag_started();

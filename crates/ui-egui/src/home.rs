@@ -34,7 +34,7 @@ fn tool_card(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens, g: &'static c
     let mut unpin_clicked = false;
     if allow_unpin && (ui.rect_contains_pointer(rect) || resp.hovered()) {
         let unpin_rect = Rect::from_center_size(body.right_top() + vec2(-18.0, 18.0), vec2(22.0, 22.0));
-        let unpin_resp = ui.interact(unpin_rect, ui.id().with(("unpin_card_btn", g.id)), Sense::click());
+        let unpin_resp = ui.interact(unpin_rect, ui.scope_id().with(("unpin_card_btn", g.id)), Sense::click());
         unpin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Unpin tool")));
         if unpin_resp.hovered() {
             ui.painter().rect_filled(unpin_rect, CornerRadius::same(4), t.pressed);

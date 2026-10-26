@@ -14,7 +14,6 @@ pub const RELEASES_PAGE: &str = "https://github.com/storytold/pdfcraft/releases"
 #[cfg(not(target_arch = "wasm32"))]
 pub type UpdateSource = CheckSource;
 
-#[derive(Default)]
 pub(crate) struct Updates {
     #[cfg(not(target_arch = "wasm32"))]
     updater: Updater,

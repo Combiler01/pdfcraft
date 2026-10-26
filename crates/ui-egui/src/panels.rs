@@ -122,7 +122,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, is_pinned: bool) -> (e
     icons::paint(ui, Rect::from_min_size(body.min + vec2(6.0, 7.0), vec2(20.0, 20.0)), g.icon, 19.0, hue(g));
 
     let pin_rect = Rect::from_center_size(body.right_center() - vec2(14.0, 0.0), vec2(22.0, 22.0));
-    let pin_resp = ui.interact(pin_rect, ui.id().with(("pin_toggle_row", g.id)), Sense::click());
+    let pin_resp = ui.interact(pin_rect, ui.scope_id().with(("pin_toggle_row", g.id)), Sense::click());
     let tip = if is_pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
     pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
     let pin_hovered = pin_resp.hovered();
@@ -176,7 +176,7 @@ fn tool_row(ui: &mut egui::Ui, t: &Tokens, g: &ToolGroup, is_pinned: bool) -> (e
         };
         icons::paint(ui, pin_rect.shrink(3.0), "pin", 15.0, pin_tint);
         let tip = if is_pinned { tl!("Unpin from Home") } else { tl!("Pin to Home") };
-        pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tip));
+        pin_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tip));
         if theme::hand(pin_resp).on_hover_text(tip).clicked() {
             pin_clicked = true;
         }

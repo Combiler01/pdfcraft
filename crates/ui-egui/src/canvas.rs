@@ -3460,7 +3460,7 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
     let show_secured_notice = app.show_secured_notice;
     // Asking means opening the system clipboard (and decoding any image on it), so it's asked
     // once when a right-click opens a menu, not on every frame.
-    let can_paste_key = egui::Id::new("can-paste-image");
+    let can_paste_key = egui::Id::unique("can-paste-image");
     let can_paste_image = if ui.input(|i| i.pointer.secondary_pressed()) {
         let can = app.can_paste_image();
         ui.data_mut(|d| d.insert_temp(can_paste_key, can));
@@ -5539,29 +5539,32 @@ fn selection_actions(
     let x = ideal_x.clamp(viewport.left() + 8.0, max_x);
     let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
     let mut chosen = None;
-    egui::Area::new(egui::Id::new(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
-        egui::Frame::popup(ui.style()).corner_radius(CornerRadius::same(12)).show(ui, |ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            ui.horizontal(|ui| {
-                ui.add_enabled_ui(can_comment, |ui| {
-                    for (icon, tooltip, action) in [
-                        ("message-square-plus", tl!("Add comment"), SelectionAction::Note),
-                        ("highlighter", tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
-                        ("underline", tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
-                        ("strikethrough", tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
-                        ("replace", tl!("Replace text"), SelectionAction::Replace),
-                    ] {
-                        if icons::button(ui, icon, 26.0, false, tooltip).clicked() {
-                            chosen = Some(action);
+    egui::Area::new(egui::Id::unique(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
+        ui.ctx(),
+        |ui| {
+            egui::Frame::popup(ui.style()).corner_radius(CornerRadius::same(12)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                ui.horizontal(|ui| {
+                    ui.add_enabled_ui(can_comment, |ui| {
+                        for (icon, tooltip, action) in [
+                            ("message-square-plus", tl!("Add comment"), SelectionAction::Note),
+                            ("highlighter", tl!("Highlight"), SelectionAction::Markup(comments::CommentTool::Highlight)),
+                            ("underline", tl!("Underline"), SelectionAction::Markup(comments::CommentTool::Underline)),
+                            ("strikethrough", tl!("Strikethrough"), SelectionAction::Markup(comments::CommentTool::StrikeOut)),
+                            ("replace", tl!("Replace text"), SelectionAction::Replace),
+                        ] {
+                            if icons::button(ui, icon, 26.0, false, tooltip).clicked() {
+                                chosen = Some(action);
+                            }
                         }
+                    });
+                    if ui.add_enabled_ui(can_copy, |ui| icons::button(ui, "copy", 26.0, false, tl!("Copy"))).inner.clicked() {
+                        chosen = Some(SelectionAction::Copy);
                     }
                 });
-                if ui.add_enabled_ui(can_copy, |ui| icons::button(ui, "copy", 26.0, false, tl!("Copy"))).inner.clicked() {
-                    chosen = Some(SelectionAction::Copy);
-                }
             });
-        });
-    });
+        },
+    );
     let Some(action) = chosen else { return false };
     if let SelectionAction::Copy = action {
         // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
