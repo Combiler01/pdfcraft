@@ -3107,6 +3107,9 @@ fn image_arrange_stacking_order_and_remove_crop() {
     let doc = reopen(&doc);
     let img_after = &images::page_images(&doc, 0).unwrap()[0];
     assert_eq!(img_after.visible_rect, Some(img_after.rect));
+    // Removing crop again when there is no crop is refused.
+    let mut doc = doc;
+    assert!(images::remove_image_crop(&mut doc, 0, 0).is_err());
 
     // Test crop_image
     let uncropped_content = "q 200 0 0 100 100 100 cm /Im0 Do Q";
@@ -4424,7 +4427,10 @@ fn arrange_and_crop_image_in_second_content_stream_succeeds() {
     images::crop_image(&mut doc, 0, 0, [210.0, 210.0, 290.0, 290.0]).unwrap();
     let after_crop = images::page_images(&reopen(&doc), 0).unwrap();
     assert_eq!(after_crop.len(), 2);
-    assert!(after_crop[0].clip_rect.is_some() || after_crop[0].visible_rect.is_some());
+    assert_eq!(after_crop[0].name, "Im1");
+    assert!(close(after_crop[0].visible_rect.unwrap(), [210.0, 210.0, 290.0, 290.0]));
+    assert_eq!(after_crop[1].name, "Im0");
+    assert_eq!(after_crop[1].visible_rect, Some(after_crop[1].rect));
 }
 
 /// One page whose font draws a few Hebrew letters (ToUnicode): A ב, B ד, C י, D ו, E ק, F ש,
@@ -7598,66 +7604,66 @@ fn reading_keeps_dotted_leader_entries_whole_and_in_order() {
             "Ordinary body text. Still the same paragraph.",
         ]
     );
+}
 
-    #[cfg(test)]
-    mod proptests {
-        use super::*;
-        use proptest::prelude::*;
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use proptest::prelude::*;
 
-        proptest! {
+    proptest! {
 
-            #[test]
-            fn prop_is_entire_page_wrapped_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
-                let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
-                let ops = pieces.parse().ops;
-                let _ = images::is_entire_page_wrapped(&ops);
+        #[test]
+        fn prop_is_entire_page_wrapped_arbitrary_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..2048)) {
+            let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
+            let ops = pieces.parse().ops;
+            let _ = images::is_entire_page_wrapped(&ops);
+        }
+
+        #[test]
+        fn prop_content_units_arbitrary_bytes(
+            bytes in proptest::collection::vec(any::<u8>(), 0..2048),
+            start in 0usize..50,
+            end in 0usize..50,
+        ) {
+            let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
+            let ops = pieces.parse().ops;
+            let scan_start = start.min(ops.len());
+            let scan_end = end.min(ops.len()).max(scan_start);
+            let units = images::content_units(&ops, scan_start, scan_end);
+            for u in units {
+                prop_assert!(u.start <= u.end);
+                prop_assert!(u.end <= ops.len());
             }
+        }
 
-            #[test]
-            fn prop_content_units_arbitrary_bytes(
-                bytes in proptest::collection::vec(any::<u8>(), 0..2048),
-                start in 0usize..50,
-                end in 0usize..50,
-            ) {
-                let pieces = pdfcraft_content::Pieces::join(&[&bytes]);
-                let ops = pieces.parse().ops;
-                let scan_start = start.min(ops.len());
-                let scan_end = end.min(ops.len()).max(scan_start);
-                let units = images::content_units(&ops, scan_start, scan_end);
-                for u in units {
-                    prop_assert!(u.start <= u.end);
-                    prop_assert!(u.end <= ops.len());
-                }
-            }
+        #[test]
+        fn prop_arrange_image_arbitrary_malformed(
+            index in 0usize..10,
+            order_idx in 0u8..4,
+            bytes in proptest::collection::vec(any::<u8>(), 0..1024),
+        ) {
+            let order = match order_idx {
+                0 => images::ArrangeOrder::BringToFront,
+                1 => images::ArrangeOrder::SendToBack,
+                2 => images::ArrangeOrder::BringForward,
+                _ => images::ArrangeOrder::SendBackward,
+            };
+            let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
+            let _ = images::arrange_image(&mut doc, 0, index, order);
+        }
 
-            #[test]
-            fn prop_arrange_image_arbitrary_malformed(
-                index in 0usize..10,
-                order_idx in 0u8..4,
-                bytes in proptest::collection::vec(any::<u8>(), 0..1024),
-            ) {
-                let order = match order_idx {
-                    0 => images::ArrangeOrder::BringToFront,
-                    1 => images::ArrangeOrder::SendToBack,
-                    2 => images::ArrangeOrder::BringForward,
-                    _ => images::ArrangeOrder::SendBackward,
-                };
-                let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
-                let _ = images::arrange_image(&mut doc, 0, index, order);
-            }
-
-            #[test]
-            fn prop_crop_image_malformed_inputs(
-                x1 in -500.0f64..500.0,
-                y1 in -500.0f64..500.0,
-                x2 in -500.0f64..500.0,
-                y2 in -500.0f64..500.0,
-                bytes in proptest::collection::vec(any::<u8>(), 0..1024),
-            ) {
-                let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
-                let _ = images::crop_image(&mut doc, 0, 0, [x1, y1, x2, y2]);
-                let _ = images::remove_image_crop(&mut doc, 0, 0);
-            }
+        #[test]
+        fn prop_crop_image_malformed_inputs(
+            x1 in -500.0f64..500.0,
+            y1 in -500.0f64..500.0,
+            x2 in -500.0f64..500.0,
+            y2 in -500.0f64..500.0,
+            bytes in proptest::collection::vec(any::<u8>(), 0..1024),
+        ) {
+            let mut doc = image_page_with(&String::from_utf8_lossy(&bytes));
+            let _ = images::crop_image(&mut doc, 0, 0, [x1, y1, x2, y2]);
+            let _ = images::remove_image_crop(&mut doc, 0, 0);
         }
     }
 }

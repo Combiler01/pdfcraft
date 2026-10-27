@@ -58,7 +58,8 @@ pub fn discover_budgeted(roots: &[PathBuf], mut budget: u64) -> Vec<FontFile> {
         if meta.is_dir() && depth < 4 {
             if let Ok(children) = std::fs::read_dir(&path) {
                 let remaining = 4096usize.saturating_sub(entries.saturating_add(pending.len()));
-                let mut sorted_children: Vec<_> = children.take(remaining).filter_map(Result::ok).map(|p| p.path()).collect();
+                // Best effort: unreadable entries are skipped and do not count against the entry allowance.
+                let mut sorted_children: Vec<_> = children.filter_map(Result::ok).take(remaining).map(|p| p.path()).collect();
                 sorted_children.sort();
                 pending.extend(sorted_children.into_iter().rev().map(|p| (p, depth + 1)));
             }

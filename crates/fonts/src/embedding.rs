@@ -701,6 +701,15 @@ pub fn subset_truetype(bytes: &[u8], used_gids: &[u16], postscript_name: &str) -
     if let Some(os2) = map.get(b"OS/2") {
         tables.push((*b"OS/2", os2.to_vec()));
     }
+    if let Some(cvt) = map.get(b"cvt ") {
+        tables.push((*b"cvt ", cvt.to_vec()));
+    }
+    if let Some(fpgm) = map.get(b"fpgm") {
+        tables.push((*b"fpgm", fpgm.to_vec()));
+    }
+    if let Some(prep) = map.get(b"prep") {
+        tables.push((*b"prep", prep.to_vec()));
+    }
     tables.push((*b"post", subset_post));
 
     tables.sort_by_key(|t| t.0);

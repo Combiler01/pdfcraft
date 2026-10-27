@@ -57,3 +57,15 @@ pub(crate) fn mark_source(doc: &mut pdfcraft_cos::Document, f: &MarkFile) -> Res
         Ok(pdfcraft_edit::MarkSource { xobject, size, image: true })
     }
 }
+
+/// The dimensions of an image from its bytes (JPEG, PNG, TIFF), without decoding the full raster.
+pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let format = image::guess_format(bytes).ok()?;
+    let mut reader = image::ImageReader::with_format(std::io::Cursor::new(bytes), format);
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(64_000_000 * 4);
+    reader.limits(limits);
+    let decoder = reader.into_decoder().ok()?;
+    let (w, h) = image::ImageDecoder::dimensions(&decoder);
+    if w == 0 || h == 0 { None } else { Some((w, h)) }
+}

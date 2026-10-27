@@ -800,6 +800,7 @@ impl crate::PdfCraftApp {
             if self.system_clipboard {
                 return Err("the web version can't put images on the clipboard yet; use Save Image As".to_string());
             }
+            self.last_copied_file = None;
             self.last_copied_image = Some((w, h, rgba));
             self.last_copied_image_rect = None;
             Ok((w, h))
@@ -922,8 +923,14 @@ impl crate::PdfCraftApp {
                     if modifiers.command {
                         self.last_command_time = Some(inp.time);
                     }
-                    let command_active = modifiers.command || self.last_command_time.is_some();
-                    released |= !*pressed && !self.v_pressed && command_active;
+                    let command_recent = self.last_command_time.is_some_and(|t| (inp.time - t).abs() < 0.35);
+                    let command_active = modifiers.command || command_recent;
+                    if !*pressed {
+                        if !self.v_pressed && command_active {
+                            released = true;
+                        }
+                        self.last_command_time = None;
+                    }
                     self.v_pressed = *pressed;
                 }
             }
@@ -1043,7 +1050,12 @@ impl crate::PdfCraftApp {
         let target_rect = if let Some(r) = rect {
             Some(r)
         } else if let Some(at) = at {
-            let (raw_w, raw_h) = self.last_copied_image.as_ref().map(|(w, h, _)| (*w as f64, *h as f64)).unwrap_or((100.0, 100.0));
+            let (raw_w, raw_h) = self
+                .last_copied_image
+                .as_ref()
+                .map(|(w, h, _)| (*w as f64, *h as f64))
+                .or_else(|| pdfcraft_engine::image_dimensions(&bytes).map(|(w, h)| (w as f64, h as f64)))
+                .unwrap_or((100.0, 100.0));
             let (pw, ph) =
                 self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
             let k = ((pw * 0.8) / raw_w.max(1.0)).min((ph * 0.8) / raw_h.max(1.0)).min(1.0);
@@ -1356,5 +1368,47 @@ mod tests {
         // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
         assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
         assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
+    }
+
+    #[test]
+    fn ctrl_c_followed_by_plain_v_release_does_not_paste() {
+        let mut app = crate::PdfCraftApp::default();
+        let ctx = egui::Context::default();
+
+        // 1. User presses Ctrl+C at time 0.0
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                time: Some(0.0),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::COMMAND,
+                }],
+                ..Default::default()
+            },
+            |_| {},
+        );
+        out.textures_delta.clear();
+        assert!(!app.paste_key_released(&ctx));
+
+        // 2. Later at time 1.0, user releases V with Modifiers::NONE
+        let mut out = ctx.run_ui(
+            egui::RawInput {
+                time: Some(1.0),
+                events: vec![egui::Event::Key {
+                    key: egui::Key::V,
+                    physical_key: None,
+                    pressed: false,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+                ..Default::default()
+            },
+            |_| {},
+        );
+        out.textures_delta.clear();
+        assert!(!app.paste_key_released(&ctx), "Ctrl+C followed by plain V release must not trigger paste");
     }
 }

@@ -1488,9 +1488,10 @@ fn extract_image_drawing_ops(
     _target: usize,
     _scope_matrix: Matrix,
     _draw: Matrix,
-) -> Result<Vec<Op>, EditError> {
+) -> Result<(Vec<Op>, bool), EditError> {
     let is_path = |o: &Op| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re");
     let mut drawing = Vec::new();
+    let mut removed_clip = false;
     let mut i = start.saturating_add(1);
     while i < end {
         let Some(op) = ops.get(i) else { break };
@@ -1500,6 +1501,7 @@ fn extract_image_drawing_ops(
                 k = k.saturating_add(1);
             }
             if ops.get(k).is_some_and(|o| o.is("W") || o.is("W*")) && ops.get(k.saturating_add(1)).is_some_and(|o| o.is("n")) {
+                removed_clip = true;
                 i = k.saturating_add(2);
                 continue;
             }
@@ -1507,7 +1509,7 @@ fn extract_image_drawing_ops(
         drawing.push(op.clone());
         i = i.saturating_add(1);
     }
-    Ok(drawing)
+    Ok((drawing, removed_clip))
 }
 
 /// Remove any private clipping path / crop on image `index` on `page`.
@@ -1522,20 +1524,24 @@ pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Resul
     if !ops.get(target).is_some_and(|op| op.is("Do")) {
         return Err(EditError::Invalid("the image operation could not be located".into()));
     }
-    if let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? {
-        let drawing_ops = extract_image_drawing_ops(&ops, start, end, target, scope_matrix, Matrix(img.draw_matrix))?;
-        let start_op = ops.get(start).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
-        let end_op = ops.get(end).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
-        let range = start_op.span.start..end_op.span.end;
-        let mut unit_ops = Vec::new();
-        unit_ops.push(Op::new("q", vec![]));
-        unit_ops.extend(drawing_ops);
-        unit_ops.push(Op::new("Q", vec![]));
-        let serialized = serialize_ops(&unit_ops);
-        let changed = pieces.splice([(range, serialized)]);
-        let contents = crate::text::rewritten_contents(doc, &all, changed);
-        doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
+    let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? else {
+        return Err(EditError::Invalid("the image has no crop to remove".into()));
+    };
+    let (drawing_ops, removed_clip) = extract_image_drawing_ops(&ops, start, end, target, scope_matrix, Matrix(img.draw_matrix))?;
+    if !removed_clip {
+        return Err(EditError::Invalid("the image has no crop to remove".into()));
     }
+    let start_op = ops.get(start).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let end_op = ops.get(end).ok_or_else(|| EditError::Invalid("the image operation is missing".into()))?;
+    let range = start_op.span.start..end_op.span.end;
+    let mut unit_ops = Vec::new();
+    unit_ops.push(Op::new("q", vec![]));
+    unit_ops.extend(drawing_ops);
+    unit_ops.push(Op::new("Q", vec![]));
+    let serialized = serialize_ops(&unit_ops);
+    let changed = pieces.splice([(range, serialized)]);
+    let contents = crate::text::rewritten_contents(doc, &all, changed);
+    doc.update_dict(p.obj, |d| d.set(b"Contents".to_vec(), contents))?;
     Ok(())
 }
 

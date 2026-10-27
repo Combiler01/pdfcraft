@@ -57,6 +57,8 @@ pub fn is_numbered(text: &str) -> bool {
 }
 
 pub fn toggle_bullet_list(text: &mut String) -> bool {
+    let has_trailing_crlf = text.ends_with("\r\n");
+    let has_trailing_newline = text.ends_with('\n');
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
         return false;
@@ -84,6 +86,11 @@ pub fn toggle_bullet_list(text: &mut String) -> bool {
             new_text.push_str(line);
         }
     }
+    if has_trailing_crlf {
+        new_text.push_str("\r\n");
+    } else if has_trailing_newline {
+        new_text.push('\n');
+    }
     if new_text != *text {
         *text = new_text;
         true
@@ -93,6 +100,8 @@ pub fn toggle_bullet_list(text: &mut String) -> bool {
 }
 
 pub fn toggle_numbered_list(text: &mut String) -> bool {
+    let has_trailing_crlf = text.ends_with("\r\n");
+    let has_trailing_newline = text.ends_with('\n');
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
         return false;
@@ -131,6 +140,11 @@ pub fn toggle_numbered_list(text: &mut String) -> bool {
             new_text.push_str(t);
             num += 1;
         }
+    }
+    if has_trailing_crlf {
+        new_text.push_str("\r\n");
+    } else if has_trailing_newline {
+        new_text.push('\n');
     }
     if new_text != *text {
         *text = new_text;
@@ -652,20 +666,34 @@ impl LineEditor {
             self.look.size = sz;
             self.look0.size = sz;
         } else {
-            self.look.size = 0.0;
-            self.look0.size = 0.0;
+            if self.look.size <= 0.0 {
+                self.look.size = 12.0;
+            }
+            self.look0.size = self.look.size;
         }
         if let Some(f) = fmt.family {
             self.look.family = f;
             self.look0.family = f;
         }
-        if let Some(b) = fmt.bold {
-            self.look.bold = b;
-            self.look0.bold = b;
+        match fmt.bold {
+            Some(b) => {
+                self.look.bold = b;
+                self.look0.bold = b;
+            }
+            None => {
+                self.look.bold = false;
+                self.look0.bold = false;
+            }
         }
-        if let Some(it) = fmt.italic {
-            self.look.italic = it;
-            self.look0.italic = it;
+        match fmt.italic {
+            Some(it) => {
+                self.look.italic = it;
+                self.look0.italic = it;
+            }
+            None => {
+                self.look.italic = false;
+                self.look0.italic = false;
+            }
         }
         if let Some(c) = fmt.color {
             self.look.color = c;

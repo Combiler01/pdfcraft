@@ -1170,7 +1170,7 @@ pub(crate) fn image_context_menu(
         *action = Some(ImageAction::Redact(page, hit));
         close(ui);
     }
-    if ui.add_enabled(raster, egui::Button::new("Export image")).clicked() {
+    if ui.add_enabled(raster, egui::Button::new(tl!("Export image"))).clicked() {
         *action = Some(ImageAction::Save(page, hit));
         close(ui);
     }
@@ -1182,8 +1182,8 @@ pub(crate) fn image_context_menu(
         close(ui);
     }
 
-    ui.menu_button("Edit image using", |ui| {
-        ui.add_enabled(false, egui::Button::new("Default image editor"));
+    ui.menu_button(tl!("Edit image using"), |ui| {
+        ui.add_enabled(false, egui::Button::new(tl!("Default image editor")));
     });
 
     if ui.button(tl!("Recognize Text…")).clicked() {

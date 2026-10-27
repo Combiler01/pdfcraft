@@ -204,6 +204,7 @@ impl PdfCraftApp {
         let copied = file.and_then(|(ext, bytes)| {
             let name = format!("{stem} p{} img{}.{ext}", page.saturating_add(1), index.saturating_add(1));
             self.put_file_on_clipboard(&name, &bytes)?;
+            self.last_copied_image = None;
             self.last_copied_file = Some((name, bytes));
             self.last_copied_image_rect = None;
             Ok(ext)
