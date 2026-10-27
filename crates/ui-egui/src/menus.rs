@@ -254,6 +254,9 @@ fn english(labeled: Labeled<'_>) -> Option<String> {
 }
 
 fn translate(english: &'static str) -> String {
+    if english == "⋯" {
+        return "…".to_owned();
+    }
     tl!(english).to_owned()
 }
 

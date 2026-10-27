@@ -264,6 +264,7 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .map(|f| (f.resource, f.face))
             .collect();
         let fmt = ed.selection_formatting(&sources);
+        ed.sync_selection_look(&fmt);
         let shown = fmt.font_shown;
         let mixed_size = fmt.size.is_none();
         let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown, mixed_size });

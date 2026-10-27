@@ -1,8 +1,6 @@
 use super::*;
 use crate::canvas::{ImageObb, PainterExt};
-use crate::image_engine::{
-    apply_crop, apply_resize, apply_resize_proportional, draw_handle, draw_rule_of_thirds, HandleId, CROP_ACCENT,
-};
+use crate::image_engine::{CROP_ACCENT, HandleId, apply_crop, apply_resize, apply_resize_proportional, draw_handle, draw_rule_of_thirds};
 
 /// The 8 resize handles on an image (4 corners + 4 edge centers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1135,7 +1133,9 @@ pub(crate) fn image_context_menu(
     }
 
     ui.menu_button(tl!("Arrange image"), |ui| {
+        eprintln!("ARRANGE IMAGE SUBMENU SHOWN");
         if ui.button(tl!("Bring to front")).clicked() {
+            eprintln!("CLICKED BRING TO FRONT!");
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront) });
             close(ui);
         }

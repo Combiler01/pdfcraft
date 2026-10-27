@@ -3414,6 +3414,6 @@ enum FieldMenu {
     Duplicate(String),
 }
 
-pub use crate::image_engine::{apply_crop, apply_resize, apply_resize_proportional, reset_crop, HandleId, MIN_RECT_SIZE};
+pub use crate::image_engine::{HandleId, MIN_RECT_SIZE, apply_crop, apply_resize, apply_resize_proportional, reset_crop};
 #[cfg(test)]
 mod tests;

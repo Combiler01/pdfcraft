@@ -22,16 +22,6 @@ impl PdfCraftApp {
         false
     }
 
-    /// ⌘C copies the selected text, unless a text field has the keyboard (it copies its own).
-    pub(super) fn copy_key(&mut self, i: usize, ctx: &egui::Context) {
-        // ⌘C arrives as a Copy event on most platforms.
-        let copy = ctx.input(|input| input.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-        if !copy || ctx.egui_wants_keyboard_input() {
-            return;
-        }
-        self.copy_selected_text(i, ctx);
-    }
-
     /// ⌘C / ⌘X / ⌘V copy, cut and paste text or images on canvas (unless a text field has focus).
     pub(super) fn clipboard_keys(&mut self, i: usize, ctx: &egui::Context, pasted: bool) {
         use egui::{Key, KeyboardShortcut, Modifiers};

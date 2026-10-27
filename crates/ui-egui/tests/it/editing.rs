@@ -8023,7 +8023,7 @@ fn two_image_fixture() -> Vec<u8> {
 
 #[test]
 fn duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_through_menu() {
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 1400.0)).build_eframe(|_cc| {
         let mut app = PdfCraftApp::new();
         app.set_option("language", "en").unwrap();
         app.open_bytes("dup.pdf", None, two_image_fixture()).expect("opens fixture");
@@ -8034,46 +8034,55 @@ fn duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_
     assert!(h.state_mut().execute("edit.edit_text"));
     h.run_steps(2);
 
-    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let info = h.state().session.get(id).unwrap().info.pages[0].clone();
-    let user_to_screen = move |u: [f64; 2]| {
-        let v = info.user_to_view(u[0] as f32, u[1] as f32);
-        let scale = r.width() / info.width;
-        egui::pos2(r.left() + v[0] * scale, r.top() + v[1] * scale)
-    };
+    let xf = h.state().views[0].page_xform(0).expect("page 0 xform");
+    let imgs = h.state().session.get(id).unwrap().page_images(0);
+    let b1 = pdfcraft_ui_egui::canvas::image_screen_rect(&imgs[1], &xf, &h.state().session.get(id).unwrap().info, 0);
+    let p1 = b1.center();
+    eprintln!("B1: {b1:?}, XF_RECT: {:?}, P1: {p1:?}", xf.rect);
 
-    let p1 = user_to_screen([110.0, 110.0]);
+    // 1. Select B (image 1)
+    h.hover_at(p1);
+    h.run_steps(1);
+    h.drag_at(p1);
+    h.run_steps(1);
+    h.drop_at(p1);
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(1), "image 1 selected");
 
-    // 1. Right-click B (image 1) to open context menu
+    // 2. Right-click B (image 1) to open context menu
     h.hover_at(p1);
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
     h.event(egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
 
-    // 2. Click "Bring to front" in context menu
+    // 3. Open "Arrange image" submenu and click "Bring to front"
+    h.get_by_label("Arrange image").click();
+    h.run_steps(2);
     h.get_by_label("Bring to front").click();
     h.run_steps(3);
 
-    // 3. Selection must be preserved after arrange
+    // 4. Selection must be preserved after arrange
     let sel = h.state().views[0].image_selection.as_ref().map(|s| s.index);
     assert!(sel.is_some(), "selection must be preserved after arrange");
 
-    // 4. Right-click on the selected image again to open context menu
+    // 5. Right-click on the selected image again to open context menu
     let sel_idx = sel.unwrap();
-    let b_rect = h.state().session.get(id).unwrap().page_images(0)[sel_idx].rect;
-    let p_b = user_to_screen([(b_rect[0] + b_rect[2]) / 2.0, (b_rect[1] + b_rect[3]) / 2.0]);
+    let xf_again = h.state().views[0].page_xform(0).expect("page 0 xform");
+    let cur_imgs = h.state().session.get(id).unwrap().page_images(0);
+    let b_rect = pdfcraft_ui_egui::canvas::image_screen_rect(&cur_imgs[sel_idx], &xf_again, &h.state().session.get(id).unwrap().info, 0);
+    let p_b = b_rect.center();
     h.hover_at(p_b);
     h.run_steps(1);
     h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
     h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
 
-    // 5. Click "Delete image" in context menu
-    h.get_by_label("Delete image").click();
+    // 6. Click "Delete" in context menu
+    h.get_by_label("Delete").click();
     h.run_steps(3);
 
-    // 6. Save, reopen and verify: A remains at [20, 20, 40, 40], B is deleted
+    // 7. Save, reopen and verify: A remains at [20, 20, 40, 40], B is deleted
     let saved = h.state().session.save_bytes(id).unwrap();
     let mut reopened = pdfcraft_engine::Session::new();
     let rid = reopened.open("again.pdf", None, saved, None).unwrap();

@@ -694,6 +694,7 @@ fn re_resolve_image_selection(
         .filter(|(_, img)| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect))
         .map(|(idx, _)| idx)
         .collect();
+    eprintln!("re_resolve: view.image_sel={:?}, target_rect={:?}, exact_matches={:?}, ambiguous_before={ambiguous_before}", view.image_selection.as_ref().map(|s| s.index), target.rect, exact_matches);
     let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
         exact_matches.first().copied()
     } else if !ambiguous_before && exact_matches.is_empty() {

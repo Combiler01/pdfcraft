@@ -17,7 +17,7 @@ impl DocView {
     }
 
     /// Where `page` is drawn this frame, with its coordinate mapping.
-    pub(crate) fn page_xform(&self, page: usize) -> Option<PageXform> {
+    pub fn page_xform(&self, page: usize) -> Option<PageXform> {
         self.screen_xforms.iter().find(|(p, _)| *p == page).map(|(_, xf)| *xf)
     }
 }

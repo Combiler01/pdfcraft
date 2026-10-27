@@ -530,7 +530,8 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                 },
             };
 
-            let added_items: Vec<(usize, pdfcraft_edit::Added)> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == *page).enumerate().collect();
+            let added_items: Vec<(usize, pdfcraft_edit::Added)> =
+                pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == *page).enumerate().collect();
             let matched_added = if let Some(st_ref) = target_stream_obj {
                 added_items.iter().find(|(_, a)| a.obj == st_ref)
             } else if let Some(target_ref) = img.object {
