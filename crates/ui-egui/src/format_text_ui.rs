@@ -116,7 +116,8 @@ pub(crate) fn panel(ui: &mut egui::Ui, t: &Tokens, look: &mut AddedText, extras:
                             let search_id = ui.scope_id().with("installed-font-search");
                             let mut query = ui.data(|d| d.get_temp::<String>(search_id)).unwrap_or_default();
                             ui.horizontal(|ui| {
-                                ui.label(egui::RichText::new("🔍").size(12.0));
+                                let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                                crate::icons::paint(ui, icon_rect, "search", 13.0, ui.visuals().text_color().gamma_multiply(0.6));
                                 let resp = ui
                                     .add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search…")).desired_width(ui.available_width() - 8.0));
                                 if resp.changed() {

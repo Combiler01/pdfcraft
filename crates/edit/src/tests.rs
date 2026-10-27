@@ -8542,3 +8542,58 @@ fn is_entire_page_wrapped_with_nested_scopes() {
     let ops2 = pieces2.parse().ops;
     assert!(!images::is_entire_page_wrapped(&ops2), "page with two separate top-level q...Q scopes is not wrapped");
 }
+
+#[test]
+fn hostile_page_with_many_gs_and_nested_q_does_not_hang_or_oom() {
+    use std::fmt::Write as _;
+    let mut stream = String::new();
+    for i in 0..10_000 {
+        let _ = write!(stream, "/G{i} gs ");
+    }
+    for _ in 0..500 {
+        stream.push_str("q ");
+    }
+    stream.push_str("100 0 0 100 0 0 cm /Im0 Do ");
+    for _ in 0..500 {
+        stream.push_str("Q ");
+    }
+    let doc = image_page_with(&stream);
+    let start = std::time::Instant::now();
+    let imgs = images::page_images(&doc, 0).unwrap();
+    assert_eq!(imgs.len(), 1);
+    assert!(start.elapsed().as_secs() < 5, "page_images on hostile 10k gs must finish in under 5s, took {:?}", start.elapsed());
+}
+
+#[test]
+fn crop_image_with_leading_cm_in_scope_places_clip_before_internal_cm() {
+    let content = "q 10 0 0 10 50 50 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    images::crop_image(&mut doc, 0, 0, [50.0, 50.0, 55.0, 55.0]).unwrap();
+    let doc = reopen(&doc);
+    let after = images::page_images(&doc, 0).unwrap();
+    assert_eq!(after.len(), 1);
+    assert!(after[0].visible_rect.is_some());
+    let (v0, v1, v2, v3) =
+        (after[0].visible_rect.unwrap()[0], after[0].visible_rect.unwrap()[1], after[0].visible_rect.unwrap()[2], after[0].visible_rect.unwrap()[3]);
+    assert!((v0 - 50.0).abs() < 1e-3 && (v2 - 55.0).abs() < 1e-3, "visible rect must match crop coordinates: {:?}", after[0].visible_rect);
+    assert!((v1 - 50.0).abs() < 1e-3 && (v3 - 55.0).abs() < 1e-3, "visible rect must match crop coordinates: {:?}", after[0].visible_rect);
+}
+
+#[test]
+fn remove_crop_preserves_cm_before_extgstate() {
+    let content = "q 2 0 0 2 0 0 cm /GS0 gs 0 0 100 100 re W n 10 0 0 10 50 50 cm /Im0 Do Q";
+    let mut doc = image_page_with(content);
+    let before = images::page_images(&doc, 0).unwrap();
+    assert_eq!(before.len(), 1);
+    images::remove_image_crop(&mut doc, 0, 0).unwrap();
+    let doc = reopen(&doc);
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(!s.contains("W n"), "clipping path must be removed: {s}");
+    // Verify that the initial cm appears before /GS0 gs
+    let cm_pos = s.find("2 0 0 2 0 0 cm").expect("cm must be preserved");
+    let gs_pos = s.find("/GS0 gs").expect("gs must be preserved");
+    assert!(cm_pos < gs_pos, "cm must precede /GS0 gs so soft mask space is preserved: {s}");
+}

@@ -953,6 +953,15 @@ impl crate::PdfCraftApp {
 
     /// Paste an image from the clipboard onto `page`.
     pub fn paste_image(&mut self, page: usize, rect: Option<[f64; 4]>) -> bool {
+        self.paste_image_internal(page, rect, None)
+    }
+
+    /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
+    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
+        self.paste_image_internal(page, None, Some(at))
+    }
+
+    fn paste_image_internal(&mut self, page: usize, rect: Option<[f64; 4]>, at: Option<[f64; 2]>) -> bool {
         let Some((i, id)) = self.active_ids() else {
             return false;
         };
@@ -980,7 +989,20 @@ impl crate::PdfCraftApp {
             None => {
                 #[cfg(not(target_arch = "wasm32"))]
                 let sys_result = if self.system_clipboard {
-                    crate::os_clipboard::with(|cb| cb.get_image()).ok().map(|img| (img.width, img.height, img.bytes.into_owned()))
+                    crate::os_clipboard::with(|cb| cb.get_image()).ok().and_then(|img| {
+                        let expected = img.width.checked_mul(img.height).and_then(|p| p.checked_mul(4));
+                        if img.width > 0
+                            && img.height > 0
+                            && img.width <= crate::create_ui::MAX_IMAGE_SIDE
+                            && img.height <= crate::create_ui::MAX_IMAGE_SIDE
+                            && expected == Some(img.bytes.len())
+                            && img.bytes.len() <= crate::create_ui::MAX_IMAGE_BYTES
+                        {
+                            Some((img.width, img.height, img.bytes.into_owned()))
+                        } else {
+                            None
+                        }
+                    })
                 } else {
                     None
                 };
@@ -1018,7 +1040,18 @@ impl crate::PdfCraftApp {
             return false;
         };
 
-        let target_rect = rect;
+        let target_rect = if let Some(r) = rect {
+            Some(r)
+        } else if let Some(at) = at {
+            let (raw_w, raw_h) = self.last_copied_image.as_ref().map(|(w, h, _)| (*w as f64, *h as f64)).unwrap_or((100.0, 100.0));
+            let (pw, ph) =
+                self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
+            let k = ((pw * 0.8) / raw_w.max(1.0)).min((ph * 0.8) / raw_h.max(1.0)).min(1.0);
+            let (w, h) = (raw_w * k, raw_h * k);
+            Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5])
+        } else {
+            None
+        };
 
         if self.apply_edit(pdfcraft_engine::Edit::AddImage { page, rect: target_rect, name, bytes: std::sync::Arc::new(bytes) }) {
             self.last_copied_image_rect = None;
@@ -1062,41 +1095,9 @@ impl crate::PdfCraftApp {
             false
         }
     }
-
-    /// Paste an image centered at context menu point `at: [f64; 2]` on `page`.
-    pub fn paste_image_at(&mut self, page: usize, at: [f64; 2]) -> bool {
-        let (raw_w, raw_h) = if let Some(crate::create_ui::Clip::Image { width, height, .. }) = self.clipboard_override.as_ref() {
-            (*width as f64, *height as f64)
-        } else {
-            #[cfg(not(target_arch = "wasm32"))]
-            let sys_img =
-                if self.system_clipboard { crate::os_clipboard::with(|cb| cb.get_image()).ok().map(|img| (img.width, img.height)) } else { None };
-            #[cfg(target_arch = "wasm32")]
-            let sys_img: Option<(usize, usize)> = None;
-
-            if let Some((img_width, img_height)) = sys_img {
-                (img_width as f64, img_height as f64)
-            } else if let Some((w, h, _)) = self.last_copied_image {
-                (w as f64, h as f64)
-            } else {
-                (100.0, 100.0)
-            }
-        };
-
-        let (_, id) = match self.active_ids() {
-            Some(ids) => ids,
-            None => return false,
-        };
-        let (pw, ph) = self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));
-        let k = ((pw * 0.8) / raw_w.max(1.0)).min((ph * 0.8) / raw_h.max(1.0)).min(1.0);
-        let (w, h) = (raw_w * k, raw_h * k);
-        let rect = Some([at[0] - w * 0.5, at[1] - h * 0.5, at[0] + w * 0.5, at[1] + h * 0.5]);
-        self.paste_image(page, rect)
-    }
 }
 
 /// What the image tools ask for.
-#[allow(dead_code)]
 pub(crate) enum ImageAction {
     Update(pdfcraft_engine::AddedContent),
     Replace,
@@ -1104,13 +1105,10 @@ pub(crate) enum ImageAction {
 
 // Lucide names a flip icon after the axis it draws, Acrobat names the flip after the direction the
 // picture moves: Flip horizontal (left and right swap) shows Lucide's vertical axis.
-#[allow(dead_code)]
 const FLIP_HORIZONTAL_ICON: &str = "flip-vertical-2";
-#[allow(dead_code)]
 const FLIP_VERTICAL_ICON: &str = "flip-horizontal-2";
 
 /// Edit image: rotate, flip, crop, replace (shown while an added image is selected).
-#[allow(dead_code)]
 pub(crate) fn image_panel(ui: &mut egui::Ui, t: &Tokens, img: &pdfcraft_engine::AddedImage) -> Option<ImageAction> {
     let mut out = None;
     widgets::section_title(ui, tl!("Edit image"));

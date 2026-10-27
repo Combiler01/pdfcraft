@@ -534,6 +534,7 @@ impl Session {
                     | Edit::DeleteContent { .. }
                     | Edit::ReplaceImage { .. }
                     | Edit::PasteContent { .. }
+                    | Edit::EditPageImage { .. }
             ) || matches!(e, Edit::MoveObjects { objects, .. } if objects.iter().any(|o| o.kind == ObjectKind::Added))
         });
         let touches_marks = edit.is_none_or(|e| {
@@ -676,8 +677,7 @@ impl Session {
         // file so that revision stays in the chain. A full rewrite (redaction, new encryption,
         // a reconstructed file) still writes the current graph on its own.
         let rewrite = editor.cos.full_save_required() || editor.cos.encryption_changed() || editor.cos.revisions().is_empty();
-        let mut cos = writable(&editor.cos)?;
-        pdfcraft_edit::text::subset_document_fonts(cos.to_mut())?;
+        let cos = writable(&editor.cos)?;
         guard(|| {
             if on_saved || rewrite {
                 write_incremental(&cos, &opts)
@@ -700,8 +700,7 @@ impl Session {
         }
         let editor = doc.editor.as_ref().ok_or_else(|| EditError::ReadOnly(doc.read_only_reason.clone().unwrap_or_default()))?;
         let opts = SaveOptions { mod_date: self.now().map(pdfcraft_cos::pdf_date), ..SaveOptions::default() };
-        let mut cos = writable(&editor.cos)?;
-        pdfcraft_edit::text::subset_document_fonts(cos.to_mut())?;
+        let cos = writable(&editor.cos)?;
         guard(|| write_full(&cos, &opts)).map_err(EditError::Write)?.map(Arc::new).map_err(|e| EditError::Write(e.to_string()))
     }
 

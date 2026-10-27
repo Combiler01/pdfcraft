@@ -1065,7 +1065,7 @@ pub enum ViewAction {
     CameraNext(&'static str),
 }
 
-/// Default page right-click menu actions (matching Adobe Acrobat).
+/// Default page right-click menu actions.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum PageMenuAction {
     RotateCCW(usize),
@@ -1103,12 +1103,10 @@ pub(crate) fn default_page_context_menu(ui: &mut egui::Ui, page: usize, at: [f64
     // Top horizontal icon bar: Rotate CCW, Print, Select tool, Hand tool, Marquee Zoom
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        ui.add_enabled_ui(perms.can_assemble, |ui| {
-            if crate::icons::button(ui, "rotate-ccw", 24.0, false, tl!("Rotate Counterclockwise")).clicked() {
-                *action = Some(PageMenuAction::RotateCCW(page));
-                ui.close();
-            }
-        });
+        if crate::icons::button(ui, "rotate-ccw", 24.0, false, tl!("Rotate view counterclockwise")).clicked() {
+            *action = Some(PageMenuAction::RotateCCW(page));
+            ui.close();
+        }
         ui.add_enabled_ui(perms.can_print, |ui| {
             if crate::icons::button(ui, "printer", 24.0, false, tl!("Print")).clicked() {
                 *action = Some(PageMenuAction::Print);
@@ -5396,7 +5394,8 @@ pub fn document_area(app: &mut PdfCraftApp, index: usize, ui: &mut egui::Ui) {
             app.paste_image_at(page, at);
         }
         Some(PageMenuAction::RotateCCW(page)) => {
-            app.views[index].pending_edit = Some(pdfcraft_engine::Edit::RotatePages { pages: vec![page], degrees: -90 });
+            let _ = page;
+            app.views[index].rotate_view(false);
         }
         Some(PageMenuAction::RotateCW(page)) => {
             let _ = page;

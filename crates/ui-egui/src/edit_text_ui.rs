@@ -1015,9 +1015,6 @@ impl CropMode {
 pub(crate) struct Matrix(pub(crate) [f64; 6]);
 
 impl Matrix {
-    #[allow(dead_code)]
-    pub(crate) const IDENTITY: Self = Matrix([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
-
     pub(crate) fn apply(&self, x: f64, y: f64) -> (f64, f64) {
         let [a, b, c, d, e, f] = self.0;
         (a * x + c * y + e, b * x + d * y + f)
@@ -1570,13 +1567,15 @@ pub(crate) fn image_input(
     }
     let hovered_box = hover_pos.and_then(|p| {
         boxes.iter().enumerate().rposition(|(i, b)| {
-            b.is_positive() && (b.contains(p) || quad_contains(ImageObb::from_image(&images[i], xf, info, page).corners(), p)) && image_contains(i, p)
+            b.is_positive()
+                && images.get(i).is_some_and(|img| b.contains(p) || quad_contains(ImageObb::from_image(img, xf, info, page).corners(), p))
+                && image_contains(i, p)
         })
     });
     if !faint_all {
         for i in selected.filter(|_| moving.is_none()).into_iter().chain(hovered_box.filter(|h| Some(*h) != selected)) {
-            if let Some(b) = boxes.get(i).filter(|b| b.is_positive()) {
-                let obb = ImageObb::from_image(&images[i], xf, info, page);
+            if let (Some(b), Some(img)) = (boxes.get(i).filter(|b| b.is_positive()), images.get(i)) {
+                let obb = ImageObb::from_image(img, xf, info, page);
                 if obb.is_rotated {
                     let pts = obb.corners();
                     for k in 0..4 {
@@ -1589,8 +1588,8 @@ pub(crate) fn image_input(
         }
     }
     for i in selected.into_iter().chain(hovered_box).collect::<Vec<_>>() {
-        let Some(b) = boxes.get(i).copied().filter(|b| b.is_positive()) else { continue };
-        let obb = ImageObb::from_image(&images[i], xf, info, page);
+        let (Some(b), Some(img)) = (boxes.get(i).copied().filter(|b| b.is_positive()), images.get(i)) else { continue };
+        let obb = ImageObb::from_image(img, xf, info, page);
         if selected == Some(i) {
             if !dragging {
                 if obb.is_rotated {
@@ -1607,8 +1606,8 @@ pub(crate) fn image_input(
     }
     // The selected image: frame, corner handles, dragging.
     if let Some(i) = selected.filter(|i| boxes.get(*i).is_some_and(|b| b.is_positive())) {
-        let b = boxes[i];
-        let image = &images[i];
+        let Some(b) = boxes.get(i).copied() else { return false };
+        let Some(image) = images.get(i) else { return false };
         let obb = ImageObb::from_image(image, xf, info, page);
         // Until the page is rendered again its raster has an applied move or resize's picture
         // where it was: it stays blanked there and drawn where it went.
@@ -2050,7 +2049,9 @@ pub(crate) fn image_input(
     let menu_key = image_menu_id();
     let Some(p) = hover_pos.filter(|p| xf.rect.contains(*p)) else { return false };
     let Some(hit) = boxes.iter().enumerate().rposition(|(i, b)| {
-        b.is_positive() && (b.contains(p) || quad_contains(ImageObb::from_image(&images[i], xf, info, page).corners(), p)) && image_contains(i, p)
+        b.is_positive()
+            && images.get(i).is_some_and(|img| b.contains(p) || quad_contains(ImageObb::from_image(img, xf, info, page).corners(), p))
+            && image_contains(i, p)
     }) else {
         if resp.secondary_clicked() || resp.clicked() {
             view.image_selection = None;
@@ -2058,15 +2059,16 @@ pub(crate) fn image_input(
         }
         return false;
     };
-    let hit_obb = ImageObb::from_image(&images[hit], xf, info, page);
+    let Some(hit_img) = images.get(hit) else { return false };
+    let hit_obb = ImageObb::from_image(hit_img, xf, info, page);
     if selected != Some(hit) {
         if hit_obb.is_rotated {
             let pts = hit_obb.corners();
             for k in 0..4 {
                 painter.line_segment([pts[k], pts[(k + 1) % 4]], Stroke::new(1.5, ACCENT.gamma_multiply(0.7)));
             }
-        } else {
-            painter.rect_stroke(boxes[hit], CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
+        } else if let Some(b) = boxes.get(hit).copied() {
+            painter.rect_stroke(b, CornerRadius::ZERO, Stroke::new(1.5, ACCENT.gamma_multiply(0.7)), egui::StrokeKind::Outside);
         }
     }
     let corner = hit_obb.handles().iter().position(|(_, c)| c.distance(p) < 10.0);
@@ -2088,7 +2090,7 @@ pub(crate) fn image_input(
     true
 }
 
-/// The right-click context menu for a selected image matching Adobe Acrobat.
+/// The right-click context menu for a selected image.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn image_context_menu(
     ui: &mut egui::Ui,

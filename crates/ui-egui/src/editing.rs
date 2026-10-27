@@ -54,7 +54,11 @@ impl PdfCraftApp {
                 let target = doc.and_then(|d| d.page_images(*page).get(*index).cloned());
                 let ambiguous = doc.is_some_and(|d| {
                     if let Some(t) = &target {
-                        d.page_images(*page).iter().filter(|img| img.name == t.name && img.object == t.object && img.rect == t.rect).count() > 1
+                        d.page_images(*page)
+                            .iter()
+                            .filter(|img| img.name == t.name && img.object == t.object && rect_matches(img.rect, t.rect))
+                            .count()
+                            > 1
                     } else {
                         false
                     }
@@ -260,7 +264,8 @@ impl PdfCraftApp {
             let doc = self.session.get(id)?;
             let images = doc.page_images(s.page);
             let target = images.get(s.index).cloned()?;
-            let ambiguous = images.iter().filter(|img| img.name == target.name && img.object == target.object && img.rect == target.rect).count() > 1;
+            let ambiguous =
+                images.iter().filter(|img| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect)).count() > 1;
             Some((s.page, target, ambiguous))
         });
         let had_selection = self.views.get(i).and_then(|v| v.image_selection.as_ref()).is_some();
@@ -1074,6 +1079,10 @@ impl PdfCraftApp {
     }
 }
 
+fn rect_matches(a: [f64; 4], b: [f64; 4]) -> bool {
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < 1e-3)
+}
+
 fn re_resolve_image_selection(
     view: &mut crate::DocView,
     page: usize,
@@ -1084,7 +1093,7 @@ fn re_resolve_image_selection(
     let exact_matches: Vec<usize> = page_images
         .iter()
         .enumerate()
-        .filter(|(_, img)| img.name == target.name && img.object == target.object && img.rect == target.rect)
+        .filter(|(_, img)| img.name == target.name && img.object == target.object && rect_matches(img.rect, target.rect))
         .map(|(idx, _)| idx)
         .collect();
     let new_idx = if !ambiguous_before && exact_matches.len() == 1 {
@@ -1172,9 +1181,6 @@ fn is_form_edit(edit: &Edit) -> bool {
 /// `Packages\Microsoft.OutlookForWindows_<id>` package folder for the new Outlook. The patterns
 /// follow those layouts, so an ordinary folder that merely shares a name doesn't match. Saving there either fails,
 /// because Outlook can still hold the file, or appears to work while the edits stay out of the
-/// email and are deleted with the cache. Matched on either separator and in any case, so it can
-/// be tested on every platform.
-#[allow(dead_code)]
 /// email and are deleted with the cache. Apple Mail opens one from `Mail Downloads/<UUID>/` in
 /// its sandbox container, where other apps can't write, so saving there fails (#2751). Matched on
 /// either separator and in any case, so it can be tested on every platform.

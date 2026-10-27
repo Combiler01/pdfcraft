@@ -68,8 +68,8 @@ pub fn discover_budgeted(roots: &[PathBuf], mut budget: u64) -> Vec<FontFile> {
             }
             budget = budget.saturating_sub(meta.len());
             let mut bytes = Vec::new();
-            let read = std::fs::File::open(&path).and_then(|f| f.take((16 << 20) + 1).read_to_end(&mut bytes));
-            if read.is_err() {
+            let read = std::fs::File::open(&path).and_then(|f| f.take(meta.len().saturating_add(1)).read_to_end(&mut bytes));
+            if read.is_err() || bytes.len() != meta.len() as usize {
                 continue;
             }
             if pdfcraft_fonts::embedding::validate_document_input(&bytes).is_err() {

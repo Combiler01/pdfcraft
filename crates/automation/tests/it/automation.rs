@@ -632,17 +632,7 @@ fn explicit_font_and_disjoint_ranges_save_reopen_through_tools() {
     ok(&mut a, "doc_save", json!({"doc":id,"path":"edited.pdf"}));
     let reopened = ok(&mut a, "doc_open", json!({"path":"edited.pdf"}))["doc"].as_u64().unwrap();
     let saved = ok(&mut a, "text_lines", json!({"doc":reopened,"page":1}));
-    let mut normalized_saved = saved.clone();
-    if let Some(arr) = normalized_saved["lines"].as_array_mut() {
-        for l in arr {
-            if let Some(font) = l["font"].as_str()
-                && let Some((_, base)) = font.split_once('+')
-            {
-                l["font"] = json!(base);
-            }
-        }
-    }
-    assert_eq!(lines, normalized_saved);
+    assert_eq!(lines, saved);
     assert_eq!(rendered, a.call("page_render", &json!({"doc":reopened,"page":1,"dpi":72})).unwrap());
     let before = saved.clone();
     assert!(a.call("text_edit", &json!({"doc":reopened,"page":1,"paragraph":1,"text":"é test","ranges":[{"range":[1,2],"size":18}]})).is_err());
@@ -3352,6 +3342,12 @@ fn arranging_page_images_through_tools() {
     assert_eq!(r["undo"], "Bring to front");
     let r = ok(&mut a, "image_edit", json!({ "doc": made, "page": 1, "image": 2, "action": "send_to_back" }));
     assert_eq!(r["undo"], "Send to back");
+    ok(&mut a, "doc_save", json!({ "doc": made, "path": "arranged.pdf" }));
+    let reopened = ok(&mut a, "doc_open", json!({ "path": "arranged.pdf" }))["doc"].as_u64().unwrap();
+    let after_reopen = ok(&mut a, "page_images", json!({ "doc": reopened, "page": 1 }));
+    assert_eq!(after_reopen["count"], 2);
+    assert_eq!(after_reopen["images"][0]["rect"], json!([0.0, 0.0, 50.0, 75.0]));
+    assert_eq!(after_reopen["images"][1]["rect"], json!([50.0, 50.0, 100.0, 100.0]));
 }
 
 #[test]

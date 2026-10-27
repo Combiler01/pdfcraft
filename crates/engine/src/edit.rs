@@ -1449,10 +1449,11 @@ pub(crate) fn run_edit(doc: &mut pdfcraft_cos::Document, edit: &Edit, cx: &mut E
                     );
 
                 if should_promote {
-                    let _ = doc.update_dict(added_item.obj, |d| {
+                    doc.update_dict(added_item.obj, |d| {
                         d.remove(b"PCAdded");
                         d.remove(b"PCMark");
-                    });
+                    })
+                    .map_err(|e| EditError::Edit(pdfcraft_edit::EditError::Invalid(e.to_string())))?;
                 } else {
                     ai_to_update = Some((*added_idx, ai));
                 }

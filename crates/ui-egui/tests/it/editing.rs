@@ -4140,8 +4140,8 @@ fn default_page_context_menu_when_not_in_edit_mode() {
     h.event(egui::Event::PointerButton { pos: c, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
 
-    // Verify Acrobat page context menu items (Screenshot 3)
-    h.get_by_label("Rotate Counterclockwise");
+    // Verify default page context menu items
+    h.get_by_label("Rotate view counterclockwise");
     h.get_by_label("Print");
     h.get_by_label("Select Tool");
     h.get_by_label("Hand Tool");
@@ -7800,8 +7800,8 @@ fn clicking_after_image_context_menu_action_resets_menu_state_and_updates_select
     h.run_steps(2);
 
     let r = h.state().views[0].page_screen_rect(0).expect("on screen");
-    let user_to_screen = |u: [f64; 2]| {
-        let info = &h.state().session.get(id).unwrap().info.pages[0];
+    let info = h.state().session.get(id).unwrap().info.pages[0].clone();
+    let user_to_screen = move |u: [f64; 2]| {
         let v = info.user_to_view(u[0] as f32, u[1] as f32);
         let scale = r.width() / info.width;
         egui::pos2(r.left() + v[0] * scale, r.top() + v[1] * scale)
@@ -7994,4 +7994,90 @@ fn a_paragraph_selected_by_its_frame_deletes_with_one_key() {
         h.run_steps(2);
         assert_eq!(blocks(&h).iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), ["Page 1"], "undo restores it");
     }
+}
+
+fn two_image_fixture() -> Vec<u8> {
+    let content = "q 20 0 0 20 20 20 cm /Im0 Do Q q 20 0 0 20 100 100 cm /Im0 Do Q";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Contents 4 0 R /Resources << /XObject << /Im0 5 0 R >> >> >>".into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\0\0\0\0\nendstream"
+            .into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    out
+}
+
+#[test]
+fn duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_through_menu() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(|_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("dup.pdf", None, two_image_fixture()).expect("opens fixture");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let info = h.state().session.get(id).unwrap().info.pages[0].clone();
+    let user_to_screen = move |u: [f64; 2]| {
+        let v = info.user_to_view(u[0] as f32, u[1] as f32);
+        let scale = r.width() / info.width;
+        egui::pos2(r.left() + v[0] * scale, r.top() + v[1] * scale)
+    };
+
+    let p1 = user_to_screen([110.0, 110.0]);
+
+    // 1. Right-click B (image 1) to open context menu
+    h.hover_at(p1);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    // 2. Click "Bring to front" in context menu
+    h.get_by_label("Bring to front").click();
+    h.run_steps(3);
+
+    // 3. Selection must be preserved after arrange
+    let sel = h.state().views[0].image_selection.as_ref().map(|s| s.index);
+    assert!(sel.is_some(), "selection must be preserved after arrange");
+
+    // 4. Right-click on the selected image again to open context menu
+    let sel_idx = sel.unwrap();
+    let b_rect = h.state().session.get(id).unwrap().page_images(0)[sel_idx].rect;
+    let p_b = user_to_screen([(b_rect[0] + b_rect[2]) / 2.0, (b_rect[1] + b_rect[3]) / 2.0]);
+    h.hover_at(p_b);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.run_steps(2);
+
+    // 5. Click "Delete image" in context menu
+    h.get_by_label("Delete image").click();
+    h.run_steps(3);
+
+    // 6. Save, reopen and verify: A remains at [20, 20, 40, 40], B is deleted
+    let saved = h.state().session.save_bytes(id).unwrap();
+    let mut reopened = pdfcraft_engine::Session::new();
+    let rid = reopened.open("again.pdf", None, saved, None).unwrap();
+    let imgs = reopened.get(rid).unwrap().page_images(0);
+    assert_eq!(imgs.len(), 1, "exactly one image must remain after deleting B");
+    assert!((imgs[0].rect[0] - 20.0).abs() < 1e-2, "remaining image must be A at [20, 20, 40, 40], was {:?}", imgs[0].rect);
 }

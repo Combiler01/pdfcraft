@@ -662,7 +662,7 @@ pub(crate) fn content_units(ops: &[Op], scan_start: usize, scan_end: usize) -> V
                 }
                 j = j.saturating_add(1);
             }
-            let u_end = if found_end { j } else { i.saturating_add(1) };
+            let u_end = if found_end { j } else { scan_end.max(i.saturating_add(1)) };
             units.push(i..u_end);
             i = u_end;
         }
@@ -771,11 +771,16 @@ impl EffectiveGState {
     }
 }
 
+const MAX_ACTIVE_GS_OPS: usize = 128;
+
+type ActiveGsOp = (Vec<u8>, Op, Matrix);
+type ActiveGsOps = std::rc::Rc<Vec<ActiveGsOp>>;
+
 #[derive(Clone, Default)]
 struct ExtendedGStateTracker {
-    stack: Vec<(EffectiveGState, Vec<(Op, Matrix)>)>,
+    stack: Vec<(EffectiveGState, ActiveGsOps)>,
     current_state: EffectiveGState,
-    active_gs_ops: Vec<(Op, Matrix)>,
+    active_gs_ops: ActiveGsOps,
     overflow_depth: usize,
 }
 
@@ -787,7 +792,7 @@ impl ExtendedGStateTracker {
                     self.overflow_depth = self.overflow_depth.saturating_add(1);
                     return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
                 }
-                self.stack.push((self.current_state.clone(), self.active_gs_ops.clone()));
+                self.stack.push((self.current_state.clone(), std::rc::Rc::clone(&self.active_gs_ops)));
             }
             b"Q" => {
                 if self.overflow_depth > 0 {
@@ -801,12 +806,20 @@ impl ExtendedGStateTracker {
                 if self.overflow_depth > 0 {
                     return Ok(());
                 }
-                if let Some(name) = op.name(0) {
-                    if let Some(dict) = ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()) {
-                        self.current_state.merge_dict(&dict, doc, Some(name));
+                let valid_gs = op
+                    .name(0)
+                    .and_then(|name| ext_gstates.get(name).map(|v| doc.resolve(v)).and_then(|v| v.as_dict().cloned()).map(|dict| (name, dict)));
+                if let Some((name, dict)) = valid_gs {
+                    self.current_state.merge_dict(&dict, doc, Some(name));
+                    let mut next = (*self.active_gs_ops).clone();
+                    if let Some(pos) = next.iter().position(|(k, _, _)| k.as_slice() == name) {
+                        if let Some(entry) = next.get_mut(pos) {
+                            *entry = (name.to_vec(), op.clone(), ctm);
+                        }
+                    } else if next.len() < MAX_ACTIVE_GS_OPS {
+                        next.push((name.to_vec(), op.clone(), ctm));
                     }
-                    self.active_gs_ops.retain(|(o, _)| o.name(0) != Some(name));
-                    self.active_gs_ops.push((op.clone(), ctm));
+                    self.active_gs_ops = std::rc::Rc::new(next);
                 }
             }
             _ => {}
@@ -1198,7 +1211,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         }
         if i == target {
             source_effective_state = tracker.current_state.clone();
-            source_gs_ops = tracker.active_gs_ops.clone();
+            source_gs_ops = tracker.active_gs_ops.iter().map(|(_, op, ctm)| (op.clone(), *ctm)).collect();
         }
         if i == scan_target {
             dest_effective_state = tracker.current_state.clone();
@@ -1342,7 +1355,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
     unit_ops.push(extracted.do_op);
     unit_ops.push(Op::new("Q", vec![]));
     // An unbalanced sequence had no EMC; it doesn't gain one.
-    if marked_open.is_some() && (has_other_paint || target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC"))) {
+    if marked_open.is_some() && target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC")) {
         unit_ops.push(Op::new("EMC", vec![]));
     }
 
@@ -1468,21 +1481,19 @@ fn image_exclusive_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
 /// in effect before it. Its `cm`s go too, and one `cm` before the image `Do` at `target` puts
 /// it back at `draw`, so clips any earlier move put around it (`cm inverse`, path, `W n`,
 /// absolute `cm`) can't leave the image displaced.
-fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize, target: usize, scope_matrix: Matrix, draw: Matrix) -> Result<Vec<Op>, EditError> {
-    let inverse = scope_matrix.invert().ok_or_else(|| EditError::Invalid("unsupported graphics state: non-invertible CTM".into()))?;
-    let placement = draw.then(&inverse);
-    if !placement.0.iter().all(|v| v.is_finite()) {
-        return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
-    }
+fn extract_image_drawing_ops(
+    ops: &[Op],
+    start: usize,
+    end: usize,
+    _target: usize,
+    _scope_matrix: Matrix,
+    _draw: Matrix,
+) -> Result<Vec<Op>, EditError> {
     let is_path = |o: &Op| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re");
     let mut drawing = Vec::new();
     let mut i = start.saturating_add(1);
     while i < end {
         let Some(op) = ops.get(i) else { break };
-        if op.is("cm") {
-            i = i.saturating_add(1);
-            continue;
-        }
         if is_path(op) {
             let mut k = i;
             while ops.get(k).is_some_and(is_path) {
@@ -1492,9 +1503,6 @@ fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize, target: usize
                 i = k.saturating_add(2);
                 continue;
             }
-        }
-        if i == target && placement != Matrix::IDENTITY {
-            drawing.push(Op::new("cm", placement.0.map(pdfcraft_content::num).to_vec()));
         }
         drawing.push(op.clone());
         i = i.saturating_add(1);
@@ -1815,23 +1823,19 @@ fn crop_image_impl(
             .chain([Op::new("h", vec![]), Op::new("W", vec![]), Op::new("n", vec![])])
             .collect()
     };
-    // The image's own earlier crop (a clipping path right after the scope's `q`, skipping any
-    // initial `cm` view transform) gives way to the new one, so a crop can grow again as well as shrink.
-    let mut clip_start = start + 1;
-    while ops.get(clip_start).is_some_and(|o| o.is("cm")) {
-        clip_start += 1;
-    }
+    // The image's own earlier crop (a clipping path right after the scope's `q`, in the CTM before
+    // the scope) gives way to the new one, so a crop can grow again as well as shrink.
     let old_clip: Option<std::ops::Range<usize>> = (start != end)
         .then(|| {
-            let mut k = clip_start;
+            let mut k = start + 1;
             while ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re")) {
                 k += 1;
             }
-            (k > clip_start && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*")) && ops.get(k + 1).is_some_and(|o| o.is("n")))
-                .then_some(clip_start..k + 2)
+            (k > start + 1 && ops.get(k).is_some_and(|o| matches!(o.op.as_slice(), b"W" | b"W*")) && ops.get(k + 1).is_some_and(|o| o.is("n")))
+                .then_some(start + 1..k + 2)
         })
         .flatten();
-    let insert_at = old_clip.as_ref().map_or(clip_start, |r| r.start);
+    let insert_at = old_clip.as_ref().map_or(start + 1, |r| r.start);
     let changed = crate::text::splice(&pieces, &ops, |index| {
         if start == end && index == target {
             // No scope of its own yet: one around the drawing, with the crop inside.
