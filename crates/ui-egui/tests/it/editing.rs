@@ -7997,7 +7997,7 @@ fn a_paragraph_selected_by_its_frame_deletes_with_one_key() {
 }
 
 fn two_image_fixture() -> Vec<u8> {
-    let content = "q 20 0 0 20 20 20 cm /Im0 Do Q q 20 0 0 20 100 100 cm /Im0 Do Q";
+    let content = "q 20 0 0 20 100 100 cm /Im0 Do Q q 20 0 0 20 20 20 cm /Im0 Do Q";
     let objs: Vec<String> = vec![
         "<< /Type /Catalog /Pages 2 0 R >>".into(),
         "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
@@ -8036,24 +8036,24 @@ fn duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_
 
     let xf = h.state().views[0].page_xform(0).expect("page 0 xform");
     let imgs = h.state().session.get(id).unwrap().page_images(0);
-    let b1 = pdfcraft_ui_egui::canvas::image_screen_rect(&imgs[1], &xf, &h.state().session.get(id).unwrap().info, 0);
-    let p1 = b1.center();
-    eprintln!("B1: {b1:?}, XF_RECT: {:?}, P1: {p1:?}", xf.rect);
+    // B is at index 0 [100, 100, 120, 120], in the back
+    let b0 = pdfcraft_ui_egui::canvas::image_screen_rect(&imgs[0], &xf, &h.state().session.get(id).unwrap().info, 0);
+    let p_b = b0.center();
 
-    // 1. Select B (image 1)
-    h.hover_at(p1);
+    // 1. Select B (image 0)
+    h.hover_at(p_b);
     h.run_steps(1);
-    h.drag_at(p1);
+    h.drag_at(p_b);
     h.run_steps(1);
-    h.drop_at(p1);
+    h.drop_at(p_b);
     h.run_steps(2);
-    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(1), "image 1 selected");
+    assert_eq!(h.state().views[0].image_selection.as_ref().map(|s| s.index), Some(0), "image 0 (B) selected");
 
-    // 2. Right-click B (image 1) to open context menu
-    h.hover_at(p1);
+    // 2. Right-click B (image 0) to open context menu
+    h.hover_at(p_b);
     h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: p1, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
 
     // 3. Open "Arrange image" submenu and click "Bring to front"
@@ -8062,20 +8062,20 @@ fn duplicate_xobject_at_different_rects_arrange_and_delete_keeps_other_instance_
     h.get_by_label("Bring to front").click();
     h.run_steps(3);
 
-    // 4. Selection must be preserved after arrange
+    // 4. Selection must be preserved after arrange: B is now at index 1 (in front)
     let sel = h.state().views[0].image_selection.as_ref().map(|s| s.index);
-    assert!(sel.is_some(), "selection must be preserved after arrange");
+    assert_eq!(sel, Some(1), "selection must track B to index 1 after arrange");
 
-    // 5. Right-click on the selected image again to open context menu
+    // 5. Right-click on the selected image (B at index 1) again to open context menu
     let sel_idx = sel.unwrap();
     let xf_again = h.state().views[0].page_xform(0).expect("page 0 xform");
     let cur_imgs = h.state().session.get(id).unwrap().page_images(0);
     let b_rect = pdfcraft_ui_egui::canvas::image_screen_rect(&cur_imgs[sel_idx], &xf_again, &h.state().session.get(id).unwrap().info, 0);
-    let p_b = b_rect.center();
-    h.hover_at(p_b);
+    let p_b2 = b_rect.center();
+    h.hover_at(p_b2);
     h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
-    h.event(egui::Event::PointerButton { pos: p_b, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p_b2, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: p_b2, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
     h.run_steps(2);
 
     // 6. Click "Delete" in context menu

@@ -1133,9 +1133,7 @@ pub(crate) fn image_context_menu(
     }
 
     ui.menu_button(tl!("Arrange image"), |ui| {
-        eprintln!("ARRANGE IMAGE SUBMENU SHOWN");
         if ui.button(tl!("Bring to front")).clicked() {
-            eprintln!("CLICKED BRING TO FRONT!");
             view.pending_edit = Some(Edit::EditPageImage { page, index: hit, change: E::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront) });
             close(ui);
         }
