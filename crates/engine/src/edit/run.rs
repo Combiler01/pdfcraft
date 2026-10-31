@@ -250,12 +250,7 @@ impl EditCtx {
     }
 }
 
-fn run_edit_page_image(
-    doc: &mut pdfcraft_cos::Document,
-    page: usize,
-    index: usize,
-    change: &ImageEdit,
-) -> Result<(), EditError> {
+fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usize, change: &ImageEdit) -> Result<(), EditError> {
     match change {
         ImageEdit::Move(to) if !to.iter().all(|v| v.is_finite()) => {
             return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("invalid position".into())));
@@ -291,9 +286,7 @@ fn run_edit_page_image(
         )),
         ImageEdit::Replace { name, bytes } => {
             if img.is_form {
-                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
-                    "grouped Form artwork cannot be replaced with a bitmap".into(),
-                )));
+                return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("grouped Form artwork cannot be replaced with a bitmap".into())));
             }
             pdfcraft_edit::ImageChange::Replace(embed_image(doc, name, bytes)?.0)
         }
@@ -315,8 +308,7 @@ fn run_edit_page_image(
         },
     };
 
-    let added_items: Vec<(usize, pdfcraft_edit::Added)> =
-        pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == page).enumerate().collect();
+    let added_items: Vec<(usize, pdfcraft_edit::Added)> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == page).enumerate().collect();
     let matched_added = if let Some(st_ref) = target_stream_obj {
         added_items.iter().find(|(_, a)| a.obj == st_ref)
     } else if let Some(target_ref) = img.object {
@@ -339,10 +331,7 @@ fn run_edit_page_image(
         let rotated_transform = matches!(change, ImageEdit::Transform(t) if t[1].abs() >= 1e-6 || t[2].abs() >= 1e-6);
         let should_promote = has_active_crop
             || rotated_transform
-            || matches!(
-                change,
-                ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete
-            );
+            || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
 
         if should_promote {
             doc.update_dict(added_item.obj, |d| {

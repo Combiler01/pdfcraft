@@ -1011,11 +1011,7 @@ fn target_destination_unit<'a>(
     match order {
         ArrangeOrder::BringToFront => {
             if target_idx == units.len().saturating_sub(1) {
-                if has_other_paint {
-                    Ok((target_unit, true))
-                } else {
-                    Err(EditError::Invalid("the image is already in front".into()))
-                }
+                if has_other_paint { Ok((target_unit, true)) } else { Err(EditError::Invalid("the image is already in front".into())) }
             } else {
                 let u = units.last().ok_or_else(|| EditError::Invalid("the image is already in front".into()))?;
                 Ok((u, true))
@@ -1023,11 +1019,7 @@ fn target_destination_unit<'a>(
         }
         ArrangeOrder::SendToBack => {
             if target_idx == 0 {
-                if has_other_paint {
-                    Ok((target_unit, false))
-                } else {
-                    Err(EditError::Invalid("the image is already at the back".into()))
-                }
+                if has_other_paint { Ok((target_unit, false)) } else { Err(EditError::Invalid("the image is already at the back".into())) }
             } else {
                 let u = units.first().ok_or_else(|| EditError::Invalid("the image is already at the back".into()))?;
                 Ok((u, false))
@@ -1035,11 +1027,7 @@ fn target_destination_unit<'a>(
         }
         ArrangeOrder::BringForward => {
             if target_idx == units.len().saturating_sub(1) {
-                if has_other_paint {
-                    Ok((target_unit, true))
-                } else {
-                    Err(EditError::Invalid("the image is already in front".into()))
-                }
+                if has_other_paint { Ok((target_unit, true)) } else { Err(EditError::Invalid("the image is already in front".into())) }
             } else {
                 let u = units.get(target_idx.saturating_add(1)).ok_or_else(|| EditError::Invalid("the image is already in front".into()))?;
                 Ok((u, true))
@@ -1047,13 +1035,12 @@ fn target_destination_unit<'a>(
         }
         ArrangeOrder::SendBackward => {
             if target_idx == 0 {
-                if has_other_paint {
-                    Ok((target_unit, false))
-                } else {
-                    Err(EditError::Invalid("the image is already at the back".into()))
-                }
+                if has_other_paint { Ok((target_unit, false)) } else { Err(EditError::Invalid("the image is already at the back".into())) }
             } else {
-                let u = target_idx.checked_sub(1).and_then(|i| units.get(i)).ok_or_else(|| EditError::Invalid("the image is already at the back".into()))?;
+                let u = target_idx
+                    .checked_sub(1)
+                    .and_then(|i| units.get(i))
+                    .ok_or_else(|| EditError::Invalid("the image is already at the back".into()))?;
                 Ok((u, false))
             }
         }
@@ -1383,14 +1370,7 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
 
     let marked_open = if marked_unit && !has_other_paint { ops.get(target_unit.start) } else { None };
     let has_closing_emc = marked_open.is_some() && target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC"));
-    let unit_ops = build_relocated_unit_ops(
-        marked_open,
-        &source_gs_ops,
-        extracted,
-        dest_ctm,
-        img.draw_matrix,
-        has_closing_emc,
-    )?;
+    let unit_ops = build_relocated_unit_ops(marked_open, &source_gs_ops, extracted, dest_ctm, img.draw_matrix, has_closing_emc)?;
 
     let mut serialized = Vec::new();
     serialized.push(b'\n');

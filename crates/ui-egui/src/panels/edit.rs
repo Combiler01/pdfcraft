@@ -272,7 +272,14 @@ fn format_section(app: &mut PdfCraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let mixed_size = fmt.size.is_none();
         // A selection aligns the rows it touches; the caret alone, the whole paragraph.
         let paragraphs = crate::format_text_ui::Paragraphs { text: &ed.text, selection: ed.selection.clone(), tidy: false };
-        let out = crate::format_text_ui::panel(ui, t, &mut ed.look, Some(&mut ed.extras), Fonts { sources: Some(&sources), shown, mixed_size }, Some(paragraphs));
+        let out = crate::format_text_ui::panel(
+            ui,
+            t,
+            &mut ed.look,
+            Some(&mut ed.extras),
+            Fonts { sources: Some(&sources), shown, mixed_size },
+            Some(paragraphs),
+        );
         let mut changed = out.changed;
         match out.font {
             Some(FontChoice::KeepSource) => {

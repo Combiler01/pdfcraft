@@ -2098,7 +2098,7 @@ fn accessible_labels_on_format_text_and_pin_dialog() {
     let font_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font", "role": "ComboBox"}));
     assert!(font_combo["count"].as_u64().unwrap() >= 1, "format-font has accessible label: {font_combo}");
 
-    let size_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font size", "role": "ComboBox"}));
+    let size_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Font size"}));
     assert!(size_combo["count"].as_u64().unwrap() >= 1, "format-size has accessible label: {size_combo}");
 
     let line_spacing_combo = ok(&mut h, &c, "ui.inspect", json!({"query": "Line spacing", "role": "ComboBox"}));

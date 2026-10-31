@@ -1576,11 +1576,8 @@ fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) 
     ui.horizontal(|ui| {
         let (icon_rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
         crate::icons::paint(ui, icon_rect, "search", 16.0, t.text_muted);
-        let search_resp = ui.add(
-            egui::TextEdit::singleline(&mut app.pin_tool_search)
-                .hint_text(tl!("Search tools…"))
-                .desired_width(ui.available_width() - 32.0),
-        );
+        let search_resp =
+            ui.add(egui::TextEdit::singleline(&mut app.pin_tool_search).hint_text(tl!("Search tools…")).desired_width(ui.available_width() - 32.0));
         search_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tl!("Search tools…")));
         if !app.pin_tool_search.is_empty() && widgets::ghost_button(ui, "x", tl!("Clear search")).clicked() {
             app.pin_tool_search.clear();
@@ -1595,11 +1592,7 @@ fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) 
         let mut toggle = None;
         for g in pdfcraft_engine::catalog::TOOL_GROUPS {
             let label = tl!(g.label);
-            let blurb = g
-                .sections
-                .first()
-                .map(|s| s.items.iter().take(4).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" • "))
-                .unwrap_or_default();
+            let blurb = g.sections.first().map(|s| s.items.iter().take(4).map(|i| tl!(i.label)).collect::<Vec<_>>().join(" • ")).unwrap_or_default();
             if !query.is_empty()
                 && !label.to_lowercase().contains(&query)
                 && !blurb.to_lowercase().contains(&query)
@@ -1616,17 +1609,10 @@ fn dialog_pin_tool(ui: &mut egui::Ui, app: &mut PdfCraftApp, req: &mut Pending) 
             let body = rect.translate(press.offset());
 
             let color = egui::Color32::from_rgb(g.hue[0], g.hue[1], g.hue[2]);
-            crate::icons::paint(
-                ui,
-                egui::Rect::from_min_size(body.min + egui::vec2(8.0, 11.0), egui::vec2(22.0, 22.0)),
-                g.icon,
-                20.0,
-                color,
-            );
+            crate::icons::paint(ui, egui::Rect::from_min_size(body.min + egui::vec2(8.0, 11.0), egui::vec2(22.0, 22.0)), g.icon, 20.0, color);
 
             let btn_w = 78.0;
-            let btn_rect =
-                egui::Rect::from_center_size(body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0), egui::vec2(btn_w, 26.0));
+            let btn_rect = egui::Rect::from_center_size(body.right_center() - egui::vec2(btn_w / 2.0 + 8.0, 0.0), egui::vec2(btn_w, 26.0));
             let btn_resp = ui.interact(btn_rect, ui.scope_id().with(("pin_modal_btn", g.id)), egui::Sense::click());
             let btn_hovered = btn_resp.hovered();
 

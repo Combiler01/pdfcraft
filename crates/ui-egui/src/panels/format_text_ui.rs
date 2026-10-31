@@ -445,11 +445,7 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) {
         ui.spacing_mut().item_spacing.x = 2.0;
         let id = ui.make_persistent_id("font-size-input");
         let initial_text = || {
-            if mixed || *size <= 0.0 {
-                tl!("Mixed").to_string()
-            } else {
-                size.to_string()
-            }
+            if mixed || *size <= 0.0 { tl!("Mixed").to_string() } else { size.to_string() }
         };
         let (previous, mut text) = ui.data(|d| d.get_temp::<(u64, String)>(id)).unwrap_or_else(|| (size.to_bits(), initial_text()));
         if previous != size.to_bits() {

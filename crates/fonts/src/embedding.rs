@@ -566,6 +566,7 @@ fn build_cmap_table(char_to_new_gid: &[(u32, u32)]) -> Vec<u8> {
 
 /// Subset a TrueType font to only the specified glyph IDs.
 /// Returns the new sfnt font binary and a mapping from old GID to new GID.
+#[allow(clippy::cognitive_complexity)]
 pub fn subset_truetype(bytes: &[u8], used_gids: &[u16], postscript_name: &str) -> Result<(Vec<u8>, HashMap<u16, u16>), String> {
     validate(bytes)?;
     let map = read_tables(bytes).ok_or("cannot parse font table directory")?;

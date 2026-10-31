@@ -1519,17 +1519,7 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
         match view.pages.get(&i) {
             Some(p) => {
                 if !tiled && p.tag == want_tag {
-                    paint_image_suppressed(
-                        &xf.texel_aligned(p.tex.size(), ppp),
-                        painter,
-                        p.tex.id(),
-                        0.0,
-                        0.0,
-                        1.0,
-                        1.0,
-                        active_drag_suppress,
-                        true,
-                    );
+                    paint_image_suppressed(&xf.texel_aligned(p.tex.size(), ppp), painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
                 } else {
                     // A backdrop, or a raster at an older scale until the new one arrives.
                     paint_image_suppressed(&xf, painter, p.tex.id(), 0.0, 0.0, 1.0, 1.0, active_drag_suppress, true);
@@ -1550,7 +1540,14 @@ fn paint_page_surface(ui: &mut egui::Ui, view: &mut DocView, frame: &mut PageFra
 
 /// Paints the tiles of a page too big to draw whole: the tiles of earlier zooms first, stretched,
 /// then the visible tiles of this one, nearest the viewport centre first, asking for those missing.
-fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>, slot: &PageSlot, (pw_pt, ph_pt, max_side): (f32, f32, f32), active_drag_suppress: Option<[f32; 4]>) {
+fn paint_page_tiles(
+    ui: &egui::Ui,
+    view: &mut DocView,
+    frame: &mut PageFrame<'_>,
+    slot: &PageSlot,
+    (pw_pt, ph_pt, max_side): (f32, f32, f32),
+    active_drag_suppress: Option<[f32; 4]>,
+) {
     let PageEnv { ppp, scale, tag, .. } = frame.env;
     let PageSlot { i, r, xf } = *slot;
     let visible = frame.visible;
@@ -1579,17 +1576,7 @@ fn paint_page_tiles(ui: &egui::Ui, view: &mut DocView, frame: &mut PageFrame<'_>
         let (ow, oh) = (device_pixels(pw_pt, s) as f32, device_pixels(ph_pt, s) as f32);
         let [w, h] = tex.size();
         let (x, y) = (ox as f32, oy as f32);
-        paint_image_suppressed(
-            &xf,
-            painter,
-            tex.id(),
-            x / ow,
-            y / oh,
-            (x + w as f32) / ow,
-            (y + h as f32) / oh,
-            active_drag_suppress,
-            false,
-        );
+        paint_image_suppressed(&xf, painter, tex.id(), x / ow, y / oh, (x + w as f32) / ow, (y + h as f32) / oh, active_drag_suppress, false);
     }
     // Visible tiles, nearest the viewport centre first: each tile costs a full
     // page interpret, so the workers sharpen what is looked at before the edges.
@@ -2597,7 +2584,8 @@ fn draw_pages(
                     if !r.intersects(visible) {
                         continue;
                     }
-                    let xf = PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
+                    let xf =
+                        PageXform { rect: r, rot: view.rotation, pw: info.pages[page_idx].width.max(1.0), ph: info.pages[page_idx].height.max(1.0) };
                     let images = doc.page_images(page_idx);
                     for (idx, img) in images.iter().enumerate().rev() {
                         let obb = ImageObb::from_image(img, &xf, info, page_idx);

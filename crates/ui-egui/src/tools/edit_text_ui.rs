@@ -23,8 +23,7 @@ mod layout;
 pub(crate) use background::TextBackground;
 pub use image::{CropMode, DragTarget, ImageAction, ImageDrag, ImageHandle, ImageSelection, image_menu_id};
 pub(crate) use image::{
-    ImageCx, Matrix, body_hit as picture_hit, handle_hit as picture_handle_hit, image_context_menu, image_input,
-    quad_contains, user_to_screen,
+    ImageCx, Matrix, body_hit as picture_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, quad_contains, user_to_screen,
 };
 #[cfg(test)]
 use image::{rotate_knob, turn_degrees};
@@ -1758,6 +1757,7 @@ C", &picked
             look0: pdfcraft_engine::AddedText::default(),
             extras: Extras::default(),
             extras0: Extras::default(),
+            typing_from: None,
         };
 
         assert!(toggle_superscript(&mut ed));
@@ -1799,6 +1799,7 @@ C", &picked
             look0: pdfcraft_engine::AddedText::default(),
             extras: Extras { line_spacing: 1.33, underline: true, ..Default::default() },
             extras0: Extras::default(),
+            typing_from: None,
         };
         let style = ed.style();
         assert_eq!(style.line_spacing, Some(1.33));

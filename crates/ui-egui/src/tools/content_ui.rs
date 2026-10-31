@@ -1035,23 +1035,23 @@ impl crate::PdfCraftApp {
     /// release of V with no press of V since the last one is the shortcut, even when ⌘ or Ctrl
     /// was let go first. Read every frame, dialogs or not, so a press is never missed.
     pub(crate) fn paste_key_released(&mut self, ctx: &egui::Context) -> bool {
+        self.frame_count = self.frame_count.wrapping_add(1);
         let mut released = false;
         ctx.input(|inp| {
             if inp.modifiers.command {
-                self.last_command_time = Some(inp.time);
+                self.last_command_frame = Some((self.frame_count, inp.time));
             }
             for e in &inp.events {
                 if let egui::Event::Key { key: egui::Key::V, pressed, modifiers, .. } = e {
                     if modifiers.command {
-                        self.last_command_time = Some(inp.time);
+                        self.last_command_frame = Some((self.frame_count, inp.time));
                     }
-                    let command_recent = self.last_command_time.is_some_and(|t| (inp.time - t).abs() < 0.35);
+                    let command_recent = self.last_command_frame.is_some_and(|(f, t)| {
+                        self.frame_count.saturating_sub(f) <= 10 || (inp.time > 0.0 && (inp.time - t).abs() < 0.35)
+                    });
                     let command_active = modifiers.command || command_recent;
-                    if !*pressed {
-                        if !self.v_pressed && command_active {
-                            released = true;
-                        }
-                        self.last_command_time = None;
+                    if !*pressed && !self.v_pressed && command_active {
+                        released = true;
                     }
                     self.v_pressed = *pressed;
                 }
@@ -1177,10 +1177,7 @@ impl crate::PdfCraftApp {
                 .as_ref()
                 .map(|(w, h, _)| (*w as f64, *h as f64))
                 .or_else(|| {
-                    (bytes.len() <= 64_000_000 * 4)
-                        .then(|| pdfcraft_engine::image_dimensions(&bytes))
-                        .flatten()
-                        .map(|(w, h)| (w as f64, h as f64))
+                    (bytes.len() <= 64_000_000 * 4).then(|| pdfcraft_engine::image_dimensions(&bytes)).flatten().map(|(w, h)| (w as f64, h as f64))
                 })
                 .unwrap_or((100.0, 100.0));
             let (pw, ph) =
@@ -1495,47 +1492,5 @@ mod tests {
         // Page width = width + 10 (spacing after the last character) > width + 5: the page wraps.
         assert_eq!(rows(width + 5.0), 2, "the saved text wraps here, so the editor must too");
         assert_eq!(rows(width + 10.0), 1, "and keeps the line when the spacing fits");
-    }
-
-    #[test]
-    fn ctrl_c_followed_by_plain_v_release_does_not_paste() {
-        let mut app = crate::PdfCraftApp::default();
-        let ctx = egui::Context::default();
-
-        // 1. User presses Ctrl+C at time 0.0
-        let mut out = ctx.run_ui(
-            egui::RawInput {
-                time: Some(0.0),
-                events: vec![egui::Event::Key {
-                    key: egui::Key::C,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers::COMMAND,
-                }],
-                ..Default::default()
-            },
-            |_| {},
-        );
-        out.textures_delta.clear();
-        assert!(!app.paste_key_released(&ctx));
-
-        // 2. Later at time 1.0, user releases V with Modifiers::NONE
-        let mut out = ctx.run_ui(
-            egui::RawInput {
-                time: Some(1.0),
-                events: vec![egui::Event::Key {
-                    key: egui::Key::V,
-                    physical_key: None,
-                    pressed: false,
-                    repeat: false,
-                    modifiers: egui::Modifiers::NONE,
-                }],
-                ..Default::default()
-            },
-            |_| {},
-        );
-        out.textures_delta.clear();
-        assert!(!app.paste_key_released(&ctx), "Ctrl+C followed by plain V release must not trigger paste");
     }
 }

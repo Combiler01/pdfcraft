@@ -164,12 +164,7 @@ fn crop_handles(k: Rect) -> [Pos2; 8] {
 /// Crop mode for the selected image `i` whose visible frame is `b` (screen). Returns `true`
 /// (the pointer and keys are the crop's while it lasts).
 #[allow(clippy::cognitive_complexity)]
-fn crop_input(
-    cx: &ImageCx<'_>,
-    view: &mut DocView,
-    i: usize,
-    image: &pdfcraft_engine::PageImage,
-) -> bool {
+fn crop_input(cx: &ImageCx<'_>, view: &mut DocView, i: usize, image: &pdfcraft_engine::PageImage) -> bool {
     let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
     let painter = ui.painter();
     let Some(sel) = view.image_selection.as_mut() else { return false };
@@ -544,12 +539,7 @@ pub fn image_menu_id() -> egui::Id {
 
 /// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.
 #[allow(clippy::cognitive_complexity)]
-pub(crate) fn image_input(
-    cx: &ImageCx<'_>,
-    images: &[pdfcraft_engine::PageImage],
-    view: &mut DocView,
-    action: &mut Option<ImageAction>,
-) -> bool {
+pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage], view: &mut DocView, action: &mut Option<ImageAction>) -> bool {
     let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
     let _ = &action;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
