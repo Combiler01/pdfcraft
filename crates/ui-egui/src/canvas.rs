@@ -310,8 +310,12 @@ impl ImageObb {
     /// Resizes the OBB proportionally along its local axes using projected mouse delta,
     /// locking the diagonally opposite corner as the fixed anchor point.
     pub fn scale_proportional(&self, handle: ImageHandle, delta: Vec2, min_size: f32) -> Self {
-        let u_vec = vec2(self.u_axis.0 as f32, self.u_axis.1 as f32);
-        let v_vec = vec2(self.v_axis.0 as f32, self.v_axis.1 as f32);
+        let u_diff = self.s10 - self.s00;
+        let v_diff = self.s01 - self.s00;
+        let u_len = u_diff.length();
+        let v_len = v_diff.length();
+        let u_vec = if u_len > 1e-4 { u_diff / u_len } else { vec2(1.0, 0.0) };
+        let v_vec = if v_len > 1e-4 { v_diff / v_len } else { vec2(0.0, 1.0) };
         let delta_u = delta.dot(u_vec);
         let delta_v = delta.dot(v_vec);
         let min_s = min_size.max(5.0);

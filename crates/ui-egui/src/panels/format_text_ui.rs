@@ -231,8 +231,9 @@ pub(crate) fn panel(
     ui.add_space(4.0);
 
     // Size and colour | bullets, numbering and alignment.
+    let mut size_committed = false;
     row(ui, |ui| {
-        font_size_input(ui, &mut look.size, fonts.mixed_size);
+        size_committed = font_size_input(ui, &mut look.size, fonts.mixed_size);
         let swatch = colour_button(ui, t, look.color);
         egui::Popup::menu(&swatch).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             if let Some(picked) = crate::comments::swatch_grid(ui, Some(look.color)) {
@@ -351,7 +352,7 @@ pub(crate) fn panel(
         number_with_presets(ui, spacing, &CHAR_SPACINGS, half, (label.id, tl!("Character spacing")));
     });
 
-    out.changed = (look.clone(), extras.as_deref().copied()) != before;
+    out.changed = size_committed || (look.clone(), extras.as_deref().copied()) != before;
     ui.add_space(6.0);
     ui.separator();
     out
@@ -440,7 +441,8 @@ fn colour_button(ui: &mut egui::Ui, t: &Tokens, color: [f64; 3]) -> egui::Respon
 
 /// Commit a typed size once (Enter or leaving the field), rather than one undo step per key.
 /// The bounds match AddedText validation, so the panel also accepts coloured text below 8 pt.
-fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) {
+fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) -> bool {
+    let mut committed = false;
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let id = ui.make_persistent_id("font-size-input");
@@ -459,6 +461,9 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) {
             response.surrender_focus();
         } else if response.lost_focus() || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
             if let Some(value) = typed_font_size(&text) {
+                if mixed || *size != value {
+                    committed = true;
+                }
                 *size = value;
                 text = size.to_string();
             } else {
@@ -470,6 +475,9 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) {
         egui::Popup::menu(&list).show(|ui| {
             for value in SIZES {
                 if ui.selectable_label(*size == value, format!("{value} pt")).clicked() {
+                    if mixed || *size != value {
+                        committed = true;
+                    }
                     *size = value;
                     ui.close();
                 }
@@ -480,6 +488,7 @@ fn font_size_input(ui: &mut egui::Ui, size: &mut f64, mixed: bool) {
         }
         ui.data_mut(|d| d.insert_temp(id, (size.to_bits(), text)));
     });
+    committed
 }
 
 fn typed_font_size(text: &str) -> Option<f64> {

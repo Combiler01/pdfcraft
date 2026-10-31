@@ -77,8 +77,10 @@ pub fn toggle_bullet_list(text: &mut String) -> bool {
             new_text.push('\n');
         }
         let trimmed = line.trim_start();
+        let indent = &line[..line.len() - trimmed.len()];
         if all_bulleted {
             if let Some(rest) = trimmed.strip_prefix("• ").or_else(|| trimmed.strip_prefix("- ")) {
+                new_text.push_str(indent);
                 new_text.push_str(rest);
             } else {
                 new_text.push_str(line);
@@ -86,8 +88,9 @@ pub fn toggle_bullet_list(text: &mut String) -> bool {
         } else if trimmed.is_empty() || trimmed.starts_with("• ") {
             new_text.push_str(line);
         } else {
+            new_text.push_str(indent);
             new_text.push_str("• ");
-            new_text.push_str(line);
+            new_text.push_str(trimmed);
         }
     }
     if has_trailing_crlf {
@@ -126,12 +129,14 @@ pub fn toggle_numbered_list(text: &mut String) -> bool {
             new_text.push('\n');
         }
         let t = line.trim_start();
+        let indent = &line[..line.len() - t.len()];
         if all_numbered {
             if let Some(dot_idx) = t.find('.')
                 && dot_idx > 0
                 && t[..dot_idx].chars().all(|c| c.is_ascii_digit())
                 && t[dot_idx..].starts_with(". ")
             {
+                new_text.push_str(indent);
                 new_text.push_str(t.get(dot_idx + 2..).unwrap_or(""));
                 continue;
             }
@@ -140,6 +145,7 @@ pub fn toggle_numbered_list(text: &mut String) -> bool {
             new_text.push_str(line);
         } else {
             use std::fmt::Write as _;
+            new_text.push_str(indent);
             let _ = write!(new_text, "{num}. ");
             new_text.push_str(t);
             num += 1;
@@ -697,7 +703,6 @@ impl LineEditor {
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
-        self.selection = None;
         // The page now has this text: the box's history restarts, even when the format left the
         // text as it was, so a Redo from before can't put undone typing back on top of it.
         self.typing_from = None;
@@ -1717,6 +1722,12 @@ C", &picked
         assert!(toggle_bullet_list(&mut text));
         assert!(!is_bulleted(&text));
         assert_eq!(text, "First line\nSecond line\n\nThird line");
+
+        let mut indented = "  First line\n  Second line".to_string();
+        assert!(toggle_bullet_list(&mut indented));
+        assert_eq!(indented, "  • First line\n  • Second line");
+        assert!(toggle_bullet_list(&mut indented));
+        assert_eq!(indented, "  First line\n  Second line");
     }
 
     #[test]
@@ -1731,6 +1742,12 @@ C", &picked
         assert!(toggle_numbered_list(&mut text));
         assert!(!is_numbered(&text));
         assert_eq!(text, "Item A\nItem B\n\nItem C");
+
+        let mut indented = "   Item A\n   Item B".to_string();
+        assert!(toggle_numbered_list(&mut indented));
+        assert_eq!(indented, "   1. Item A\n   2. Item B");
+        assert!(toggle_numbered_list(&mut indented));
+        assert_eq!(indented, "   Item A\n   Item B");
     }
 
     #[test]

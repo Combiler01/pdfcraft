@@ -372,7 +372,7 @@ impl PdfCraftApp {
         if !self.is_tool_pinned(id) {
             self.pinned_tools.push(id.to_string());
             if let Some(g) = pdfcraft_engine::catalog::group(id) {
-                self.notify_fmt("Pinned {tool} to Home", &[("tool", g.label)]);
+                self.notify_fmt("Pinned {tool} to Home", &[("tool", tl!(g.label))]);
             }
             return true;
         }
@@ -384,7 +384,7 @@ impl PdfCraftApp {
         if let Some(pos) = self.pinned_tools.iter().position(|t| t == id) {
             self.pinned_tools.remove(pos);
             if let Some(g) = pdfcraft_engine::catalog::group(id) {
-                self.notify_fmt("Unpinned {tool} from Home", &[("tool", g.label)]);
+                self.notify_fmt("Unpinned {tool} from Home", &[("tool", tl!(g.label))]);
             }
         }
     }

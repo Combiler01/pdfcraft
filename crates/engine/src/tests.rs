@@ -9493,6 +9493,41 @@ fn transform_on_added_image_folds_quarter_turns_and_rejects_non_axis_aligned() {
     assert!(res_skew.unwrap_err().to_string().contains("non-axis-aligned"));
 }
 
+#[test]
+fn test_added_image_transform_reflections_with_rotation() {
+    let make_png = |rgb: [u8; 3]| {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 2, 2);
+            enc.set_color(png::ColorType::Rgb);
+            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
+            enc.write_header().unwrap().write_image_data(&data).unwrap();
+        }
+        Arc::new(png)
+    };
+    let png = make_png([255, 0, 0]);
+
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 150.0]), name: "img.png".into(), bytes: png }).unwrap();
+
+    // Rotate by 90° CW (quarter turns CCW: rotation = 3):
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+    assert_eq!(ai.rotation, 3);
+    assert!(!ai.flip_h);
+    assert!(!ai.flip_v);
+
+    // Apply a horizontal flip in display space (parallel transform with m0 = -1):
+    // For rotation = 3 (odd rotation), display horizontal flip corresponds to local vertical flip (flip_v):
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([-1.0, 0.0, 0.0, 1.0, 300.0, 0.0]) }).unwrap();
+    let cos2 = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let AddedContent::Image(ai2) = &pdfcraft_edit::list_added(&cos2)[0].content else { panic!() };
+    assert_eq!(ai2.rotation, 3);
+    assert!(!ai2.flip_h, "flip_h should NOT be toggled for horizontal flip when rotation is 90°");
+    assert!(ai2.flip_v, "flip_v should be toggled for horizontal flip when rotation is 90°");
+}
+
 /// ISO 32000-2 Table 192, 12.7.5.2.3 and Table 228 (Comb): a check box, a push button, a comb
 /// field the file leaves to the viewer. The page as displayed and printed as an image shows the
 /// check box's caption symbol in its text colour, the button's grey face and the comb's cells in

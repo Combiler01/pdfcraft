@@ -309,7 +309,12 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
     };
 
     let added_items: Vec<(usize, pdfcraft_edit::Added)> = pdfcraft_edit::list_added(doc).into_iter().filter(|a| a.page == page).enumerate().collect();
-    let matched_added = if let Some(st_ref) = target_stream_obj {
+    let matched_added = if let (Some(st_ref), Some(target_ref)) = (target_stream_obj, img.object) {
+        added_items
+            .iter()
+            .find(|(_, a)| a.obj == st_ref && matches!(&a.content, AddedContent::Image(ai) if ai.image == target_ref))
+            .or_else(|| added_items.iter().find(|(_, a)| matches!(&a.content, AddedContent::Image(ai) if ai.image == target_ref)))
+    } else if let Some(st_ref) = target_stream_obj {
         added_items.iter().find(|(_, a)| a.obj == st_ref)
     } else if let Some(target_ref) = img.object {
         added_items.iter().find(|(_, a)| matches!(&a.content, AddedContent::Image(ai) if ai.image == target_ref))
@@ -384,29 +389,32 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                 let is_perpendicular = t_display[0].abs() < 1e-5 && t_display[3].abs() < 1e-5;
 
                 if is_parallel {
-                    if t_display[0] < 0.0 {
+                    let (toggle_h, toggle_v) =
+                        if ai.rotation % 2 == 1 { (t_display[3] < 0.0, t_display[0] < 0.0) } else { (t_display[0] < 0.0, t_display[3] < 0.0) };
+                    if toggle_h {
                         ai.flip_h = !ai.flip_h;
                     }
-                    if t_display[3] < 0.0 {
+                    if toggle_v {
                         ai.flip_v = !ai.flip_v;
                     }
                     ai.rect = bbox(t_display, ai.rect);
                 } else if is_perpendicular {
                     let b_pos = t_display[1] > 0.0;
                     let c_pos = t_display[2] > 0.0;
-                    let (quarters_ccw, flip_h, flip_v) = match (b_pos, c_pos) {
+                    let (quarters_ccw, disp_flip_h, disp_flip_v) = match (b_pos, c_pos) {
                         (true, false) => (1, false, false),
                         (false, true) => (3, false, false),
                         (true, true) => (1, false, true),
                         (false, false) => (1, true, false),
                     };
-                    ai.rotation = (ai.rotation + quarters_ccw) % 4;
-                    if flip_h {
+                    let (toggle_h, toggle_v) = if ai.rotation % 2 == 1 { (disp_flip_v, disp_flip_h) } else { (disp_flip_h, disp_flip_v) };
+                    if toggle_h {
                         ai.flip_h = !ai.flip_h;
                     }
-                    if flip_v {
+                    if toggle_v {
                         ai.flip_v = !ai.flip_v;
                     }
+                    ai.rotation = (ai.rotation + quarters_ccw) % 4;
                     ai.rect = bbox(t_display, ai.rect);
                 } else {
                     return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
