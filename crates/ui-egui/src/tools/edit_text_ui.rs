@@ -703,6 +703,7 @@ impl LineEditor {
         self.look0 = self.look.clone();
         self.extras0 = self.extras;
         self.original = self.text.clone();
+        self.selection = None;
         // The page now has this text: the box's history restarts, even when the format left the
         // text as it was, so a Redo from before can't put undone typing back on top of it.
         self.typing_from = None;
