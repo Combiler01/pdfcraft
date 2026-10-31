@@ -328,9 +328,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                     || (v[2] - img.rect[2]).abs() > 1e-4
                     || (v[3] - img.rect[3]).abs() > 1e-4
             });
-        let rotated_transform = matches!(change, ImageEdit::Transform(t) if t[1].abs() >= 1e-6 || t[2].abs() >= 1e-6);
         let should_promote = has_active_crop
-            || rotated_transform
             || matches!(change, ImageEdit::Crop(_) | ImageEdit::RemoveCrop | ImageEdit::RotateBy(_) | ImageEdit::Arrange(_) | ImageEdit::Delete);
 
         if should_promote {
@@ -382,13 +380,39 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                     ]
                 };
                 let t_display = mul(mul(view, *t), to_display);
-                if t_display[0] < 0.0 {
-                    ai.flip_h = !ai.flip_h;
+                let is_parallel = t_display[1].abs() < 1e-5 && t_display[2].abs() < 1e-5;
+                let is_perpendicular = t_display[0].abs() < 1e-5 && t_display[3].abs() < 1e-5;
+
+                if is_parallel {
+                    if t_display[0] < 0.0 {
+                        ai.flip_h = !ai.flip_h;
+                    }
+                    if t_display[3] < 0.0 {
+                        ai.flip_v = !ai.flip_v;
+                    }
+                    ai.rect = bbox(t_display, ai.rect);
+                } else if is_perpendicular {
+                    let b_pos = t_display[1] > 0.0;
+                    let c_pos = t_display[2] > 0.0;
+                    let (quarters_ccw, flip_h, flip_v) = match (b_pos, c_pos) {
+                        (true, false) => (1, false, false),
+                        (false, true) => (3, false, false),
+                        (true, true) => (1, false, true),
+                        (false, false) => (1, true, false),
+                    };
+                    ai.rotation = (ai.rotation + quarters_ccw) % 4;
+                    if flip_h {
+                        ai.flip_h = !ai.flip_h;
+                    }
+                    if flip_v {
+                        ai.flip_v = !ai.flip_v;
+                    }
+                    ai.rect = bbox(t_display, ai.rect);
+                } else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid(
+                        "non-axis-aligned transforms are not supported for added images".into(),
+                    )));
                 }
-                if t_display[3] < 0.0 {
-                    ai.flip_v = !ai.flip_v;
-                }
-                ai.rect = bbox(t_display, ai.rect);
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
             ImageEdit::Rotate(q) => {

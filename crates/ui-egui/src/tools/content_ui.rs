@@ -1046,9 +1046,9 @@ impl crate::PdfCraftApp {
                     if modifiers.command {
                         self.last_command_frame = Some((self.frame_count, inp.time));
                     }
-                    let command_recent = self.last_command_frame.is_some_and(|(f, t)| {
-                        self.frame_count.saturating_sub(f) <= 10 || (inp.time > 0.0 && (inp.time - t).abs() < 0.35)
-                    });
+                    let command_recent = self
+                        .last_command_frame
+                        .is_some_and(|(f, t)| self.frame_count.saturating_sub(f) <= 10 || (inp.time > 0.0 && (inp.time - t).abs() < 0.35));
                     let command_active = modifiers.command || command_recent;
                     if !*pressed && !self.v_pressed && command_active {
                         released = true;

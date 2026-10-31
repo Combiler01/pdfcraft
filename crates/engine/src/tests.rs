@@ -9437,6 +9437,62 @@ fn mirroring_transform_on_added_image_flips_and_non_finite_is_refused() {
     assert!(res_move.is_err(), "NaN position must be refused");
 }
 
+#[test]
+fn transform_on_added_image_folds_quarter_turns_and_rejects_non_axis_aligned() {
+    let make_png = |rgb: [u8; 3]| {
+        let mut png = Vec::new();
+        {
+            let mut enc = png::Encoder::new(&mut png, 2, 2);
+            enc.set_color(png::ColorType::Rgb);
+            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
+            enc.write_header().unwrap().write_image_data(&data).unwrap();
+        }
+        Arc::new(png)
+    };
+    let png1 = make_png([0, 128, 255]);
+
+    let (mut s, id) = session_with(1);
+    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 150.0]), name: "img.png".into(), bytes: png1 }).unwrap();
+
+    // 1. A pure 90° clockwise rotation matrix about the image centre:
+    let rot_90_cw = pdfcraft_edit::turn_about_centre([100.0, 100.0, 200.0, 150.0], 1, false, false);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(rot_90_cw) }).unwrap();
+
+    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let added = pdfcraft_edit::list_added(&cos);
+    assert_eq!(added.len(), 1, "stays as PCAdded image");
+    let AddedContent::Image(ai) = &added[0].content else { panic!("expected added image") };
+    assert_eq!(ai.rotation, 3, "quarter turn clockwise folds into ai.rotation = 3 (270° CCW)");
+    // Centre is (150, 125); rotated width=50, height=100 -> [125, 75, 175, 175]
+    assert!((ai.rect[0] - 125.0).abs() < 1e-4);
+    assert!((ai.rect[1] - 75.0).abs() < 1e-4);
+    assert!((ai.rect[2] - 175.0).abs() < 1e-4);
+    assert!((ai.rect[3] - 175.0).abs() < 1e-4);
+
+    // 2. A pure 90° counter-clockwise rotation matrix:
+    let rot_90_ccw = pdfcraft_edit::turn_about_centre(ai.rect, 3, false, false);
+    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(rot_90_ccw) }).unwrap();
+
+    let cos2 = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+    let AddedContent::Image(ai2) = &pdfcraft_edit::list_added(&cos2)[0].content else { panic!("expected added image") };
+    assert_eq!(ai2.rotation, 0, "quarter turn counter-clockwise restores ai.rotation = 0");
+    assert!((ai2.rect[0] - 100.0).abs() < 1e-4);
+    assert!((ai2.rect[1] - 100.0).abs() < 1e-4);
+    assert!((ai2.rect[2] - 200.0).abs() < 1e-4);
+    assert!((ai2.rect[3] - 150.0).abs() < 1e-4);
+
+    // 3. Non-axis-aligned transforms (e.g. 45° rotation or skew) are rejected:
+    let rot_45 = pdfcraft_edit::turn_by_degrees([100.0, 100.0, 200.0, 150.0], 45.0).unwrap();
+    let res_45 = s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(rot_45) });
+    assert!(res_45.is_err(), "non-axis-aligned 45° rotation must be rejected for added image");
+    assert!(res_45.unwrap_err().to_string().contains("non-axis-aligned"));
+
+    let skew = [1.0, 0.5, 0.0, 1.0, 0.0, 0.0];
+    let res_skew = s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform(skew) });
+    assert!(res_skew.is_err(), "skew must be rejected for added image");
+    assert!(res_skew.unwrap_err().to_string().contains("non-axis-aligned"));
+}
+
 /// ISO 32000-2 Table 192, 12.7.5.2.3 and Table 228 (Comb): a check box, a push button, a comb
 /// field the file leaves to the viewer. The page as displayed and printed as an image shows the
 /// check box's caption symbol in its text colour, the button's grey face and the comb's cells in
