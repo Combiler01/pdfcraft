@@ -3,7 +3,7 @@
 //! horizontal scale and character spacing. One panel serves a paragraph being edited (with the
 //! fonts already on its page and the spacing controls) and added text (the standard families,
 //! size, colour, style, alignment and character spacing). What PdfCraft can't apply yet (lists,
-//! superscript and subscript, paragraph spacing, or line spacing and scale for added text) is shown
+//! paragraph spacing, or line spacing and scale for added text) is shown
 //! disabled and says so.
 //!
 //! The icons are Lucide's (AGENTS.md §1); only the arrangement follows Acrobat.
@@ -87,6 +87,8 @@ impl Paragraphs<'_> {
 pub(crate) struct Outcome {
     pub changed: bool,
     pub font: Option<FontChoice>,
+    pub toggle_superscript: bool,
+    pub toggle_subscript: bool,
 }
 
 const SIZES: [f64; 16] = [4.0, 6.0, 8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0];
@@ -298,8 +300,35 @@ pub(crate) fn panel(
             }
             None => planned(ui, "underline", tl!("Underline")),
         }
-        planned(ui, "superscript", tl!("Superscript"));
-        planned(ui, "subscript", tl!("Subscript"));
+        let (is_super, is_sub) = paragraphs
+            .as_ref()
+            .map(|p| {
+                let (s_pos, e_pos) =
+                    if let Some(r) = &p.selection { (r.start.min(p.text.len()), r.end.min(p.text.len())) } else { (0, p.text.len()) };
+                let (start, end) = crate::edit_text_ui::snap_char_boundaries(p.text, s_pos, e_pos);
+                if start >= end {
+                    return (false, false);
+                }
+                let target = &p.text[start..end];
+                let all_sup = !target.is_empty() && target.chars().all(|c| crate::edit_text_ui::char_from_superscript(c) != c);
+                let all_sub = !target.is_empty() && target.chars().all(|c| crate::edit_text_ui::char_from_subscript(c) != c);
+                (all_sup, all_sub)
+            })
+            .unwrap_or((false, false));
+
+        if paragraphs.is_some() {
+            if icons::button(ui, "superscript", 30.0, is_super, tl!("Superscript")).clicked() {
+                out.toggle_superscript = true;
+                out.changed = true;
+            }
+            if icons::button(ui, "subscript", 30.0, is_sub, tl!("Subscript")).clicked() {
+                out.toggle_subscript = true;
+                out.changed = true;
+            }
+        } else {
+            planned(ui, "superscript", tl!("Superscript"));
+            planned(ui, "subscript", tl!("Subscript"));
+        }
     });
 
     // Line and paragraph spacing; horizontal scale and character spacing: two columns, each an
@@ -352,7 +381,7 @@ pub(crate) fn panel(
         number_with_presets(ui, spacing, &CHAR_SPACINGS, half, (label.id, tl!("Character spacing")));
     });
 
-    out.changed = size_committed || (look.clone(), extras.as_deref().copied()) != before;
+    out.changed = out.changed || size_committed || (look.clone(), extras.as_deref().copied()) != before;
     ui.add_space(6.0);
     ui.separator();
     out

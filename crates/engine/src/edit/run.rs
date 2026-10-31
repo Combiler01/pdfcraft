@@ -373,7 +373,10 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                 ai.rect = bbox(to_display, *to);
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
-            ImageEdit::Transform(t) => {
+            ImageEdit::Transform(_) | ImageEdit::Flip { .. } => {
+                let pdfcraft_edit::ImageChange::Transform(t) = c else {
+                    return Err(EditError::Edit(pdfcraft_edit::EditError::Invalid("expected transform".into())));
+                };
                 let mul = |m1: [f64; 6], m2: [f64; 6]| {
                     [
                         m1[0] * m2[0] + m1[1] * m2[2],
@@ -384,7 +387,7 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                         m1[4] * m2[1] + m1[5] * m2[3] + m2[5],
                     ]
                 };
-                let t_display = mul(mul(view, *t), to_display);
+                let t_display = mul(mul(view, t), to_display);
                 let is_parallel = t_display[1].abs() < 1e-5 && t_display[2].abs() < 1e-5;
                 let is_perpendicular = t_display[0].abs() < 1e-5 && t_display[3].abs() < 1e-5;
 
@@ -432,14 +435,6 @@ fn run_edit_page_image(doc: &mut pdfcraft_cos::Document, page: usize, index: usi
                     let (w, h) = (r[2] - r[0], r[3] - r[1]);
                     ai.rect = [cx - h / 2.0, cy - w / 2.0, cx + h / 2.0, cy + w / 2.0];
                 }
-                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
-            }
-            ImageEdit::Flip { horizontal: true } => {
-                ai.flip_h = !ai.flip_h;
-                pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
-            }
-            ImageEdit::Flip { horizontal: false } => {
-                ai.flip_v = !ai.flip_v;
                 pdfcraft_edit::update_content(doc, page, added_idx, &AddedContent::Image(ai))?;
             }
             ImageEdit::Replace { .. } => {

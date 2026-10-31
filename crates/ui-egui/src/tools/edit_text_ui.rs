@@ -26,7 +26,7 @@ pub(crate) use image::{
     ImageCx, Matrix, body_hit as picture_hit, handle_hit as picture_handle_hit, image_context_menu, image_input, quad_contains, user_to_screen,
 };
 #[cfg(test)]
-use image::{rotate_knob, turn_degrees};
+use image::{rotate_knob, turn_degrees, turn_degrees_delta};
 #[cfg(test)]
 use layout::{DARK_EDITOR_FILL, contrast};
 pub(crate) use layout::{caret_color_on, editor_fill, editor_font, install_source_fonts};
@@ -370,7 +370,7 @@ pub fn char_from_subscript(c: char) -> char {
     }
 }
 
-fn snap_char_boundaries(s: &str, start: usize, end: usize) -> (usize, usize) {
+pub(crate) fn snap_char_boundaries(s: &str, start: usize, end: usize) -> (usize, usize) {
     let mut s_idx = start.min(s.len());
     while s_idx > 0 && !s.is_char_boundary(s_idx) {
         s_idx -= 1;
@@ -448,7 +448,7 @@ pub struct LineEditor {
     /// Current screen-space size. Recomputed from the current page transform before painting.
     size: f32,
     /// Take the keyboard focus on the next frame.
-    pub(crate) focus: bool,
+    pub focus: bool,
     /// Whether the text box had the keyboard at the end of the editor's last frame
     /// ([`lost_focus_once`]).
     had_focus: bool,
@@ -1310,23 +1310,26 @@ pub(crate) fn overlay(ctx: &egui::Context, view: &mut DocView, info: &DocInfo) -
                     }
                 }
                 look = Some((Arc::clone(&output.galley), output.galley_pos));
-                if let Some(cursor) = output.cursor_range {
-                    let selected = cursor.as_sorted_char_range();
-                    let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
-                    ed.selection = (!selected.is_empty()).then(|| byte(selected.start.into())..byte(selected.end.into()));
-                }
                 let r = output.response;
-                if r.changed() {
-                    ed.follow_typed_rows(ctx, &before);
-                    // The next pass measures the updated draft with the Apply/Save rewrite.
-                    ctx.request_repaint();
-                }
                 if ed.focus {
                     r.request_focus();
                     if let Some(range) = &ed.selection {
                         reselect(ui.ctx(), input, &ed.text, range);
                     }
                     ed.focus = false;
+                } else if r.has_focus() {
+                    if let Some(cursor) = output.cursor_range {
+                        let selected = cursor.as_sorted_char_range();
+                        let byte = |index| ed.text.char_indices().nth(index).map_or(ed.text.len(), |(at, _)| at);
+                        ed.selection = (!selected.is_empty()).then(|| byte(selected.start.into())..byte(selected.end.into()));
+                    } else {
+                        ed.selection = None;
+                    }
+                }
+                if r.changed() {
+                    ed.follow_typed_rows(ctx, &before);
+                    // The next pass measures the updated draft with the Apply/Save rewrite.
+                    ctx.request_repaint();
                 }
                 let lost = lost_focus_once(&r, &mut ed.had_focus);
                 let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
@@ -1517,6 +1520,22 @@ C", &picked
         assert_eq!(turn_degrees(c, Pos2::new(180.0, 50.0), true) % 15.0, 0.0);
         assert_eq!(at(101.0, 101.0), 0.0);
         assert_eq!(at(f32::NAN, 5.0), 0.0);
+    }
+
+    #[test]
+    fn the_rotate_knob_measures_clockwise_delta_from_drag_start() {
+        let c = Pos2::new(100.0, 100.0);
+        // Start dragging at 45° clockwise from top:
+        let r = 50.0_f32;
+        let start = c + egui::vec2(r * 45.0_f32.to_radians().sin(), -r * 45.0_f32.to_radians().cos());
+        // At start position, delta is 0:
+        assert!(turn_degrees_delta(c, start, start, false).abs() < 1e-3);
+        // Move by +15° (to 60°):
+        let p_60 = c + egui::vec2(r * 60.0_f32.to_radians().sin(), -r * 60.0_f32.to_radians().cos());
+        assert!((turn_degrees_delta(c, start, p_60, false) - 15.0).abs() < 1e-2);
+        // Move by -10° (to 35°):
+        let p_35 = c + egui::vec2(r * 35.0_f32.to_radians().sin(), -r * 35.0_f32.to_radians().cos());
+        assert!((turn_degrees_delta(c, start, p_35, false) + 10.0).abs() < 1e-2);
     }
 
     /// An app with one text document open, and an editor on its first paragraph.

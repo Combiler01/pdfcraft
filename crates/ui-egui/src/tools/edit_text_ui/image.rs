@@ -520,16 +520,31 @@ pub(super) fn rotate_knob(b: Rect, view: Rect) -> (Pos2, Pos2) {
     if above.y - 6.0 >= view.top() { (above, b.center_top()) } else { (b.center_bottom() + egui::vec2(0.0, 22.0), b.center_bottom()) }
 }
 
-/// Degrees clockwise (-180..=180) that turn "straight up" from `centre` onto the pointer; `snap`
+/// Degrees clockwise (-180..=180) that turn from `start` onto `pointer` around `centre`; `snap`
 /// rounds to steps of 15 degrees (Shift). A pointer on the centre turns nothing.
-pub(super) fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
-    let v = pointer - centre;
-    if !(v.x.is_finite() && v.y.is_finite()) || v.length() < 4.0 {
+pub(super) fn turn_degrees_delta(centre: Pos2, start: Pos2, pointer: Pos2, snap: bool) -> f32 {
+    let v_start = start - centre;
+    let v_curr = pointer - centre;
+    if !(v_curr.x.is_finite() && v_curr.y.is_finite())
+        || v_curr.length() < 4.0
+        || !(v_start.x.is_finite() && v_start.y.is_finite())
+        || v_start.length() < 4.0
+    {
         return 0.0;
     }
     // Screen y points down: up is (0, -1); clockwise is atan2(x, -y).
-    let d = v.x.atan2(-v.y).to_degrees();
+    let theta_start = v_start.x.atan2(-v_start.y).to_degrees();
+    let theta_curr = v_curr.x.atan2(-v_curr.y).to_degrees();
+    let mut d = theta_curr - theta_start;
+    d = ((d + 180.0).rem_euclid(360.0)) - 180.0;
     if snap { (d / 15.0).round() * 15.0 } else { d }
+}
+
+/// Degrees clockwise (-180..=180) that turn "straight up" from `centre` onto the pointer; `snap`
+/// rounds to steps of 15 degrees (Shift). A pointer on the centre turns nothing.
+#[allow(dead_code)]
+pub(super) fn turn_degrees(centre: Pos2, pointer: Pos2, snap: bool) -> f32 {
+    turn_degrees_delta(centre, centre - egui::vec2(0.0, 10.0), pointer, snap)
 }
 
 #[doc(hidden)]
@@ -745,17 +760,19 @@ pub(crate) fn image_input(cx: &ImageCx<'_>, images: &[pdfcraft_engine::PageImage
 
         if view.image_selection.as_ref().is_some_and(|s| s.turning) {
             let shift = ui.input(|i| i.modifiers.shift);
-            let degrees = hover_pos.map_or(0.0, |p| turn_degrees(b.center(), p, shift));
-            let centre = b.center();
+            let centre = obb.screen_center;
+            let rot_knob = if obb.is_rotated { obb.s_rot } else { knob };
+            let drag_start = view.image_selection.as_ref().and_then(|s| s.drag).map_or(rot_knob, |d| d.start);
+            let degrees = hover_pos.map_or(0.0, |p| turn_degrees_delta(centre, drag_start, p, shift));
             let (sin, cos) = degrees.to_radians().sin_cos();
             let turn = |c: Pos2| {
                 let v = c - centre;
                 centre + egui::vec2(v.x * cos - v.y * sin, v.x * sin + v.y * cos)
             };
-            let outline = [b.left_top(), b.right_top(), b.right_bottom(), b.left_bottom()].map(turn).to_vec();
+            let outline = obb.corners().map(turn).to_vec();
             painter.add(egui::Shape::closed_line(outline, Stroke::new(1.5, ACCENT)));
             let galley = painter.layout_no_wrap(format!("{degrees:.0}\u{b0}"), egui::FontId::proportional(12.0), ACCENT);
-            let label = Rect::from_center_size(turn(knob) - egui::vec2(0.0, 14.0), galley.size() + egui::vec2(8.0, 4.0));
+            let label = Rect::from_center_size(turn(rot_knob) - egui::vec2(0.0, 14.0), galley.size() + egui::vec2(8.0, 4.0));
             painter.rect(label, CornerRadius::same(3), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
             painter.galley(label.center() - galley.size() / 2.0, galley, ACCENT);
             view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);

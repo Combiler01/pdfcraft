@@ -828,6 +828,187 @@ impl ExtendedGStateTracker {
     }
 }
 
+#[derive(Clone, Default, Debug, PartialEq)]
+struct DrawingState {
+    non_stroking_color: Option<Vec<Op>>,
+    stroking_color: Option<Vec<Op>>,
+    line_width: Option<Op>,
+    line_cap: Option<Op>,
+    line_join: Option<Op>,
+    miter_limit: Option<Op>,
+    dash_pattern: Option<Op>,
+    rendering_intent: Option<Op>,
+    flatness: Option<Op>,
+}
+
+#[derive(Clone, Default, Debug)]
+struct DrawingStateTracker {
+    stack: Vec<DrawingState>,
+    current: DrawingState,
+}
+
+impl DrawingStateTracker {
+    fn step(&mut self, op: &Op) -> Result<(), EditError> {
+        match op.op.as_slice() {
+            b"q" => {
+                if self.stack.len() >= 4096 {
+                    return Err(EditError::Invalid("the image graphics state is too deeply nested".into()));
+                }
+                self.stack.push(self.current.clone());
+            }
+            b"Q" => {
+                if let Some(prev) = self.stack.pop() {
+                    self.current = prev;
+                }
+            }
+            b"g" | b"rg" | b"k" => {
+                self.current.non_stroking_color = Some(vec![op.clone()]);
+            }
+            b"cs" => {
+                self.current.non_stroking_color = Some(vec![op.clone()]);
+            }
+            b"sc" | b"scn" => {
+                if let Some(ref mut ops) = self.current.non_stroking_color {
+                    if ops.first().is_some_and(|o| o.is("cs")) {
+                        ops.truncate(1);
+                        ops.push(op.clone());
+                    } else {
+                        *ops = vec![op.clone()];
+                    }
+                } else {
+                    self.current.non_stroking_color = Some(vec![op.clone()]);
+                }
+            }
+            b"G" | b"RG" | b"K" => {
+                self.current.stroking_color = Some(vec![op.clone()]);
+            }
+            b"CS" => {
+                self.current.stroking_color = Some(vec![op.clone()]);
+            }
+            b"SC" | b"SCN" => {
+                if let Some(ref mut ops) = self.current.stroking_color {
+                    if ops.first().is_some_and(|o| o.is("CS")) {
+                        ops.truncate(1);
+                        ops.push(op.clone());
+                    } else {
+                        *ops = vec![op.clone()];
+                    }
+                } else {
+                    self.current.stroking_color = Some(vec![op.clone()]);
+                }
+            }
+            b"w" => {
+                self.current.line_width = Some(op.clone());
+            }
+            b"J" => {
+                self.current.line_cap = Some(op.clone());
+            }
+            b"j" => {
+                self.current.line_join = Some(op.clone());
+            }
+            b"M" => {
+                self.current.miter_limit = Some(op.clone());
+            }
+            b"d" => {
+                self.current.dash_pattern = Some(op.clone());
+            }
+            b"ri" => {
+                self.current.rendering_intent = Some(op.clone());
+            }
+            b"i" => {
+                self.current.flatness = Some(op.clone());
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+}
+
+fn compute_inherited_drawing_ops(source: &DrawingState, dest: &DrawingState, extracted_state_ops: &[Op]) -> Vec<Op> {
+    let mut ops = Vec::new();
+
+    // 1. Non-stroking color
+    let has_non_stroking = extracted_state_ops.iter().any(|o| matches!(o.op.as_slice(), b"g" | b"rg" | b"k" | b"sc" | b"scn"));
+    if !has_non_stroking {
+        if let Some(ref color_ops) = source.non_stroking_color {
+            ops.extend(color_ops.iter().cloned());
+        } else if dest.non_stroking_color.is_some() {
+            ops.push(Op::new("g", vec![pdfcraft_content::num(0.0)]));
+        }
+    }
+
+    // 2. Stroking color
+    let has_stroking = extracted_state_ops.iter().any(|o| matches!(o.op.as_slice(), b"G" | b"RG" | b"K" | b"SC" | b"SCN"));
+    if !has_stroking {
+        if let Some(ref color_ops) = source.stroking_color {
+            ops.extend(color_ops.iter().cloned());
+        } else if dest.stroking_color.is_some() {
+            ops.push(Op::new("G", vec![pdfcraft_content::num(0.0)]));
+        }
+    }
+
+    // 3. Line width
+    if !extracted_state_ops.iter().any(|o| o.is("w")) {
+        if let Some(ref op) = source.line_width {
+            ops.push(op.clone());
+        } else if dest.line_width.is_some() {
+            ops.push(Op::new("w", vec![pdfcraft_content::num(1.0)]));
+        }
+    }
+
+    // 4. Line cap
+    if !extracted_state_ops.iter().any(|o| o.is("J")) {
+        if let Some(ref op) = source.line_cap {
+            ops.push(op.clone());
+        } else if dest.line_cap.is_some() {
+            ops.push(Op::new("J", vec![pdfcraft_content::num(0.0)]));
+        }
+    }
+
+    // 5. Line join
+    if !extracted_state_ops.iter().any(|o| o.is("j")) {
+        if let Some(ref op) = source.line_join {
+            ops.push(op.clone());
+        } else if dest.line_join.is_some() {
+            ops.push(Op::new("j", vec![pdfcraft_content::num(0.0)]));
+        }
+    }
+
+    // 6. Miter limit
+    if !extracted_state_ops.iter().any(|o| o.is("M")) {
+        if let Some(ref op) = source.miter_limit {
+            ops.push(op.clone());
+        } else if dest.miter_limit.is_some() {
+            ops.push(Op::new("M", vec![pdfcraft_content::num(10.0)]));
+        }
+    }
+
+    // 7. Dash pattern
+    if !extracted_state_ops.iter().any(|o| o.is("d")) {
+        if let Some(ref op) = source.dash_pattern {
+            ops.push(op.clone());
+        } else if dest.dash_pattern.is_some() {
+            ops.push(Op::new("d", vec![Object::Array(vec![]), pdfcraft_content::num(0.0)]));
+        }
+    }
+
+    // 8. Rendering intent
+    if !extracted_state_ops.iter().any(|o| o.is("ri"))
+        && let Some(ref op) = source.rendering_intent
+    {
+        ops.push(op.clone());
+    }
+
+    // 9. Flatness
+    if !extracted_state_ops.iter().any(|o| o.is("i"))
+        && let Some(ref op) = source.flatness
+    {
+        ops.push(op.clone());
+    }
+
+    ops
+}
+
 fn clip_path_to_ops(clip: &ClipPath) -> Vec<Op> {
     let mut ops = Vec::new();
     let mut current_pt = Point::ZERO;
@@ -1138,6 +1319,7 @@ fn scan_leaking_ops(ops: &[Op], rem_start: usize, rem_end: usize) -> (Vec<Op>, b
 fn build_relocated_unit_ops(
     marked_open: Option<&Op>,
     source_gs_ops: &[(Op, Matrix)],
+    inherited_drawing_ops: &[Op],
     extracted: ExtractedScopeState,
     dest_ctm: Matrix,
     draw_matrix: [f64; 6],
@@ -1164,6 +1346,8 @@ fn build_relocated_unit_ops(
         }
         unit_ops.push(gs_op.clone());
     }
+
+    unit_ops.extend(inherited_drawing_ops.iter().cloned());
 
     let non_gs_ops = extracted.state_ops.into_iter().filter(|o| !o.is("gs"));
     unit_ops.extend(non_gs_ops);
@@ -1260,9 +1444,12 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
 
     let mut state = ImageState::new(Matrix::IDENTITY, p.crop(doc), Vec::new());
     let mut tracker = ExtendedGStateTracker::default();
+    let mut drawing_tracker = DrawingStateTracker::default();
     let mut source_effective_state = EffectiveGState::default();
     let mut source_gs_ops = Vec::new();
+    let mut source_drawing_state = DrawingState::default();
     let mut dest_effective_state = EffectiveGState::default();
+    let mut dest_drawing_state = DrawingState::default();
     let mut dest_ctm = Matrix::IDENTITY;
     let mut scope_start_ctm = Matrix::IDENTITY;
     let mut outer_clips = Vec::new();
@@ -1282,9 +1469,11 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         if i == target {
             source_effective_state = tracker.current_state.clone();
             source_gs_ops = tracker.active_gs_ops.iter().map(|(_, op, ctm)| (op.clone(), *ctm)).collect();
+            source_drawing_state = drawing_tracker.current.clone();
         }
         if i == scan_target {
             dest_effective_state = tracker.current_state.clone();
+            dest_drawing_state = drawing_tracker.current.clone();
             dest_ctm = state.placement.matrix;
             dest_clips = state.placement.clips.clone();
         }
@@ -1293,12 +1482,14 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         }
         state.apply(op)?;
         tracker.step(op, &ext_gstates, doc, state.placement.matrix)?;
+        drawing_tracker.step(op)?;
         if i == rem_end.saturating_sub(1) {
             ctm_after_removal = state.placement.matrix;
         }
     }
     if scan_target >= ops.len() {
         dest_effective_state = tracker.current_state.clone();
+        dest_drawing_state = drawing_tracker.current.clone();
         dest_ctm = state.placement.matrix;
         dest_clips = state.placement.clips.clone();
     }
@@ -1370,7 +1561,9 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
 
     let marked_open = if marked_unit && !has_other_paint { ops.get(target_unit.start) } else { None };
     let has_closing_emc = marked_open.is_some() && target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC"));
-    let unit_ops = build_relocated_unit_ops(marked_open, &source_gs_ops, extracted, dest_ctm, img.draw_matrix, has_closing_emc)?;
+    let inherited_drawing_ops = compute_inherited_drawing_ops(&source_drawing_state, &dest_drawing_state, &extracted.state_ops);
+    let unit_ops =
+        build_relocated_unit_ops(marked_open, &source_gs_ops, &inherited_drawing_ops, extracted, dest_ctm, img.draw_matrix, has_closing_emc)?;
 
     let mut serialized = Vec::new();
     serialized.push(b'\n');

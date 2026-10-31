@@ -1968,7 +1968,10 @@ milestone = "M7"
 status = "partial"
 commands = ["edit.edit_text"]
 tools = []
-evidence = ["crates/ui-egui/src/tools/edit_text_ui.rs::superscript_and_subscript_conversion"]
+evidence = [
+  "crates/ui-egui/src/tools/edit_text_ui.rs::superscript_and_subscript_conversion",
+  "crates/ui-egui/tests/it/editing.rs::the_format_panel_toggles_superscript_and_subscript_on_selection",
+]
 notes = "Toggled in the Format text panel for the selection. Uses Unicode superscript and subscript forms (2 ↔ ²) rather than text rise (Ts) and font scaling, so the font must provide the corresponding glyphs and extracted text contains the Unicode characters."
 
 [[feature]]

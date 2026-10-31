@@ -3540,6 +3540,57 @@ fn image_page_with(content: &str) -> Document {
     Document::open(Arc::new(out)).unwrap()
 }
 
+fn stencil_page_with(content: &str) -> Document {
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Im0 6 0 R >> >> >>"
+            .into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        "<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ImageMask true /Filter /ASCIIHexDecode /Length 5 >>\nstream\n0000>\nendstream".into(),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
+fn form_page_with(content: &str) -> Document {
+    let form_content = "0 0 100 100 re f";
+    let objs: Vec<String> = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".into(),
+        "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".into(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> /XObject << /Fm0 6 0 R >> >> >>"
+            .into(),
+        format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>".into(),
+        format!("<< /Type /XObject /Subtype /Form /BBox [0 0 100 100] /Length {} >>\nstream\n{form_content}\nendstream", form_content.len()),
+    ];
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offs = Vec::new();
+    for (i, o) in objs.iter().enumerate() {
+        offs.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n{o}\nendobj\n", i + 1).as_bytes());
+    }
+    let x = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offs {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{x}\n%%EOF\n", objs.len() + 1).as_bytes());
+    Document::open(Arc::new(out)).unwrap()
+}
+
 /// A path segment operator before any `m` (or `re`) has no subpath to extend: the image scan used
 /// to call `BezPath`'s `line_to`/`curve_to`/`close_path` on an empty path, which panics by contract,
 /// taking `object_list`, `page_images` and the Office export's image walk down with it (#3581).
@@ -8877,6 +8928,78 @@ fn arrange_preserves_leaked_color_and_text_state() {
         renderer.render(pdfcraft_render::RenderRequest { page: 0, kind: pdfcraft_render::RequestKind::Pixels, scale: 1.0, ..Default::default() });
     let idx = (((page.height - 5) * page.width + 5) * 4) as usize;
     assert_eq!(page.rgba[idx..idx + 3], [255, 0, 0], "point (5, 5 from bottom) inside 10x10 rect fills red");
+}
+
+#[test]
+fn arrange_preserves_inherited_drawing_state_for_stencil_and_form() {
+    // 1. Stencil mask test:
+    // Page has: q 1 0 0 rg q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET
+    // Non-overlapping stencil and text.
+    let content = "q 1 0 0 rg q 100 0 0 100 50 50 cm /Im0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET";
+    let mut doc = stencil_page_with(content);
+
+    // Render before move:
+    let pdf_before = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer_before = pdfcraft_render::PageRenderer::new(Arc::new(pdf_before), pdfcraft_render::RenderConfig::default());
+    let page_before = renderer_before.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let stencil_pixel_idx = (((page_before.height - 75) * page_before.width + 75) * 4) as usize;
+    assert_eq!(page_before.rgba[stencil_pixel_idx..stencil_pixel_idx + 3], [255, 0, 0], "stencil starts red");
+
+    // Bring to front
+    images::arrange_image(&mut doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+
+    // Save and reopen
+    let doc = reopen(&doc);
+
+    // Verify content stream has inherited color
+    let bytes = page_content_bytes(&doc, 0);
+    let s = String::from_utf8_lossy(&bytes);
+    assert!(s.contains("1 0 0 rg"), "inherited 1 0 0 rg must be replayed in moved unit: {s}");
+
+    // Render after reopen and verify stencil remains red:
+    let pdf_after = write_incremental(&doc, &SaveOptions::default()).unwrap();
+    let mut renderer_after = pdfcraft_render::PageRenderer::new(Arc::new(pdf_after), pdfcraft_render::RenderConfig::default());
+    let page_after = renderer_after.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert_eq!(page_after.rgba[stencil_pixel_idx..stencil_pixel_idx + 3], [255, 0, 0], "stencil stays red after BringToFront and reopen");
+
+    // 2. Form XObject test:
+    // Page has: q 0 1 0 rg q 1 0 0 1 50 50 cm /Fm0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET
+    let form_content = "q 0 1 0 rg q 1 0 0 1 50 50 cm /Fm0 Do Q Q BT /F1 12 Tf 20 700 Td (Text) Tj ET";
+    let mut form_doc = form_page_with(form_content);
+
+    let form_pdf_before = write_incremental(&form_doc, &SaveOptions::default()).unwrap();
+    let mut form_renderer_before = pdfcraft_render::PageRenderer::new(Arc::new(form_pdf_before), pdfcraft_render::RenderConfig::default());
+    let form_page_before = form_renderer_before.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    let form_pixel_idx = (((form_page_before.height - 75) * form_page_before.width + 75) * 4) as usize;
+    assert_eq!(form_page_before.rgba[form_pixel_idx..form_pixel_idx + 3], [0, 255, 0], "form starts green");
+
+    images::arrange_image(&mut form_doc, 0, 0, images::ArrangeOrder::BringToFront).unwrap();
+    let form_doc = reopen(&form_doc);
+
+    let form_pdf_after = write_incremental(&form_doc, &SaveOptions::default()).unwrap();
+    let mut form_renderer_after = pdfcraft_render::PageRenderer::new(Arc::new(form_pdf_after), pdfcraft_render::RenderConfig::default());
+    let form_page_after = form_renderer_after.render(pdfcraft_render::RenderRequest {
+        page: 0,
+        kind: pdfcraft_render::RequestKind::Pixels,
+        scale: 1.0,
+        ..Default::default()
+    });
+    assert_eq!(form_page_after.rgba[form_pixel_idx..form_pixel_idx + 3], [0, 255, 0], "form stays green after BringToFront and reopen");
 }
 /// Existing-row alignment is explicitly refused without mutating the paragraph.
 #[test]

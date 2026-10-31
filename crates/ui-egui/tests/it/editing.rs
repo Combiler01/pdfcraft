@@ -4307,6 +4307,83 @@ fn dragging_the_rotate_knob_turns_a_page_image() {
 }
 
 #[test]
+fn dragging_rotate_knob_on_already_rotated_image_applies_delta_only() {
+    let mut png = Vec::new();
+    image::RgbImage::from_pixel(80, 40, image::Rgb([200, 40, 40])).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("picture.png", None, png.clone()).expect("opens");
+        app
+    });
+    h.run_steps(4);
+    let id = h.state().views[0].id;
+
+    // Center picture
+    let full = h.state().session.get(id).unwrap().page_images(0)[0].rect;
+    let (qw, qh) = ((full[2] - full[0]) / 4.0, (full[3] - full[1]) / 4.0);
+    let (mx, my) = ((full[0] + full[2]) / 2.0, (full[1] + full[3]) / 2.0);
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 0,
+        change: pdfcraft_engine::ImageEdit::Move([mx - qw, my - qh, mx + qw, my + qh]),
+    });
+    h.run_steps(4);
+
+    // Rotate the image by 45° clockwise initially
+    h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage { page: 0, index: 0, change: pdfcraft_engine::ImageEdit::RotateBy(45.0) });
+    h.run_steps(4);
+
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let c = r.center();
+
+    // Select the picture
+    h.hover_at(c);
+    h.run_steps(1);
+    h.drag_at(c);
+    h.run_steps(1);
+    h.drop_at(c);
+    h.run_steps(2);
+    assert!(h.state().views[0].image_selection.is_some(), "selected");
+
+    let initial_img = &h.state().session.get(id).unwrap().page_images(0)[0];
+    let initial_matrix = initial_img.matrix;
+    let xf = h.state().views[0].page_xform(0).expect("page 0 xform");
+    let doc_info = &h.state().session.get(id).unwrap().info;
+    let obb = pdfcraft_ui_egui::canvas::ImageObb::from_matrix(initial_matrix, &xf, doc_info, 0);
+    let knob = obb.s_rot;
+    let center = obb.screen_center;
+    let radius = (knob - center).length();
+
+    // Hover at the rotated knob position:
+    h.hover_at(knob);
+    h.run_steps(1);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grab, "knob offers Grab cursor on 45° rotated image");
+
+    // Rotate clockwise by a small delta of 15° (from 45° to 60°):
+    let to_angle = (45.0 + 15.0_f32).to_radians();
+    let to = center + egui::vec2(radius * to_angle.sin(), -radius * to_angle.cos());
+
+    h.drag_at(knob);
+    h.run_steps(1);
+    for k in 1..=4 {
+        h.hover_at(knob + (to - knob) * (k as f32 / 4.0));
+        h.run_steps(1);
+    }
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+    h.drop_at(to);
+    h.run_steps(4);
+
+    let doc = h.state().session.get(id).unwrap();
+    let final_img = &doc.page_images(0)[0];
+    let angle_deg = (-final_img.matrix[1]).atan2(final_img.matrix[0]).to_degrees();
+    let angle_deg = (angle_deg % 360.0 + 360.0) % 360.0;
+    assert!((angle_deg - 60.0).abs() < 2.0, "expected ~60° total rotation, got {angle_deg}°");
+}
+
+#[test]
 fn editing_existing_form_artwork_on_the_page() {
     use pdfcraft_cos::{Dict, Document, Object, SaveOptions, Stream, write_incremental};
     let mut doc = Document::open(std::sync::Arc::new(fixture(1))).unwrap();
@@ -4684,6 +4761,70 @@ fn the_format_panel_restyles_the_paragraph_being_edited() {
     let doc = s.session.get(s.views[0].id).unwrap();
     assert_eq!(doc.text_blocks(0)[0].base_font, "Helvetica-Bold");
     assert!(s.views[0].line_editor.as_ref().is_some_and(|e| e.extras.underline));
+}
+
+#[test]
+fn the_format_panel_toggles_superscript_and_subscript_on_selection() {
+    let mut h = harness(1, |_| {});
+    assert!(h.state_mut().execute("edit.edit_text"));
+    h.run_steps(2);
+    let r = h.state().views[0].page_screen_rect(0).expect("on screen");
+    let at = egui::pos2(r.left() + 40.0 / 200.0 * r.width(), r.top() + (300.0 - 158.0) / 300.0 * r.height());
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(3);
+    assert!(h.state().views[0].line_editor.is_some());
+
+    // In line editor, select "1" in "Page 1":
+    let ed = h.state_mut().views[0].line_editor.as_mut().unwrap();
+    ed.selection = Some(5..6);
+    ed.focus = true;
+    h.run_steps(1);
+
+    // Click Superscript: "1" becomes "¹"
+    h.get_by_label("FORMAT TEXT");
+    let btn = h.get_by_label("Superscript");
+    btn.click();
+    h.run_steps(4);
+
+    let s = h.state();
+    let doc = s.session.get(s.views[0].id).unwrap();
+    assert_eq!(doc.can_undo(), Some("Edit text"));
+    assert_eq!(doc.text_blocks(0)[0].text, "Page ¹");
+
+    // Click Superscript again: "¹" toggles back to "1"
+    h.get_by_label("Superscript").click();
+    h.run_steps(4);
+    let s2 = h.state();
+    let doc2 = s2.session.get(s2.views[0].id).unwrap();
+    assert_eq!(doc2.text_blocks(0)[0].text, "Page 1");
+
+    // Subscript toggle in added text:
+    h.state_mut().views[0].line_editor = None;
+    h.state_mut().quick_tool = pdfcraft_ui_egui::QuickTool::AddText;
+    let draft = pdfcraft_ui_egui::TextDraft {
+        page: 0,
+        index: None,
+        rect: [20.0, 20.0, 120.0, 40.0],
+        text: "H2O".into(),
+        style: Default::default(),
+        focus: false,
+        selection: Some(1..2),
+        typing_from: None,
+    };
+    h.state_mut().views[0].content.draft = Some(draft);
+    h.run_steps(2);
+
+    h.get_by_label("Subscript").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("H₂O"));
+
+    h.get_by_label("Subscript").click();
+    h.run_steps(2);
+    assert_eq!(h.state().views[0].content.draft.as_ref().map(|d| d.text.as_str()), Some("H2O"));
 }
 
 /// Horizontal scale and Character spacing take any value in their ranges, not only the listed

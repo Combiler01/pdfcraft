@@ -9495,37 +9495,130 @@ fn transform_on_added_image_folds_quarter_turns_and_rejects_non_axis_aligned() {
 
 #[test]
 fn test_added_image_transform_reflections_with_rotation() {
-    let make_png = |rgb: [u8; 3]| {
+    let make_asymmetric_png = || {
+        let mut px = Vec::with_capacity(20 * 20 * 3);
+        for y in 0..20 {
+            for x in 0..20 {
+                let color = match (x < 10, y < 10) {
+                    (true, true) => [255, 0, 0],     // TL: Red
+                    (false, true) => [0, 255, 0],    // TR: Green
+                    (true, false) => [0, 0, 255],    // BL: Blue
+                    (false, false) => [255, 255, 0], // BR: Yellow
+                };
+                px.extend_from_slice(&color);
+            }
+        }
         let mut png = Vec::new();
         {
-            let mut enc = png::Encoder::new(&mut png, 2, 2);
+            let mut enc = png::Encoder::new(&mut png, 20, 20);
             enc.set_color(png::ColorType::Rgb);
-            let data = [rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2], rgb[0], rgb[1], rgb[2]];
-            enc.write_header().unwrap().write_image_data(&data).unwrap();
+            enc.write_header().unwrap().write_image_data(&px).unwrap();
         }
         Arc::new(png)
     };
-    let png = make_png([255, 0, 0]);
 
-    let (mut s, id) = session_with(1);
-    s.apply(id, Edit::AddImage { page: 0, rect: Some([100.0, 100.0, 200.0, 150.0]), name: "img.png".into(), bytes: png }).unwrap();
+    let colour_at = |s: &Session, id: DocId, x: u32, y_from_top: u32| -> [u8; 3] {
+        let doc = s.get(id).unwrap();
+        let mut r = pdfcraft_render::PageRenderer::new(doc.bytes.clone(), Default::default());
+        let out = r.render(pdfcraft_render::RenderRequest { page: 0, scale: 1.0, ..Default::default() });
+        let i = ((y_from_top * out.width + x) * 4) as usize;
+        [out.rgba[i], out.rgba[i + 1], out.rgba[i + 2]]
+    };
 
-    // Rotate by 90° CW (quarter turns CCW: rotation = 3):
-    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
-    let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
-    let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
-    assert_eq!(ai.rotation, 3);
-    assert!(!ai.flip_h);
-    assert!(!ai.flip_v);
+    let is_red = |c: [u8; 3]| c[0] > 200 && c[1] < 50 && c[2] < 50;
+    let is_green = |c: [u8; 3]| c[0] < 50 && c[1] > 200 && c[2] < 50;
+    let is_blue = |c: [u8; 3]| c[0] < 50 && c[1] < 50 && c[2] > 200;
+    let is_yellow = |c: [u8; 3]| c[0] > 200 && c[1] > 200 && c[2] < 50;
 
-    // Apply a horizontal flip in display space (parallel transform with m0 = -1):
-    // For rotation = 3 (odd rotation), display horizontal flip corresponds to local vertical flip (flip_v):
-    s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Transform([-1.0, 0.0, 0.0, 1.0, 300.0, 0.0]) }).unwrap();
-    let cos2 = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
-    let AddedContent::Image(ai2) = &pdfcraft_edit::list_added(&cos2)[0].content else { panic!() };
-    assert_eq!(ai2.rotation, 3);
-    assert!(!ai2.flip_h, "flip_h should NOT be toggled for horizontal flip when rotation is 90°");
-    assert!(ai2.flip_v, "flip_v should be toggled for horizontal flip when rotation is 90°");
+    let check_quadrants =
+        |s: &Session, id: DocId, tl: fn([u8; 3]) -> bool, tr: fn([u8; 3]) -> bool, bl: fn([u8; 3]) -> bool, br: fn([u8; 3]) -> bool, label: &str| {
+            let c_tl = colour_at(s, id, 75, 125);
+            let c_tr = colour_at(s, id, 125, 125);
+            let c_bl = colour_at(s, id, 75, 175);
+            let c_br = colour_at(s, id, 125, 175);
+            assert!(tl(c_tl), "{label} TL mismatch: got {:?}", c_tl);
+            assert!(tr(c_tr), "{label} TR mismatch: got {:?}", c_tr);
+            assert!(bl(c_bl), "{label} BL mismatch: got {:?}", c_bl);
+            assert!(br(c_br), "{label} BR mismatch: got {:?}", c_br);
+        };
+
+    // --- CASE 1: 90° clockwise rotation (ImageEdit::Rotate(1), ai.rotation = 3) ---
+    // Unrotated: TL=Red, TR=Green, BL=Blue, BR=Yellow.
+    // After 90° CW: TL=Blue, TR=Red, BL=Yellow, BR=Green.
+    {
+        // 1a: Flip Horizontal after 90° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        check_quadrants(&s, id, is_red, is_green, is_blue, is_yellow, "initial");
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+        check_quadrants(&s, id, is_blue, is_red, is_yellow, is_green, "90° CW");
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: true } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 3);
+        assert!(!ai.flip_h, "at 90° rotation, horizontal flip toggles flip_v, not flip_h");
+        assert!(ai.flip_v, "at 90° rotation, horizontal flip toggles flip_v");
+        // Flipping horizontally on screen swaps left & right columns: TL=Red, TR=Blue, BL=Green, BR=Yellow
+        check_quadrants(&s, id, is_red, is_blue, is_green, is_yellow, "90° CW + flip horizontal");
+    }
+
+    {
+        // 1b: Flip Vertical after 90° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(1) }).unwrap();
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: false } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 3);
+        assert!(ai.flip_h, "at 90° rotation, vertical flip toggles flip_h");
+        assert!(!ai.flip_v, "at 90° rotation, vertical flip toggles flip_h, not flip_v");
+        // Flipping vertically on screen swaps top & bottom rows: TL=Yellow, TR=Green, BL=Blue, BR=Red
+        check_quadrants(&s, id, is_yellow, is_green, is_blue, is_red, "90° CW + flip vertical");
+    }
+
+    // --- CASE 2: 270° clockwise rotation (ImageEdit::Rotate(3), ai.rotation = 1) ---
+    // Unrotated: TL=Red, TR=Green, BL=Blue, BR=Yellow.
+    // After 270° CW: TL=Green, TR=Yellow, BL=Red, BR=Blue.
+    {
+        // 2a: Flip Horizontal after 270° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(3) }).unwrap();
+        check_quadrants(&s, id, is_green, is_yellow, is_red, is_blue, "270° CW");
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: true } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 1);
+        assert!(!ai.flip_h, "at 270° rotation, horizontal flip toggles flip_v, not flip_h");
+        assert!(ai.flip_v, "at 270° rotation, horizontal flip toggles flip_v");
+        // Flipping horizontally on screen swaps left & right columns: TL=Yellow, TR=Green, BL=Blue, BR=Red
+        check_quadrants(&s, id, is_yellow, is_green, is_blue, is_red, "270° CW + flip horizontal");
+    }
+
+    {
+        // 2b: Flip Vertical after 270° rotation
+        let (mut s, id) = session_with(1);
+        s.apply(id, Edit::AddImage { page: 0, rect: Some([50.0, 100.0, 150.0, 200.0]), name: "img.png".into(), bytes: make_asymmetric_png() })
+            .unwrap();
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Rotate(3) }).unwrap();
+
+        s.apply(id, Edit::EditPageImage { page: 0, index: 0, change: ImageEdit::Flip { horizontal: false } }).unwrap();
+        let cos = pdfcraft_cos::Document::open(s.get(id).unwrap().bytes.clone()).unwrap();
+        let AddedContent::Image(ai) = &pdfcraft_edit::list_added(&cos)[0].content else { panic!() };
+        assert_eq!(ai.rotation, 1);
+        assert!(ai.flip_h, "at 270° rotation, vertical flip toggles flip_h");
+        assert!(!ai.flip_v, "at 270° rotation, vertical flip toggles flip_h, not flip_v");
+        // Flipping vertically on screen swaps top & bottom rows: TL=Red, TR=Blue, BL=Green, BR=Yellow
+        check_quadrants(&s, id, is_red, is_blue, is_green, is_yellow, "270° CW + flip vertical");
+    }
 }
 
 /// ISO 32000-2 Table 192, 12.7.5.2.3 and Table 228 (Comb): a check box, a push button, a comb
