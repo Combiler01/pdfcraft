@@ -1,6 +1,20 @@
-use super::*;
+use super::{ACCENT, Color32, CornerRadius, DocInfo, DocView, Edit, MAX_OUTLINES, PagePointer, PageXform, Pos2, Rect, Stroke, pos2, user_box};
 use crate::canvas::{ImageObb, PainterExt};
 use crate::image_engine::{CROP_ACCENT, HandleId, apply_crop, apply_resize, apply_resize_proportional, draw_handle, draw_rule_of_thirds};
+use crate::page_cursor::Layer;
+use crate::page_router::{Hit, Owner, PicturePart};
+
+/// What the pointer and the page are, for the image tools on one page.
+#[derive(Clone, Copy)]
+pub(crate) struct ImageCx<'a> {
+    pub ui: &'a egui::Ui,
+    pub resp: &'a egui::Response,
+    pub xf: &'a PageXform,
+    pub ptr: &'a PagePointer,
+    pub page: usize,
+    pub info: &'a DocInfo,
+    pub allow_interaction: bool,
+}
 
 /// The 8 resize handles on an image (4 corners + 4 edge centers).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,19 +163,14 @@ fn crop_handles(k: Rect) -> [Pos2; 8] {
 
 /// Crop mode for the selected image `i` whose visible frame is `b` (screen). Returns `true`
 /// (the pointer and keys are the crop's while it lasts).
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
 fn crop_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
+    cx: &ImageCx<'_>,
     view: &mut DocView,
     i: usize,
     image: &pdfcraft_engine::PageImage,
-    allow_interaction: bool,
 ) -> bool {
+    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
     let painter = ui.painter();
     let Some(sel) = view.image_selection.as_mut() else { return false };
     if let Some(rect) = sel.crop_rect
@@ -365,7 +374,7 @@ fn crop_input(
         } else {
             egui::CursorIcon::Default
         };
-        ui.ctx().set_cursor_icon(icon);
+        view.cursor.claim(Layer::Editor, icon);
     }
 
     let keys = |key: egui::Key| allow_interaction && ui.input(|inp| inp.key_pressed(key)) && !ui.ctx().egui_wants_keyboard_input();
@@ -433,6 +442,7 @@ fn stretched_picture(painter: &egui::Painter, xf: &PageXform, tex: egui::Texture
 
 /// Once a selected corner or the rotate knob is grabbed, text under it cannot take over the gesture. The same
 /// applies after the pointer leaves the image/page while dragging.
+#[allow(dead_code)]
 pub(crate) fn image_owns_pointer(_ui: &egui::Ui, xf: &PageXform, ptr: &PagePointer, page: usize, info: &DocInfo, view: &DocView) -> bool {
     let Some(selection) = view.image_selection.as_ref().filter(|s| s.page == page) else { return false };
     if selection.drag.is_some() || selection.crop.is_some() || selection.crop_mode {
@@ -444,6 +454,47 @@ pub(crate) fn image_owns_pointer(_ui: &egui::Ui, xf: &PageXform, ptr: &PagePoint
     let Some(p) = p else { return false };
 
     obb.handles().iter().any(|(_, h)| h.distance(p) < 8.0) || obb.s_rot.distance(p) < 8.0
+}
+
+/// The selected picture's grips under `p`: its corners and its rotate knob. They are asked after
+/// the paragraphs, so text on top of a picture cannot take them; `clip` is the pages' visible
+/// area, which the knob stays inside.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn handle_hit(
+    clip: Rect,
+    xf: &PageXform,
+    page: usize,
+    info: &DocInfo,
+    images: &[pdfcraft_engine::PageImage],
+    view: &DocView,
+    p: Pos2,
+) -> Option<Hit> {
+    let s = view.image_selection.as_ref().filter(|s| s.page == page && s.crop.is_none())?;
+    let b = images.get(s.index)?.visible_rect.map(|r| xf.user_rect(info, page, r.map(|v| v as f32)))?;
+    let picture = |part| Owner::Picture { index: s.index, part };
+    if rotate_knob(b, clip).0.distance(p) < 8.0 {
+        return Some(Hit::new(picture(PicturePart::Knob), Layer::Handle, egui::CursorIcon::Grab));
+    }
+    let corner = [b.left_top(), b.right_top(), b.left_bottom(), b.right_bottom()].iter().position(|c| c.distance(p) < 8.0)?;
+    let icon = if matches!(corner, 0 | 3) { egui::CursorIcon::ResizeNwSe } else { egui::CursorIcon::ResizeNeSw };
+    Some(Hit::new(picture(PicturePart::Corner(corner)), Layer::Handle, icon))
+}
+
+/// The picture under `p` (its shape, not only its box): a click selects it, a drag moves the
+/// selected one. On the text layer, asked before the paragraphs: editable text on top of a
+/// picture takes the press.
+pub(crate) fn body_hit(xf: &PageXform, page: usize, info: &DocInfo, images: &[pdfcraft_engine::PageImage], view: &DocView, p: Pos2) -> Option<Hit> {
+    if !xf.rect.contains(p) {
+        return None;
+    }
+    let (x, y) = xf.screen_to_view(p);
+    let user = info.pages.get(page)?.view_to_user(x, y).map(f64::from);
+    let index = images
+        .iter()
+        .rposition(|im| im.visible_rect.is_some_and(|r| xf.user_rect(info, page, r.map(|v| v as f32)).contains(p)) && im.contains(user))?;
+    let selected = view.image_selection.as_ref().is_some_and(|s| s.page == page && s.index == index);
+    let icon = if selected { egui::CursorIcon::Move } else { egui::CursorIcon::PointingHand };
+    Some(Hit::new(Owner::Picture { index, part: PicturePart::Body }, Layer::Text, icon))
 }
 
 /// What a right-click on a selected image asks for.
@@ -492,19 +543,14 @@ pub fn image_menu_id() -> egui::Id {
 }
 
 /// Images on a page: select, move, resize, right-click. Returns `true` when the pointer was used.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::cognitive_complexity)]
 pub(crate) fn image_input(
-    ui: &egui::Ui,
-    resp: &egui::Response,
-    xf: &PageXform,
-    ptr: &PagePointer,
-    page: usize,
-    info: &DocInfo,
+    cx: &ImageCx<'_>,
     images: &[pdfcraft_engine::PageImage],
     view: &mut DocView,
     action: &mut Option<ImageAction>,
-    allow_interaction: bool,
 ) -> bool {
+    let ImageCx { ui, resp, xf, ptr, page, info, allow_interaction } = *cx;
     let _ = &action;
     let boxes: Vec<Rect> = images.iter().map(|im| crate::canvas::image_screen_rect(im, xf, info, page)).collect();
     let painter = ui.painter();
@@ -602,7 +648,7 @@ pub(crate) fn image_input(
                 let rect = images.get(i).and_then(|im| im.visible_rect).unwrap_or(images.get(i).map_or([0.0; 4], |im| im.rect));
                 s.crop = Some(CropMode::new(rect));
             }
-            return crop_input(ui, resp, xf, ptr, page, info, view, i, image, allow_interaction);
+            return crop_input(cx, view, i, image);
         }
         let (knob, stem) = rotate_knob(b, ui.clip_rect());
         if view.image_selection.as_ref().is_some_and(|s| s.drag.is_none()) {
@@ -636,7 +682,7 @@ pub(crate) fn image_input(
 
         if allow_interaction && let Some(p) = hover_pos {
             if obb.s_rot.distance(p) < 8.0 || knob.distance(p) < 8.0 {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                view.cursor.claim(Layer::Handle, egui::CursorIcon::Grab);
             } else if let Some((h, _)) = obb.handles().iter().find(|(_, pos)| pos.distance(p) < 8.0) {
                 let icon = match h {
                     ImageHandle::TopLeft | ImageHandle::BottomRight => {
@@ -670,7 +716,7 @@ pub(crate) fn image_input(
                         }
                     }
                 };
-                ui.ctx().set_cursor_icon(icon);
+                view.cursor.claim(Layer::Handle, icon);
             }
         }
 
@@ -722,7 +768,7 @@ pub(crate) fn image_input(
             let label = Rect::from_center_size(turn(knob) - egui::vec2(0.0, 14.0), galley.size() + egui::vec2(8.0, 4.0));
             painter.rect(label, CornerRadius::same(3), Color32::WHITE, Stroke::new(1.0, ACCENT), egui::StrokeKind::Middle);
             painter.galley(label.center() - galley.size() / 2.0, galley, ACCENT);
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+            view.cursor.claim(Layer::Drag, egui::CursorIcon::Grabbing);
             if resp.drag_stopped() || !ptr.primary_down {
                 if let Some(s) = view.image_selection.as_mut() {
                     s.drag = None;
@@ -808,7 +854,7 @@ pub(crate) fn image_input(
                     DragTarget::Move => egui::CursorIcon::Grabbing,
                     _ => egui::CursorIcon::Move,
                 };
-                ui.ctx().set_cursor_icon(icon);
+                view.cursor.claim(Layer::Drag, icon);
                 return true;
             }
             let m_init = Matrix(drag.initial_matrix);
@@ -992,7 +1038,7 @@ pub(crate) fn image_input(
                     }
                 }
             }
-            ui.ctx().set_cursor_icon(cursor_icon);
+            view.cursor.claim(Layer::Drag, cursor_icon);
             return true;
         }
         if allow_interaction
@@ -1033,17 +1079,22 @@ pub(crate) fn image_input(
         }
     }
     let corner = hit_obb.handles().iter().position(|(_, c)| c.distance(p) < 10.0);
-    ui.ctx().set_cursor_icon(match (selected == Some(hit), corner) {
+    let cursor = match (selected == Some(hit), corner) {
         (true, Some(0 | 4)) => egui::CursorIcon::ResizeNwSe,
         (true, Some(2 | 6)) => egui::CursorIcon::ResizeNeSw,
         (true, Some(1 | 5)) => egui::CursorIcon::ResizeVertical,
         (true, Some(3 | 7)) => egui::CursorIcon::ResizeHorizontal,
         (true, None) => egui::CursorIcon::Grab,
         _ => egui::CursorIcon::PointingHand,
-    });
-    if resp.clicked() || resp.secondary_clicked() {
+    };
+    view.cursor.claim(Layer::Text, cursor);
+    let clicked = match view.router.owner(page) {
+        Some(Owner::Picture { index, .. }) if resp.clicked() => Some(index),
+        _ => (resp.clicked() || resp.secondary_clicked()).then_some(hit),
+    };
+    if let Some(index) = clicked {
         view.image_selection =
-            Some(ImageSelection { page, index: hit, drag: None, crop: None, crop_mode: false, crop_rect: None, turning: false, settled: None });
+            Some(ImageSelection { page, index, drag: None, crop: None, crop_mode: false, crop_rect: None, turning: false, settled: None });
     }
     if resp.secondary_clicked() {
         ui.ctx().data_mut(|d| d.insert_persisted(menu_key, true));

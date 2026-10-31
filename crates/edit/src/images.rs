@@ -1001,145 +1001,106 @@ pub(crate) fn extract_scope_state(ops: &[Op], start: usize, target: usize, initi
 }
 
 /// Change the stacking order of image `index` on `page`.
-pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: ArrangeOrder) -> Result<(), EditError> {
-    let images = page_images(doc, page)?;
-    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
-    let p = page_of(doc, page)?;
-    let all = content_streams(doc, &p.dict)?;
-    let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
-    let ops = pieces.parse().ops;
-    let target = img.op;
-    if !ops.get(target).is_some_and(|op| op.is("Do")) {
-        return Err(EditError::Invalid("the image operation could not be located".into()));
-    }
-
-    let is_wrapped = is_entire_page_wrapped(&ops);
-    let (scan_start, scan_end) = if is_wrapped { (1, ops.len().saturating_sub(1)) } else { (0, ops.len()) };
-    let units = content_units(&ops, scan_start, scan_end);
-    let Some(target_idx) = units.iter().position(|u| u.start <= target && target < u.end) else {
-        return Err(EditError::Invalid("the image content unit could not be located".into()));
-    };
-    let Some(target_unit) = units.get(target_idx) else { return Ok(()) };
-    let has_other_paint = ops.iter().enumerate().any(|(i, op)| {
-        i >= target_unit.start
-            && i < target_unit.end
-            && i != target
-            && matches!(
-                op.op.as_slice(),
-                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
-            )
-    });
-    if units.len() <= 1 && !has_other_paint {
-        return Err(EditError::Invalid("the page has only one content unit to arrange".into()));
-    }
-
-    let (dest_unit, insert_after) = match order {
+fn target_destination_unit<'a>(
+    units: &'a [std::ops::Range<usize>],
+    target_idx: usize,
+    target_unit: &'a std::ops::Range<usize>,
+    order: ArrangeOrder,
+    has_other_paint: bool,
+) -> Result<(&'a std::ops::Range<usize>, bool), EditError> {
+    match order {
         ArrangeOrder::BringToFront => {
             if target_idx == units.len().saturating_sub(1) {
                 if has_other_paint {
-                    (target_unit, true)
+                    Ok((target_unit, true))
                 } else {
-                    return Err(EditError::Invalid("the image is already in front".into()));
+                    Err(EditError::Invalid("the image is already in front".into()))
                 }
             } else {
-                let Some(u) = units.last() else {
-                    return Err(EditError::Invalid("the image is already in front".into()));
-                };
-                (u, true)
+                let u = units.last().ok_or_else(|| EditError::Invalid("the image is already in front".into()))?;
+                Ok((u, true))
             }
         }
         ArrangeOrder::SendToBack => {
             if target_idx == 0 {
                 if has_other_paint {
-                    (target_unit, false)
+                    Ok((target_unit, false))
                 } else {
-                    return Err(EditError::Invalid("the image is already at the back".into()));
+                    Err(EditError::Invalid("the image is already at the back".into()))
                 }
             } else {
-                let Some(u) = units.first() else {
-                    return Err(EditError::Invalid("the image is already at the back".into()));
-                };
-                (u, false)
+                let u = units.first().ok_or_else(|| EditError::Invalid("the image is already at the back".into()))?;
+                Ok((u, false))
             }
         }
         ArrangeOrder::BringForward => {
             if target_idx == units.len().saturating_sub(1) {
                 if has_other_paint {
-                    (target_unit, true)
+                    Ok((target_unit, true))
                 } else {
-                    return Err(EditError::Invalid("the image is already in front".into()));
+                    Err(EditError::Invalid("the image is already in front".into()))
                 }
             } else {
-                let Some(u) = units.get(target_idx.saturating_add(1)) else {
-                    return Err(EditError::Invalid("the image is already in front".into()));
-                };
-                (u, true)
+                let u = units.get(target_idx.saturating_add(1)).ok_or_else(|| EditError::Invalid("the image is already in front".into()))?;
+                Ok((u, true))
             }
         }
         ArrangeOrder::SendBackward => {
             if target_idx == 0 {
                 if has_other_paint {
-                    (target_unit, false)
+                    Ok((target_unit, false))
                 } else {
-                    return Err(EditError::Invalid("the image is already at the back".into()));
+                    Err(EditError::Invalid("the image is already at the back".into()))
                 }
             } else {
-                let Some(u) = target_idx.checked_sub(1).and_then(|i| units.get(i)) else {
-                    return Err(EditError::Invalid("the image is already at the back".into()));
-                };
-                (u, false)
+                let u = target_idx.checked_sub(1).and_then(|i| units.get(i)).ok_or_else(|| EditError::Invalid("the image is already at the back".into()))?;
+                Ok((u, false))
             }
         }
-    };
-
-    // A marked-content sequence that holds other content cannot be split without generating
-    // a new structure element and MCID, so we refuse to rearrange it to avoid leaving the image untagged.
-    // If the sequence holds only this image, the whole marked unit is moved intact.
-    let marked_unit = ops.get(target_unit.start).is_some_and(|o| o.is("BDC") || o.is("BMC"));
-    if marked_unit && has_other_paint {
-        return Err(EditError::Invalid("cannot rearrange an image that shares a marked-content sequence with other content".into()));
     }
+}
 
-    let target_op = ops.get(target).ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
-    let (mut target_span, scope_start, rem_start, rem_end) = if has_other_paint {
-        if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+fn determine_arrange_spans(
+    ops: &[Op],
+    target: usize,
+    target_unit: &std::ops::Range<usize>,
+    target_op: &Op,
+    has_other_paint: bool,
+    marked_unit: bool,
+) -> Option<(std::ops::Range<usize>, usize, usize, usize)> {
+    if has_other_paint {
+        if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(ops, target)
             && sub_start >= target_unit.start
             && sub_end < target_unit.end
         {
             let start_op = ops.get(sub_start).unwrap_or(target_op);
             let end_op = ops.get(sub_end).unwrap_or(target_op);
-            (start_op.span.start..end_op.span.end, sub_start, sub_start, sub_end.saturating_add(1))
+            Some((start_op.span.start..end_op.span.end, sub_start, sub_start, sub_end.saturating_add(1)))
         } else {
-            (target_op.span.start..target_op.span.end, target, target, target.saturating_add(1))
+            Some((target_op.span.start..target_op.span.end, target, target, target.saturating_add(1)))
         }
-    } else if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(&ops, target)
+    } else if let Ok(Some((sub_start, sub_end, _))) = image_exclusive_scope(ops, target)
         && sub_start >= target_unit.start
         && sub_end < target_unit.end
         && !marked_unit
     {
         let start_op = ops.get(sub_start).unwrap_or(target_op);
         let end_op = ops.get(sub_end).unwrap_or(target_op);
-        (start_op.span.start..end_op.span.end, sub_start, sub_start, sub_end.saturating_add(1))
+        Some((start_op.span.start..end_op.span.end, sub_start, sub_start, sub_end.saturating_add(1)))
     } else if marked_unit {
         // A marked-content unit holding only this image moves whole, with its BDC…EMC.
         // The whole sequence is removed; the image's state is rebuilt from the ops inside it.
-        let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
-        let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        (first_op.span.start..last_op.span.end, target_unit.start.saturating_add(1).min(target), target_unit.start, target_unit.end)
+        let first_op = ops.get(target_unit.start)?;
+        let last_op = target_unit.end.checked_sub(1).and_then(|i| ops.get(i))?;
+        Some((first_op.span.start..last_op.span.end, target_unit.start.saturating_add(1).min(target), target_unit.start, target_unit.end))
     } else {
-        let Some(first_op) = ops.get(target_unit.start) else { return Ok(()) };
-        let Some(last_op) = target_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        (first_op.span.start..last_op.span.end, target_unit.start, target_unit.start, target_unit.end)
-    };
+        let first_op = ops.get(target_unit.start)?;
+        let last_op = target_unit.end.checked_sub(1).and_then(|i| ops.get(i))?;
+        Some((first_op.span.start..last_op.span.end, target_unit.start, target_unit.start, target_unit.end))
+    }
+}
 
-    let (dest_pos, scan_target) = if insert_after {
-        let Some(op) = dest_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
-        (op.span.end, dest_unit.end)
-    } else {
-        let Some(op) = ops.get(dest_unit.start) else { return Ok(()) };
-        (op.span.start, dest_unit.start)
-    };
-
+fn scan_leaking_ops(ops: &[Op], rem_start: usize, rem_end: usize) -> (Vec<Op>, bool) {
     let mut q_depth = 0usize;
     let mut leaking_ops = Vec::new();
     let mut pending_clip_path: Vec<Op> = Vec::new();
@@ -1184,6 +1145,128 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
             }
         }
     }
+    (leaking_ops, has_leaking_clip)
+}
+
+fn build_relocated_unit_ops(
+    marked_open: Option<&Op>,
+    source_gs_ops: &[(Op, Matrix)],
+    extracted: ExtractedScopeState,
+    dest_ctm: Matrix,
+    draw_matrix: [f64; 6],
+    has_closing_emc: bool,
+) -> Result<Vec<Op>, EditError> {
+    let mut unit_ops = Vec::new();
+    if let Some(open) = marked_open {
+        unit_ops.push(open.clone());
+    }
+    unit_ops.push(Op::new("q", vec![]));
+    let mut current_ctm = dest_ctm;
+
+    for (gs_op, target_ctm) in source_gs_ops {
+        if *target_ctm != current_ctm {
+            let current_inv = current_ctm.invert().ok_or_else(|| EditError::Invalid("unsupported graphics state: non-invertible CTM".into()))?;
+            let delta = target_ctm.then(&current_inv);
+            if !delta.0.iter().all(|v| v.is_finite()) {
+                return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
+            }
+            if delta != Matrix::IDENTITY {
+                unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
+                current_ctm = *target_ctm;
+            }
+        }
+        unit_ops.push(gs_op.clone());
+    }
+
+    let non_gs_ops = extracted.state_ops.into_iter().filter(|o| !o.is("gs"));
+    unit_ops.extend(non_gs_ops);
+
+    if !extracted.clip_ops.is_empty() {
+        if current_ctm != Matrix::IDENTITY {
+            let current_inv = current_ctm.invert().ok_or_else(|| EditError::Invalid("unsupported graphics state: non-invertible CTM".into()))?;
+            unit_ops.push(Op::new("cm", current_inv.0.map(pdfcraft_content::num).to_vec()));
+        }
+        unit_ops.extend(extracted.clip_ops);
+        if Matrix(draw_matrix) != Matrix::IDENTITY {
+            unit_ops.push(Op::new("cm", draw_matrix.map(pdfcraft_content::num).to_vec()));
+        }
+    } else if Matrix(draw_matrix) != current_ctm {
+        let current_inv = current_ctm.invert().ok_or_else(|| EditError::Invalid("unsupported graphics state: non-invertible CTM".into()))?;
+        let delta = Matrix(draw_matrix).then(&current_inv);
+        if !delta.0.iter().all(|v| v.is_finite()) {
+            return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
+        }
+        if delta != Matrix::IDENTITY {
+            unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
+        }
+    }
+    unit_ops.push(extracted.do_op);
+    unit_ops.push(Op::new("Q", vec![]));
+    if has_closing_emc {
+        unit_ops.push(Op::new("EMC", vec![]));
+    }
+    Ok(unit_ops)
+}
+
+/// Change the stacking order of image `index` on `page`.
+pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: ArrangeOrder) -> Result<(), EditError> {
+    let images = page_images(doc, page)?;
+    let img = images.get(index).cloned().ok_or_else(|| EditError::Invalid(format!("page {} has no image {}", page + 1, index + 1)))?;
+    let p = page_of(doc, page)?;
+    let all = content_streams(doc, &p.dict)?;
+    let pieces = pdfcraft_content::Pieces::join(&all.iter().map(|(_, data)| data.as_slice()).collect::<Vec<_>>());
+    let ops = pieces.parse().ops;
+    let target = img.op;
+    if !ops.get(target).is_some_and(|op| op.is("Do")) {
+        return Err(EditError::Invalid("the image operation could not be located".into()));
+    }
+
+    let is_wrapped = is_entire_page_wrapped(&ops);
+    let (scan_start, scan_end) = if is_wrapped { (1, ops.len().saturating_sub(1)) } else { (0, ops.len()) };
+    let units = content_units(&ops, scan_start, scan_end);
+    let Some(target_idx) = units.iter().position(|u| u.start <= target && target < u.end) else {
+        return Err(EditError::Invalid("the image content unit could not be located".into()));
+    };
+    let Some(target_unit) = units.get(target_idx) else { return Ok(()) };
+    let has_other_paint = ops.iter().enumerate().any(|(i, op)| {
+        i >= target_unit.start
+            && i < target_unit.end
+            && i != target
+            && matches!(
+                op.op.as_slice(),
+                b"Do" | b"Tj" | b"TJ" | b"'" | b"\"" | b"sh" | b"BI" | b"S" | b"s" | b"f" | b"F" | b"f*" | b"B" | b"B*" | b"b" | b"b*"
+            )
+    });
+    if units.len() <= 1 && !has_other_paint {
+        return Err(EditError::Invalid("the page has only one content unit to arrange".into()));
+    }
+
+    let (dest_unit, insert_after) = target_destination_unit(&units, target_idx, target_unit, order, has_other_paint)?;
+
+    // A marked-content sequence that holds other content cannot be split without generating
+    // a new structure element and MCID, so we refuse to rearrange it to avoid leaving the image untagged.
+    // If the sequence holds only this image, the whole marked unit is moved intact.
+    let marked_unit = ops.get(target_unit.start).is_some_and(|o| o.is("BDC") || o.is("BMC"));
+    if marked_unit && has_other_paint {
+        return Err(EditError::Invalid("cannot rearrange an image that shares a marked-content sequence with other content".into()));
+    }
+
+    let target_op = ops.get(target).ok_or_else(|| EditError::Invalid("the image operation could not be located".into()))?;
+    let Some((mut target_span, scope_start, rem_start, rem_end)) =
+        determine_arrange_spans(&ops, target, target_unit, target_op, has_other_paint, marked_unit)
+    else {
+        return Ok(());
+    };
+
+    let (dest_pos, scan_target) = if insert_after {
+        let Some(op) = dest_unit.end.checked_sub(1).and_then(|i| ops.get(i)) else { return Ok(()) };
+        (op.span.end, dest_unit.end)
+    } else {
+        let Some(op) = ops.get(dest_unit.start) else { return Ok(()) };
+        (op.span.start, dest_unit.start)
+    };
+
+    let (leaking_ops, has_leaking_clip) = scan_leaking_ops(&ops, rem_start, rem_end);
 
     let res = p.dict.get(b"Resources").map(|r| doc.resolve(r)).and_then(|r| r.as_dict().cloned()).unwrap_or_default();
     let ext_gstates = res.get(b"ExtGState").map(|g| doc.resolve(g)).and_then(|g| g.as_dict().cloned()).unwrap_or_default();
@@ -1283,8 +1366,6 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         return Err(EditError::Invalid("unsupported graphics state: inherited clipping path cannot be cleanly preserved".into()));
     }
 
-    let non_gs_ops: Vec<Op> = extracted.state_ops.into_iter().filter(|o| !o.is("gs")).collect();
-
     let mut reconstructed_state = dest_effective_state.clone();
     for (op, _) in &source_gs_ops {
         if let Some(name) = op.name(0)
@@ -1300,64 +1381,16 @@ pub fn arrange_image(doc: &mut Document, page: usize, index: usize, order: Arran
         ));
     }
 
-    let mut unit_ops = Vec::new();
-    let marked_open = if marked_unit && !has_other_paint { ops.get(target_unit.start).cloned() } else { None };
-    if let Some(open) = &marked_open {
-        unit_ops.push(open.clone());
-    }
-    unit_ops.push(Op::new("q", vec![]));
-    let mut current_ctm = dest_ctm;
-
-    for (gs_op, target_ctm) in &source_gs_ops {
-        if *target_ctm != current_ctm {
-            let Some(current_inv) = current_ctm.invert() else {
-                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
-            };
-            let delta = target_ctm.then(&current_inv);
-            if !delta.0.iter().all(|v| v.is_finite()) {
-                return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
-            }
-            if delta != Matrix::IDENTITY {
-                unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
-                current_ctm = *target_ctm;
-            }
-        }
-        unit_ops.push(gs_op.clone());
-    }
-
-    unit_ops.extend(non_gs_ops);
-
-    if !extracted.clip_ops.is_empty() {
-        if current_ctm != Matrix::IDENTITY {
-            let Some(current_inv) = current_ctm.invert() else {
-                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
-            };
-            unit_ops.push(Op::new("cm", current_inv.0.map(pdfcraft_content::num).to_vec()));
-        }
-        unit_ops.extend(extracted.clip_ops);
-        if Matrix(img.draw_matrix) != Matrix::IDENTITY {
-            unit_ops.push(Op::new("cm", img.draw_matrix.map(pdfcraft_content::num).to_vec()));
-        }
-    } else {
-        if Matrix(img.draw_matrix) != current_ctm {
-            let Some(current_inv) = current_ctm.invert() else {
-                return Err(EditError::Invalid("unsupported graphics state: non-invertible CTM".into()));
-            };
-            let delta = Matrix(img.draw_matrix).then(&current_inv);
-            if !delta.0.iter().all(|v| v.is_finite()) {
-                return Err(EditError::Invalid("unsupported graphics state: invalid transform coordinates".into()));
-            }
-            if delta != Matrix::IDENTITY {
-                unit_ops.push(Op::new("cm", delta.0.map(pdfcraft_content::num).to_vec()));
-            }
-        }
-    }
-    unit_ops.push(extracted.do_op);
-    unit_ops.push(Op::new("Q", vec![]));
-    // An unbalanced sequence had no EMC; it doesn't gain one.
-    if marked_open.is_some() && target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC")) {
-        unit_ops.push(Op::new("EMC", vec![]));
-    }
+    let marked_open = if marked_unit && !has_other_paint { ops.get(target_unit.start) } else { None };
+    let has_closing_emc = marked_open.is_some() && target_unit.end.checked_sub(1).and_then(|i| ops.get(i)).is_some_and(|o| o.is("EMC"));
+    let unit_ops = build_relocated_unit_ops(
+        marked_open,
+        &source_gs_ops,
+        extracted,
+        dest_ctm,
+        img.draw_matrix,
+        has_closing_emc,
+    )?;
 
     let mut serialized = Vec::new();
     serialized.push(b'\n');
