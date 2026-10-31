@@ -1,7 +1,6 @@
 //! Image manipulation engine for non-destructive crop, anchor-based resize, and movement.
 //!
-//! Ported and adapted from `Egui_image_resize_sandbox` with clean-room guarantees,
-//! zero-panic safety, and lockstep pixel-scale invariance.
+//! Contributor-original clean-room design with zero-panic safety and lockstep pixel-scale invariance.
 
 use egui::{Color32, CursorIcon, Pos2, Rect, Stroke, Vec2, pos2, vec2};
 

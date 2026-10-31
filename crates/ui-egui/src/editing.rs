@@ -198,7 +198,7 @@ impl PdfCraftApp {
                 if let Some(view) = self.views.get_mut(i) {
                     // A drawing whose annotation wasn't added must not stay painted.
                     view.comments.drawings_refused();
-                    if matches!(edit, Edit::EditPageImage { .. }) {
+                    if matches!(&edit, Edit::EditPageImage { change, .. } if !matches!(change, pdfcraft_engine::ImageEdit::Arrange(_))) {
                         view.image_selection = None;
                     }
                     // A paragraph that couldn't be applied opens again with its typing, instead of

@@ -1054,7 +1054,12 @@ impl crate::PdfCraftApp {
                 .last_copied_image
                 .as_ref()
                 .map(|(w, h, _)| (*w as f64, *h as f64))
-                .or_else(|| pdfcraft_engine::image_dimensions(&bytes).map(|(w, h)| (w as f64, h as f64)))
+                .or_else(|| {
+                    (bytes.len() <= 64_000_000 * 4)
+                        .then(|| pdfcraft_engine::image_dimensions(&bytes))
+                        .flatten()
+                        .map(|(w, h)| (w as f64, h as f64))
+                })
                 .unwrap_or((100.0, 100.0));
             let (pw, ph) =
                 self.session.get(id).and_then(|d| d.info.pages.get(page)).map(|p| (p.width as f64, p.height as f64)).unwrap_or((612.0, 792.0));

@@ -7510,6 +7510,17 @@ fn undo_arrange_re_resolves_image_selection_or_clears() {
     let sel_redo = h.state().views[0].image_selection.as_ref().expect("selection re-resolved after redo");
     assert_eq!(sel_redo.index, 1, "selection should point to FigA at index 1");
     assert_eq!(images_redo[sel_redo.index].name, "FigA");
+
+    // Bringing to front when already at front is refused, but selection must be preserved
+    let applied_again = h.state_mut().apply_edit(pdfcraft_engine::Edit::EditPageImage {
+        page: 0,
+        index: 1,
+        change: pdfcraft_engine::ImageEdit::Arrange(pdfcraft_engine::ArrangeOrder::BringToFront),
+    });
+    assert!(!applied_again);
+    h.run_steps(2);
+    let sel_refused = h.state().views[0].image_selection.as_ref().expect("selection preserved after refused arrange");
+    assert_eq!(sel_refused.index, 1);
 }
 
 /// #3061: a paragraph running past its page's bottom edge (an HTML converter relying on the

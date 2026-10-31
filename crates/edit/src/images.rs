@@ -1477,18 +1477,8 @@ fn image_exclusive_scope(ops: &[Op], target: usize) -> Result<Option<(usize, usi
     Ok(isolated)
 }
 
-/// The scope `start..=end` without its clipping paths, for drawing in the CTM `scope_matrix`
-/// in effect before it. Its `cm`s go too, and one `cm` before the image `Do` at `target` puts
-/// it back at `draw`, so clips any earlier move put around it (`cm inverse`, path, `W n`,
-/// absolute `cm`) can't leave the image displaced.
-fn extract_image_drawing_ops(
-    ops: &[Op],
-    start: usize,
-    end: usize,
-    _target: usize,
-    _scope_matrix: Matrix,
-    _draw: Matrix,
-) -> Result<(Vec<Op>, bool), EditError> {
+/// The scope `start..=end` without its private clipping paths and clipping `W n` sequences.
+fn extract_image_drawing_ops(ops: &[Op], start: usize, end: usize) -> Result<(Vec<Op>, bool), EditError> {
     let is_path = |o: &Op| matches!(o.op.as_slice(), b"m" | b"l" | b"c" | b"v" | b"y" | b"h" | b"re");
     let mut drawing = Vec::new();
     let mut removed_clip = false;
@@ -1524,10 +1514,10 @@ pub fn remove_image_crop(doc: &mut Document, page: usize, index: usize) -> Resul
     if !ops.get(target).is_some_and(|op| op.is("Do")) {
         return Err(EditError::Invalid("the image operation could not be located".into()));
     }
-    let Some((start, end, scope_matrix)) = image_exclusive_scope(&ops, target)? else {
+    let Some((start, end, _)) = image_exclusive_scope(&ops, target)? else {
         return Err(EditError::Invalid("the image has no crop to remove".into()));
     };
-    let (drawing_ops, removed_clip) = extract_image_drawing_ops(&ops, start, end, target, scope_matrix, Matrix(img.draw_matrix))?;
+    let (drawing_ops, removed_clip) = extract_image_drawing_ops(&ops, start, end)?;
     if !removed_clip {
         return Err(EditError::Invalid("the image has no crop to remove".into()));
     }
